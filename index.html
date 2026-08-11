@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Lil Buddy 🦙</title>
+  <meta name="description" content="Lil Buddy — a tiny LLM that lives right here on the page." />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E🦙%3C/text%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <main class="page">
+    <h1>lilbuddy</h1>
+    <p class="tagline">A lil buddy who lives on Safari — a lil LLM, running entirely in your browser.</p>
+    <p class="hint">No server. No API key. No data ever leaves this tab. Click the llama to say hi 👇</p>
+  </main>
+
+  <button id="buddy-toggle" class="buddy-toggle" aria-expanded="false" aria-controls="buddy-panel" aria-label="Open chat with Lil Buddy">
+    <svg viewBox="0 0 64 64" width="34" height="34" aria-hidden="true">
+      <ellipse cx="32" cy="40" rx="17" ry="15" fill="#d9b38c"/>
+      <path d="M20 24 C18 8, 26 4, 27 16 C27 20, 24 22, 20 24 Z" fill="#d9b38c"/>
+      <path d="M44 24 C46 8, 38 4, 37 16 C37 20, 40 22, 44 24 Z" fill="#d9b38c"/>
+      <path d="M20 25 C19 12, 25 9, 26 17" fill="#f2d9bd"/>
+      <path d="M44 25 C45 12, 39 9, 38 17" fill="#f2d9bd"/>
+      <ellipse cx="32" cy="36" rx="10" ry="12" fill="#f2d9bd"/>
+      <circle cx="27" cy="33" r="2.4" fill="#2b2b2b"/>
+      <circle cx="37" cy="33" r="2.4" fill="#2b2b2b"/>
+      <ellipse cx="32" cy="42" rx="4" ry="3" fill="#2b2b2b"/>
+      <path d="M28 47 Q32 50 36 47" stroke="#2b2b2b" stroke-width="1.6" fill="none" stroke-linecap="round"/>
+    </svg>
+    <span class="buddy-toggle-badge" id="buddy-badge" hidden>1</span>
+  </button>
+
+  <section id="buddy-panel" class="buddy-panel" role="dialog" aria-label="Chat with Lil Buddy" aria-hidden="true">
+    <header class="buddy-header">
+      <div class="buddy-header-info">
+        <span class="buddy-avatar" aria-hidden="true">🦙</span>
+        <div>
+          <strong>Lil Buddy</strong>
+          <div id="buddy-status" class="buddy-status">Tap to wake me up</div>
+        </div>
+      </div>
+      <div class="buddy-header-actions">
+        <button id="buddy-reset" class="buddy-icon-btn" title="Start a new chat" aria-label="Start a new chat">↺</button>
+        <button id="buddy-close" class="buddy-icon-btn" title="Close" aria-label="Close chat">✕</button>
+      </div>
+    </header>
+
+    <div id="buddy-messages" class="buddy-messages" aria-live="polite"></div>
+
+    <form id="buddy-form" class="buddy-form">
+      <input
+        id="buddy-input"
+        class="buddy-input"
+        type="text"
+        placeholder="Say something to Lil Buddy…"
+        autocomplete="off"
+        disabled
+      />
+      <button id="buddy-send" class="buddy-send" type="submit" disabled aria-label="Send">➤</button>
+    </form>
+    <p class="buddy-footnote">Runs a small on-device model. First load downloads it once, then it's cached.</p>
+  </section>
+
+  <script src="app.js" type="module"></script>
+</body>
+</html>
