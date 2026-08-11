@@ -13,26 +13,27 @@ server, no API key, and nothing you type ever leaves the tab.
 - 💾 The model is cached by the browser after the first load, so later visits skip the download
 - 🔒 Fully client-side — the only network request is the one-time model download from Hugging Face's CDN
 
-## Running it locally
+## Running it
 
-Because the chat brain runs in a module Web Worker, it needs to be served
-over `http://` rather than opened directly as a `file://` URL. Any static
-file server works:
+Just open `index.html` in Safari — double-click it, or drag it into a
+browser window. No server, no build step, no install.
+
+(The chat brain runs in a Web Worker, which browsers normally refuse to
+create from a `file://` page. `app.js` works around that by spinning the
+worker up from a Blob URL instead of a separate file, so it works either
+way — double-clicked locally or served from a real host.)
+
+Click the llama in the bottom-right corner to open the chat. The first
+message triggers the model download — you'll see progress in the chat
+header. After that it's instant, even offline, as long as the browser
+cache hasn't been cleared.
+
+You can also serve it from any static file host if you'd rather have a
+link than a local file:
 
 ```bash
-# with Python
-python3 -m http.server 8000
-
-# or with Node
-npx serve .
+python3 -m http.server 8000   # then open http://localhost:8000
 ```
-
-Then open <http://localhost:8000> in Safari (or any modern browser) and
-click the llama in the bottom-right corner.
-
-The first message triggers the model download — you'll see progress in the
-chat header. After that it's instant, even offline, as long as the browser
-cache hasn't been cleared.
 
 ## Deploying
 
@@ -43,15 +44,14 @@ Vercel, or any static host and it works as-is.
 
 | File          | What it does                                             |
 | ------------- | --------------------------------------------------------- |
-| `index.html`  | Page markup + the chat widget UI                          |
-| `style.css`   | Styling, light/dark aware                                 |
-| `app.js`      | Main-thread UI logic, talks to `worker.js` via messages   |
-| `worker.js`   | Loads the model and runs generation off the main thread   |
+| `index.html`  | Page markup + the chat widget UI                                    |
+| `style.css`   | Styling, light/dark aware                                           |
+| `app.js`      | Main-thread UI logic, plus the worker source (see note above) and its Blob-based setup |
 
 ## Customizing Lil Buddy
 
-- **Personality**: edit `SYSTEM_PROMPT` in `worker.js`.
-- **Model**: change `MODEL_ID` in `worker.js` to any chat model with
+- **Personality**: edit `SYSTEM_PROMPT` inside the `WORKER_SOURCE` string in `app.js`.
+- **Model**: change `MODEL_ID` inside `WORKER_SOURCE` to any chat model with
   transformers.js-compatible ONNX weights (see the
   [transformers.js model list](https://huggingface.co/models?library=transformers.js)).
   Bigger models are smarter but slower to download and run.
