@@ -13,9 +13,11 @@ const WORKER_SOURCE = `
 
 import { pipeline, TextStreamer } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.2.0";
 
-// A tiny instruction-tuned model, small enough to run comfortably in a browser tab.
-// Swap this for any other transformers.js-compatible chat model for a bigger brain.
-const MODEL_ID = "HuggingFaceTB/SmolLM2-135M-Instruct";
+// A small instruction-tuned model, small enough to run comfortably in a browser tab.
+// Qwen2.5-0.5B-Instruct trades a bigger download (~300-400MB vs ~100MB) for much more
+// coherent, better-instruction-following output than the previous 135M-param model.
+// Swap this for any other transformers.js-compatible chat model for a different brain.
+const MODEL_ID = "onnx-community/Qwen2.5-0.5B-Instruct";
 
 const SYSTEM_PROMPT = [
   "You are Lil Buddy, a tiny, cheerful llama who lives inside a webpage.",
@@ -36,7 +38,7 @@ function getGenerator(progress_callback) {
     // navigator.gpu without reliably supporting native Float16Array yet,
     // which throws deep inside onnxruntime-web at generation time. wasm/q8
     // has no float16 tensors anywhere in the path, so it just works
-    // everywhere — and the model is only 135M params, so CPU is still fast.
+    // everywhere — and at 0.5B params it's still comfortably fast on CPU.
     generatorPromise = pipeline("text-generation", MODEL_ID, {
       device: "wasm",
       dtype: "q8",

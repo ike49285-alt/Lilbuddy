@@ -8,7 +8,7 @@ instruction-tuned language model **entirely in your browser** using
 [transformers.js](https://huggingface.co/docs/transformers.js) — no backend
 server, no API key, and nothing you type ever leaves the tab.
 
-- 🧠 Model: [`HuggingFaceTB/SmolLM2-135M-Instruct`](https://huggingface.co/HuggingFaceTB/SmolLM2-135M-Instruct) — tiny (~100MB), runs comfortably on a laptop or phone
+- 🧠 Model: [`onnx-community/Qwen2.5-0.5B-Instruct`](https://huggingface.co/onnx-community/Qwen2.5-0.5B-Instruct) — small (~300-400MB), noticeably more coherent than tinier models, still runs comfortably on a laptop or phone
 - ⚡ Uses WebGPU when available (Safari 18+ supports this), falls back to WASM otherwise
 - 💾 The model is cached by the browser after the first load, so later visits skip the download
 - 🔒 Fully client-side — the only network request is the one-time model download from Hugging Face's CDN
