@@ -31,10 +31,15 @@ let generatorPromise = null;
 
 function getGenerator(progress_callback) {
   if (!generatorPromise) {
-    const useWebGPU = typeof navigator !== "undefined" && !!navigator.gpu;
+    // Always run on wasm with plain int8 weights. WebGPU + fp16 ("q4f16") is
+    // faster where it works, but Safari's WebGPU backend advertises
+    // navigator.gpu without reliably supporting native Float16Array yet,
+    // which throws deep inside onnxruntime-web at generation time. wasm/q8
+    // has no float16 tensors anywhere in the path, so it just works
+    // everywhere — and the model is only 135M params, so CPU is still fast.
     generatorPromise = pipeline("text-generation", MODEL_ID, {
-      device: useWebGPU ? "webgpu" : "wasm",
-      dtype: useWebGPU ? "q4f16" : "q8",
+      device: "wasm",
+      dtype: "q8",
       progress_callback,
     });
   }
