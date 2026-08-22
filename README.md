@@ -1,66 +1,118 @@
-# lilbuddy 🦙
+# Chronicle 🗺
 
-A lil buddy who lives on Safari — a lil LLM.
+A world simulation that never stops, and an archive that forgets.
 
-Lil Buddy is a single self-contained web page with a tiny chat widget in the
-corner. Click the llama and say hi. Under the hood it runs a small
-instruction-tuned language model **entirely in your browser** using
-[transformers.js](https://huggingface.co/docs/transformers.js) — no backend
-server, no API key, and nothing you type ever leaves the tab.
+Chronicle generates a world — terrain, climate, carrying capacity — and then
+runs history on it, one tick per year, indefinitely. States are founded, spread
+along the ground that will feed them, fight, overextend, fracture into successor
+states, and are replaced. You watch it on a map with a timeline you can drag
+back through, and read what the record still has to say about any stretch of it.
 
-- 🧠 Model: [`HuggingFaceTB/SmolLM2-135M-Instruct`](https://huggingface.co/HuggingFaceTB/SmolLM2-135M-Instruct) — tiny (~100MB), runs comfortably on a laptop or phone
-- ⚡ Uses WebGPU when available (Safari 18+ supports this), falls back to WASM otherwise
-- 💾 The model is cached by the browser after the first load, so later visits skip the download
-- 🔒 Fully client-side — the only network request is the one-time model download from Hugging Face's CDN
+Nothing about the history is authored. It is what the rules did.
+
+## The idea
+
+Time is unbounded, so the record can't be. Chronicle gives the archive a **fixed
+budget** and makes it forget.
+
+Events age into progressively coarser tiers. Each tier holds a set number of
+events; when one overflows, similar events are merged and the least salient are
+dropped. Merging destroys detail, and the retelling has to fill the gaps — so
+numbers inflate, causes are replaced by stock ones, two forgettable kings become
+one long-reigning legendary one, and eventually a chronicle disagrees with
+itself. **Distortion isn't a feature layered on top of the archive. It is what
+running out of room looks like.**
+
+| Tier | Age | Kept | What survives |
+| --- | --- | --- | --- |
+| Living memory | < 200 yr | 4000 | everything — every battle, every ruler |
+| Recorded history | 200 – 2k yr | 3000 | rulers, wars, foundings, collapses |
+| Chronicle | 2k – 20k yr | 1500 | states rise, peak and fall; rulers become dynasties |
+| Legend | 20k – 200k yr | 400 | named epochs, a few figures, sources disagree |
+| Deep time | > 200k yr | 60 | strata, not narrative — and possibly wrong |
+
+Map keyframes decay the same way, spaced further apart the older they get, so
+scrubbing into the deep past visibly loses resolution. The page tells you how
+far the nearest surviving keyframe is from the year you asked for.
+
+What survives isn't chosen at random. Events are scored by magnitude, by whether
+they created or destroyed something, and by whether the things they mention are
+still around — which produces the nicest behaviour in the whole system:
+**things become important retroactively.** A minor founding survives thirty
+thousand years because the city it founded is still standing.
+
+### The truth is really gone
+
+Above the chronicle tier there is no hidden copy of what actually happened.
+Nothing is flagged and withheld; it is deleted. The only way to find out what
+really happened in deep time is to **replay the world from its seed** — which
+works, because the world is a pure function of that seed and the simulation
+never reads the archive back. That constraint is why forgetting is safe.
 
 ## Running it
 
-Just open `index.html` in Safari — double-click it, or drag it into a
-browser window. No server, no build step, no install.
-
-(The chat brain runs in a Web Worker, which browsers normally refuse to
-create from a `file://` page. `app.js` works around that by spinning the
-worker up from a Blob URL instead of a separate file, so it works either
-way — double-clicked locally or served from a real host.)
-
-Click the llama in the bottom-right corner to open the chat. The first
-message triggers the model download — you'll see progress in the chat
-header. After that it's instant, even offline, as long as the browser
-cache hasn't been cleared.
-
-You can also serve it from any static file host if you'd rather have a
-link than a local file:
+No dependencies and no build step, but it does need to be served — it uses ES
+modules and a worker:
 
 ```bash
-python3 -m http.server 8000   # then open http://localhost:8000
+python3 -m http.server 8000    # then open http://localhost:8000
 ```
 
-## Deploying
+A seed lives in the URL hash, so `#kel-vast-317` always gives you the same
+world. Change the seed box and hit **new world** for another.
 
-This is a static site — no build step. Push it to GitHub Pages, Netlify,
-Vercel, or any static host and it works as-is.
+## What you're looking at
 
-## Files
+- **Map** — colour is who holds the ground; terrain still reads through it.
+  Dots are settlements, pale ones are cities. Click anywhere for that region's
+  holder, ruler and history.
+- **Timeline** — logarithmic in age, not linear in year, so the last two
+  centuries don't collapse into a single pixel on a million-year run. Drag back
+  and the map redraws from the archive rather than from live state; states the
+  record has forgotten still show their borders, listed as *a state no one
+  remembers*.
+- **The archive panel** — how full each tier is, and how much has been dropped
+  and merged. The retained count stops growing; the forgotten count doesn't.
+- **Events** — the record for the stretch you're viewing, hedged where the
+  archive can no longer vouch for it.
 
-| File          | What it does                                             |
-| ------------- | --------------------------------------------------------- |
-| `index.html`  | Page markup + the chat widget UI                                    |
-| `style.css`   | Styling, light/dark aware                                           |
-| `app.js`      | Main-thread UI logic, plus the worker source (see note above) and its Blob-based setup |
+## Design constraints
 
-## Customizing Lil Buddy
+Two rules that everything else hangs off:
 
-- **Personality**: edit `SYSTEM_PROMPT` inside the `WORKER_SOURCE` string in `app.js`.
-- **Model**: change `MODEL_ID` inside `WORKER_SOURCE` to any chat model with
-  transformers.js-compatible ONNX weights (see the
-  [transformers.js model list](https://huggingface.co/models?library=transformers.js)).
-  Bigger models are smarter but slower to download and run.
-- **Look**: colors and layout live in `style.css`; the llama icon is inline
-  SVG in `index.html`.
+1. **The simulation never reads the archive.** State flows one way. Break this
+   and the world stops being a function of its seed, and replay stops working.
+2. **Cost per tick is flat.** Tick one million costs what tick one hundred
+   thousand cost. Anything that grows with elapsed time lives in the archive,
+   under budget, never in the hot loop.
 
-## Browser support
+The second one is measured, not assumed — see the boundedness and flat-cost
+checks below. Early ticks are genuinely cheaper than late ones (an empty world
+has nothing in it); what matters is that the cost plateaus and then stays there.
 
-Requires a browser with Web Workers, ES modules, and either WebGPU or WASM
-SIMD support — which covers all current versions of Safari, Chrome, and
-Firefox. Older browsers will get a friendly error message in the chat panel
-instead of a silent failure.
+## Layout
+
+| File | What it does |
+| --- | --- |
+| `index.html` | Page shell |
+| `style.css` | Styling, light/dark aware |
+| `src/rng.js` | Seeded PRNG and value noise — the only source of randomness |
+| `src/names.js` | Per-culture phonology; names within a culture sound related |
+| `src/world.js` | Voronoi-as-raster substrate, terrain, climate, biomes |
+| `src/sim.js` | The tick loop — population, expansion, war, collapse, epochs |
+| `src/memory.js` | Tiered archive: salience, compaction, distortion, keyframes |
+| `src/worker.js` | Runs the sim off the main thread, answers seek and query |
+| `src/render.js` | The map, drawn as one ImageData pass over the raster |
+| `src/legends.js` | Event structures back into prose |
+| `src/app.js` | Page wiring |
+
+## Notes
+
+The Voronoi map has no polygons in it. One raster maps pixel → cell, and that
+single structure is the renderer, the adjacency graph, and the source of cell
+areas and centroids. Borders are pixels whose neighbour resolves to a different
+owner.
+
+The technology ratchet has a pawl that can slip: advancing an era takes
+accumulated population-years, and a bad enough catastrophe costs one. Without
+that, a long run reaches the last epoch and plays the same century forever.
