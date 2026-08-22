@@ -13,13 +13,40 @@
     <h1>Chronicle</h1>
     <p class="strap">A world that keeps running, and an archive that forgets.</p>
     <div class="seedbox">
+      <label for="search">look up</label>
+      <input id="search" type="search" spellcheck="false" autocomplete="off"
+             placeholder="a name…" aria-label="Search the record by name" />
       <label for="seed">seed</label>
       <input id="seed" type="text" spellcheck="false" autocomplete="off" />
       <button id="regen" type="button">new world</button>
     </div>
   </header>
 
-  <main class="layout">
+  <div id="results" class="results" hidden>
+    <h2>In the record</h2>
+    <ul id="results-list"></ul>
+  </div>
+
+  <article id="legends" class="legends" hidden>
+    <button id="legends-back" type="button" class="linky">← back to the map</button>
+    <header class="legends-head">
+      <p class="kind" id="legends-kind">—</p>
+      <h2 id="legends-name">—</h2>
+      <p class="dates" id="legends-dates"></p>
+    </header>
+    <div class="legends-cols">
+      <section>
+        <h3>What the record holds</h3>
+        <ol class="life" id="legends-life"></ol>
+      </section>
+      <aside>
+        <h3>Mentioned alongside</h3>
+        <ul class="related" id="legends-related"></ul>
+      </aside>
+    </div>
+  </article>
+
+  <main class="layout" id="mapview">
     <section class="mapwrap">
       <canvas id="map" aria-label="Map of the world, coloured by which state holds each region"></canvas>
       <div id="mapnote" class="mapnote" hidden></div>
@@ -65,7 +92,7 @@
     </aside>
   </main>
 
-  <section class="timeline">
+  <section class="timeline" id="timeline">
     <div class="controls">
       <button id="play" type="button" class="primary">pause</button>
       <label class="speed">
@@ -86,7 +113,7 @@
     <div class="scrubmarks"><span>the beginning</span><span>deep past</span><span>now</span></div>
   </section>
 
-  <section class="ticker">
+  <section class="ticker" id="tickerview">
     <h2 id="ticker-title">Living memory</h2>
     <ul id="events"></ul>
   </section>

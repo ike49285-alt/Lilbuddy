@@ -210,3 +210,80 @@ button.linky {
   .layout { grid-template-columns: minmax(0, 1fr); }
   .side { flex-direction: column; }
 }
+
+/* ---- search results ---- */
+
+.results { padding: 12px 22px 0; }
+.results h2 { margin: 0 0 8px; font-size: 14px; color: var(--ink-soft); }
+.results ul { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.results li button {
+  display: inline-flex; align-items: baseline; gap: 7px;
+  border: 1px solid var(--rule); border-radius: 999px;
+  padding: 4px 12px; background: var(--panel); font-size: 13px;
+}
+.results .k {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em;
+  color: var(--ink-faint);
+}
+.results .empty { color: var(--ink-faint); font-size: 13px; font-style: italic; }
+
+/* ---- legends browser ---- */
+
+.legends { padding: 14px 22px 30px; max-width: 1080px; }
+.legends-head { margin: 10px 0 18px; }
+.legends .kind {
+  margin: 0; font-size: 11px; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--ink-faint);
+}
+.legends h2 { margin: 2px 0 4px; font-size: 30px; }
+.legends h3 {
+  font-family: var(--serif); font-size: 14px; margin: 0 0 10px;
+  color: var(--ink-soft);
+}
+.legends .dates { margin: 0; color: var(--ink-soft); font-size: 14px; }
+.legends .dates .gone { color: var(--ink-faint); font-style: italic; }
+
+.legends-cols { display: grid; grid-template-columns: minmax(0, 1fr) 240px; gap: 28px; }
+
+.life { list-style: none; margin: 0; padding: 0; border-left: 2px solid var(--rule); }
+.life li { position: relative; padding: 0 0 14px 18px; }
+.life li::before {
+  content: ""; position: absolute; left: -5px; top: 7px;
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--accent); border: 2px solid var(--bg);
+}
+.life li.hazy::before { background: var(--ink-faint); }
+.life .when {
+  font-family: var(--mono); font-size: 12px; color: var(--ink-faint);
+  display: block;
+}
+.life .what { display: block; font-size: 15px; line-height: 1.5; }
+.life li.hazy .what { color: var(--ink-soft); }
+.life .prov { display: block; margin-top: 2px; font-size: 11px; color: var(--ink-faint); font-style: italic; }
+.life .links { display: block; margin-top: 4px; }
+.life .links button {
+  border: 0; background: none; padding: 0; margin-right: 10px;
+  font-size: 12px; color: var(--accent); text-decoration: underline; cursor: pointer;
+}
+
+.related { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.related button {
+  border: 0; background: none; padding: 2px 0; text-align: left;
+  font-size: 13px; color: var(--ink); cursor: pointer; width: 100%;
+}
+.related button:hover { color: var(--accent); }
+.related .k { font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink-faint); display: block; }
+.related .gone { color: var(--ink-faint); font-style: italic; }
+
+.legends .nothing { color: var(--ink-faint); font-style: italic; font-size: 14px; }
+
+@media (max-width: 900px) {
+  .legends-cols { grid-template-columns: minmax(0, 1fr); }
+}
+
+#detail .links { margin: 8px 0 4px; display: flex; flex-direction: column; gap: 3px; align-items: flex-start; }
+#detail .links button {
+  border: 0; background: none; padding: 0;
+  font-size: 12px; color: var(--accent); text-decoration: underline; cursor: pointer;
+}
+.powers li[data-key]:hover .nm { color: var(--accent); text-decoration: underline; }

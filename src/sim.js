@@ -780,7 +780,10 @@ export class Simulation {
       t: this.year, type: 'war.begin', mag: 0.4,
       refs: [entityKey('p', pol.id), entityKey('p', foe.id), entityKey('w', id)],
       cell: pol.capital,
-      data: { attacker: pol.name, defender: foe.name, strength: Math.round(pol.pop * 30000) },
+      // A couple of per cent of the population under arms. The archive will
+      // inflate this every time the event is merged, so the figure it starts
+      // from has to be one a chronicler could have plausibly written down.
+      data: { attacker: pol.name, defender: foe.name, strength: Math.round(pol.pop * 2000) },
     });
   }
 
@@ -802,7 +805,7 @@ export class Simulation {
           cell: winner.capital,
           data: {
             victor: winner.name, defeated: loser.name, years: duration,
-            dead: Math.round((a.pop + b.pop) * duration * 800 * ep.lethality),
+            dead: Math.round((a.pop + b.pop) * duration * 60 * ep.lethality),
           },
         });
         winner.exhaustion *= 0.5;

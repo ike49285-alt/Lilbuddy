@@ -69,6 +69,23 @@ function postFrame(rate) {
 
 const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
 
+// Whether the thing still exists in the world, as opposed to only in the
+// record. The two diverge in both directions: a state can outlive every event
+// that mentioned it, and be remembered long after it falls.
+function isAlive(key) {
+  const [kind, raw] = key.split(':');
+  const id = Number(raw);
+  switch (kind) {
+    case 'p': return sim.polities.has(id);
+    case 's': return sim.settlements.has(id);
+    case 'c': return sim.cultures.has(id);
+    case 'd': return sim.dynasties.has(id);
+    case 'n': return sim.people.has(id);
+    case 'w': return sim.wars.has(id);
+    default: return false;
+  }
+}
+
 // Reading the map at some past year. The keyframe we can actually produce may
 // be older than the year asked for — that gap *is* the resolution the archive
 // still has at that depth, and the UI shows it rather than pretending.
@@ -195,6 +212,39 @@ self.addEventListener('message', (event) => {
         self.postMessage({ type: 'digest', year: sim.year, digest: hashNumbers(numbers) });
         break;
       }
+
+      // One entity's page: its record, everything the archive still has that
+      // mentions it, and enough of the entities *those* events mention to link
+      // onward. A key with no record has been swept — the events that would
+      // have kept it are gone too.
+      case 'entity': {
+        const record = sim.memory.entity(msg.key);
+        const events = sim.memory.eventsFor(msg.key, 150);
+        const related = {};
+        for (const ev of events) {
+          for (const ref of ev.refs) {
+            if (ref === msg.key || related[ref] !== undefined) continue;
+            const r = sim.memory.entity(ref);
+            related[ref] = r ? { name: r.name, kind: r.kind } : null;
+          }
+        }
+        self.postMessage({
+          type: 'entity', key: msg.key, record, events, related,
+          alive: isAlive(msg.key), now: sim.year,
+        });
+        break;
+      }
+
+      case 'search':
+        self.postMessage({
+          type: 'search',
+          query: msg.query,
+          results: sim.memory.searchEntities(msg.query, 24).map((e) => ({
+            key: entityKey(e.kind, e.id), name: e.name, kind: e.kind,
+            born: e.born ?? e.founded ?? e.began, died: e.died ?? null,
+          })),
+        });
+        break;
 
       case 'selftest':
         self.postMessage({ type: 'selftest', problems: sim.selftest(), year: sim.year });

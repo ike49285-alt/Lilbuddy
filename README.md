@@ -75,6 +75,20 @@ world. Change the seed box and hit **new world** for another.
   and merged. The retained count stops growing; the forgotten count doesn't.
 - **Events** — the record for the stretch you're viewing, hedged where the
   archive can no longer vouch for it.
+- **The record** — click any state in the legend, or search a name, to open its
+  page: everything the archive still holds that mentions it, cross-linked to
+  everyone it appears beside. States, people, houses, settlements, cultures and
+  wars all have pages, and all of them are just filtered views of the one event
+  log the map reads.
+
+### Links carry a year
+
+A link into the record looks like `#kel-vast-317/p/482/48200` — seed, entity,
+and **the year you were looking at**. That last part isn't decoration. Nothing
+is stored between visits; a world is re-derived from its seed every time the
+page loads, so a link to a state is only meaningful together with a point in
+time at which that state existed. Open one and it replays the world to that year
+before showing you the page. Seed plus tick count is the entire save file.
 
 ## Design constraints
 
