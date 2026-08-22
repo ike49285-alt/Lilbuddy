@@ -18,6 +18,11 @@ let running = false;
 let speed = 40;            // target ticks per second; Infinity means "as fast as it goes"
 let timer = null;
 let lastPost = 0;
+let lastSlice = 0;       // wall clock at the previous slice
+let tickDebt = 0;        // years owed but not yet run, carried as a fraction
+let rateTicks = 0;       // ticks since the rate window opened
+let rateSince = 0;
+let shownRate = 0;       // years per wall-clock second, as displayed
 
 const FRAME_MS = 50;       // cap UI updates at 20/sec; the sim is not slowed by this
 const BUDGET_MS = 12;      // per-slice tick budget, leaves the worker responsive
@@ -46,24 +51,53 @@ function init(seed) {
 function loop() {
   if (!running || !sim) return;
   const started = now();
-  const target = speed === Infinity ? Infinity : Math.max(1, Math.round(speed * (FRAME_MS / 1000)));
+  // Real elapsed time drives how many years are owed, and the debt carries
+  // fractions across slices. Deriving a whole tick count per slice instead
+  // puts a floor under the speed control: at a 50ms cadence, "at least one
+  // tick per slice" is twenty years a second however slow the setting says.
+  // Clamped so a backgrounded tab doesn't come back and sprint.
+  const dt = lastSlice ? Math.min(0.5, (started - lastSlice) / 1000) : 0;
+  lastSlice = started;
+
   let ticks = 0;
-  while (ticks < target && now() - started < BUDGET_MS) {
-    sim.tick();
-    ticks++;
+  if (speed === Infinity) {
+    while (now() - started < BUDGET_MS) { sim.tick(); ticks++; }
+  } else {
+    tickDebt = Math.min(tickDebt + speed * dt, speed * 0.5 + 1);
+    while (tickDebt >= 1 && now() - started < BUDGET_MS) {
+      sim.tick();
+      ticks++;
+      tickDebt -= 1;
+    }
   }
-  const elapsed = now() - started;
-  if (now() - lastPost >= FRAME_MS) {
-    postFrame(ticks / Math.max(0.001, elapsed / 1000));
+
+  // Years per wall-clock second, averaged over about a second. Measuring
+  // within the slice instead reports how fast the sim *can* run rather than
+  // how fast it is running — at 60 yr/s that reads as several thousand.
+  // The window has to hold a few ticks before it can report a fraction: over
+  // one second at half a year a second, the count is only ever 0 or 1, which
+  // reads as a rate of zero or double the real one. So it widens until it has
+  // enough to divide, and gives up at five seconds.
+  rateTicks += ticks;
+  const window = started - rateSince;
+  if (window >= 1000 && (rateTicks >= 3 || window >= 5000)) {
+    shownRate = rateTicks / (window / 1000);
+    rateTicks = 0;
+    rateSince = started;
   }
-  const wait = speed === Infinity ? 0 : Math.max(0, FRAME_MS - elapsed);
+
+  // At a year every two seconds there is usually nothing new to send, but the
+  // panel still needs an occasional refresh.
+  if (ticks > 0 || now() - lastPost >= 500) postFrame(shownRate);
+
+  const wait = speed === Infinity ? 1 : Math.max(1, FRAME_MS - (now() - started));
   timer = setTimeout(loop, wait);
 }
 
 function postFrame(rate) {
   lastPost = now();
   const snapshot = sim.snapshot();
-  if (rate !== undefined) snapshot.rate = Math.round(rate);
+  if (rate !== undefined) snapshot.rate = rate;
   self.postMessage({ type: 'frame', snapshot }, [snapshot.owners.buffer]);
 }
 
@@ -140,11 +174,22 @@ self.addEventListener('message', (event) => {
 
       case 'run':
         if (msg.speed !== undefined) speed = msg.speed === 'max' ? Infinity : msg.speed;
-        if (!running) { running = true; loop(); }
+        if (!running) {
+          // Start the clock fresh, or the pause counts as elapsed time and the
+          // world lurches forward on resume.
+          running = true;
+          lastSlice = 0;
+          tickDebt = 0;
+          rateTicks = 0;
+          rateSince = now();
+          loop();
+        }
         break;
 
       case 'speed':
         speed = msg.speed === 'max' ? Infinity : msg.speed;
+        // Debt banked at the old speed is meaningless at the new one.
+        tickDebt = 0;
         break;
 
       case 'pause':

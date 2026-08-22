@@ -149,7 +149,7 @@ function applySnapshot(s) {
     dom.polities.textContent = s.politiesTotal;
     dom.pop.textContent = shortNumber(s.globalPop * 100000);
     dom.settle.textContent = s.settlements.length;
-    dom.rate.textContent = s.rate ? `${shortNumber(s.rate)} yr/s` : '—';
+    dom.rate.textContent = s.rate ? `${formatRate(s.rate)} yr/s` : '—';
   }
 
   dom.events.textContent = s.stats.events;
@@ -634,6 +634,13 @@ dom.powers.addEventListener('click', (e) => {
 });
 
 // ---------------------------------------------------------------------------
+
+// The slow settings run below one year a second, where rounding to an integer
+// would show a steady "0 yr/s".
+function formatRate(v) {
+  if (v < 10) return v.toFixed(1);
+  return shortNumber(v);
+}
 
 function shortNumber(v) {
   const n = Math.round(v);
