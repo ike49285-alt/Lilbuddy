@@ -1,31 +1,56 @@
-/* Chronicle — light and dark aware, no framework, no build. */
+/* Chronicle — no framework, no build.
+ *
+ * Verdigris and slate: the palette of a survey office rather than a library.
+ * Neutrals carry a green-blue bias toward the accent so they read as chosen,
+ * and they sit under the map's navy ocean and green land without competing.
+ * Spectral for the archival voice, Plex Sans and Mono for the instrument panel.
+ *
+ * Three theme states, not two. A bare :root is the full light palette; the
+ * media query covers viewers on the default "system" setting; the [data-theme]
+ * stamps let an explicit choice win in either direction. Every colour is a
+ * token defined here — none is declared only inside a media or [data-theme]
+ * block, which is what would leave one theme's text on the other's ground.
+ */
 
 :root {
-  --bg: #f4f1ea;
-  --panel: #fffdf8;
-  --ink: #1d1b16;
-  --ink-soft: #5d574a;
-  --ink-faint: #8a8377;
-  --rule: #ded7c8;
-  --accent: #7a5c2e;
-  --accent-ink: #fffdf8;
-  --shadow: 0 1px 2px rgba(30, 26, 16, 0.07), 0 6px 18px rgba(30, 26, 16, 0.05);
-  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  --serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+  --bg: #e9edeb;
+  --panel: #f6f9f7;
+  --ink: #141d1c;
+  --ink-soft: #4a5b58;
+  --ink-faint: #7c8e8a;
+  --rule: #c9d5d1;
+  --accent: #2b6b62;
+  --accent-ink: #f6f9f7;
+  --shadow: 0 1px 2px rgba(18, 32, 30, 0.07), 0 6px 18px rgba(18, 32, 30, 0.05);
+  --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --serif: Spectral, "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+  --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 
 @media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #14151a;
-    --panel: #1c1e25;
-    --ink: #ece7dc;
-    --ink-soft: #a8a294;
-    --ink-faint: #736d61;
-    --rule: #2c2f38;
-    --accent: #cfa96a;
-    --accent-ink: #14151a;
-    --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.3);
+  :root:not([data-theme="light"]) {
+    --bg: #0e1413;
+    --panel: #151d1c;
+    --ink: #dde6e3;
+    --ink-soft: #98aaa6;
+    --ink-faint: #687976;
+    --rule: #243130;
+    --accent: #5cc0ad;
+    --accent-ink: #0e1413;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.45), 0 8px 24px rgba(0, 0, 0, 0.32);
   }
+}
+
+:root[data-theme="dark"] {
+  --bg: #0e1413;
+  --panel: #151d1c;
+  --ink: #dde6e3;
+  --ink-soft: #98aaa6;
+  --ink-faint: #687976;
+  --rule: #243130;
+  --accent: #5cc0ad;
+  --accent-ink: #0e1413;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.45), 0 8px 24px rgba(0, 0, 0, 0.32);
 }
 
 * { box-sizing: border-box; }
@@ -34,11 +59,22 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--ink);
-  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  font: 15px/1.55 var(--sans);
   -webkit-font-smoothing: antialiased;
 }
 
-h1, h2 { font-family: var(--serif); font-weight: 600; }
+h1, h2 { font-family: var(--serif); font-weight: 600; text-wrap: balance; }
+
+/* Years and counts sit in columns all over this page. */
+.figures dd, .powers .ct, .when, .tiers .count, #scrub + .scrubmarks {
+  font-variant-numeric: tabular-nums;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
 
 /* ---- header ---- */
 
@@ -257,7 +293,7 @@ button.linky {
   font-family: var(--mono); font-size: 12px; color: var(--ink-faint);
   display: block;
 }
-.life .what { display: block; font-size: 15px; line-height: 1.5; }
+.life .what { display: block; font-size: 15px; line-height: 1.55; max-width: 62ch; }
 .life li.hazy .what { color: var(--ink-soft); }
 .life .prov { display: block; margin-top: 2px; font-size: 11px; color: var(--ink-faint); font-style: italic; }
 .life .links { display: block; margin-top: 4px; }

@@ -61,6 +61,10 @@ python3 -m http.server 8000    # then open http://localhost:8000
 A seed lives in the URL hash, so `#kel-vast-317` always gives you the same
 world. Change the seed box and hit **new world** for another.
 
+The only external request on the page is the webfont (Spectral and IBM Plex).
+It degrades to the fallback stack, so offline or behind a proxy everything still
+works — the type just changes.
+
 ## What you're looking at
 
 - **Map** — colour is who holds the ground; terrain still reads through it.
