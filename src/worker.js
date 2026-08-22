@@ -8,7 +8,7 @@
 
 import { Simulation } from './sim.js';
 import { biomePalette } from './world.js';
-import { entityKey, TIERS, keyframeSpacing } from './memory.js';
+import { entityKey, TIERS, keyframeSpacing, tierFor } from './memory.js';
 import { hashNumbers, cyrb128 } from './rng.js';
 
 const hashString = (s) => cyrb128(s)[0] | 0;
@@ -102,6 +102,147 @@ function postFrame(rate) {
 }
 
 const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+
+// Which entity an event is really *about*. Events name several things — a sack
+// names the taker, the loser, the city and the war — and tapping one should
+// open the thing it belonged to, not the first name in the list.
+function subjectOf(ev) {
+  const pick = (prefix) => ev.refs.find((r) => r.startsWith(prefix)) || null;
+  if (pick('w:')) return pick('w:');
+  if (ev.type.startsWith('house.')) return pick('d:');
+  if (ev.type.startsWith('ruler.') || ev.type === 'succession.crisis') {
+    return pick('n:') || pick('d:') || pick('p:');
+  }
+  if (ev.type.startsWith('polity.') || ev.type === 'revolt' || ev.type === 'plague') return pick('p:');
+  if (ev.type.startsWith('settle.')) return pick('s:');
+  if (ev.type.startsWith('culture.')) return pick('c:');
+  return ev.refs[0] || null;
+}
+
+function describeEntity(key) {
+  const rec = sim.memory.entity(key);
+  if (!rec) return { key, name: null, kind: key.split(':')[0], forgotten: true };
+  const out = { key, name: rec.name, kind: rec.kind, alive: isAlive(key) };
+  if (rec.kind === 'p') {
+    const pol = sim.polities.get(rec.id);
+    if (pol) {
+      const ruler = sim.people.get(pol.rulerId);
+      const house = sim.houses.get(pol.houseId);
+      out.ruler = ruler ? (ruler.epithet ? `${ruler.name} ${ruler.epithet}` : ruler.name) : null;
+      out.house = house ? house.name : null;
+      out.cells = pol.cells;
+      out.id = pol.id;
+    } else {
+      out.id = rec.id;
+      out.house = rec.house || null;
+      out.ended = rec.died ?? null;
+    }
+  }
+  return out;
+}
+
+// Everything the archive still holds about what an event belonged to. For a
+// war that is both sides, why it started, every engagement inside it, what it
+// cost and how it ended — assembled from the event log and the war's own
+// post-mortem, both of which decay, so an old war returns less than a recent
+// one and says so.
+function analysisFor(eventId) {
+  const ev = sim.memory.events.find((e) => e.id === eventId);
+  if (!ev) return { type: 'analysis', missing: true };
+
+  const subject = subjectOf(ev);
+  const record = subject ? sim.memory.entity(subject) : null;
+  const contained = subject ? sim.memory.eventsFor(subject, 60) : [];
+
+  const related = {};
+  for (const source of [ev, ...contained]) {
+    for (const ref of source.refs) {
+      if (ref === subject || related[ref] !== undefined) continue;
+      const r = sim.memory.entity(ref);
+      related[ref] = r ? { name: r.name, kind: r.kind } : null;
+    }
+  }
+
+  let war = null;
+  if (subject && subject.startsWith('w:') && record) {
+    // Sides come from the events that frame the war — its declaration and its
+    // outcome — not from every event that mentions it. Compaction merges the
+    // refs of everything it folds together, so scavenging all contained events
+    // returns a dozen states that were never in this war.
+    const framing = ['war.begin', 'war.end', 'war.stalemate'];
+    const sideKeys = [];
+    const collect = (source) => {
+      for (const ref of source.refs) {
+        if (ref.startsWith('p:') && !sideKeys.includes(ref)) sideKeys.push(ref);
+      }
+    };
+    for (const kind of framing) {
+      for (const source of [ev, ...contained]) {
+        if (source.type === kind) collect(source);
+      }
+      if (sideKeys.length >= 2) break;
+    }
+    if (!sideKeys.length) collect(ev);
+    war = {
+      name: record.name,
+      began: record.began,
+      ended: record.ended ?? null,
+      years: record.years ?? (sim.year - record.began),
+      cause: record.cause || null,
+      causeLabel: record.cause ? WAR_CAUSE_LABELS[record.cause] : null,
+      attacker: record.attacker || null,
+      defender: record.defender || null,
+      victor: record.victor ?? null,
+      defeated: record.defeated ?? null,
+      stalemate: !!record.stalemate,
+      dead: record.dead ?? null,
+      sacks: record.sacks ?? null,
+      repulsed: record.repulsed ?? null,
+      taken: record.taken || null,
+      ongoing: record.ended === undefined || record.ended === null,
+      // Two sides. Anything beyond that is merge residue, not a combatant.
+      sides: sideKeys.slice(0, 2).map(describeEntity),
+    };
+  }
+
+  const age = sim.year - ev.t;
+  const tierIndex = tierFor(age);
+  return {
+    type: 'analysis',
+    event: ev,
+    now: sim.year,
+    subject,
+    subjectRecord: record,
+    subjectAlive: subject ? isAlive(subject) : false,
+    war,
+    contained,
+    related,
+    // What the record itself can still vouch for. Tapping into the archive
+    // should show how much of it is left, not just what it says.
+    provenance: {
+      tier: tierIndex,
+      tierLabel: TIERS[tierIndex].label,
+      age,
+      merged: ev.merged,
+      dist: ev.dist,
+      causeApocryphal: !!(ev.data && ev.data.causeApocryphal),
+      inverted: !!(ev.data && ev.data.inverted),
+      attributionDrifted: !!(ev.data && ev.data.attributionDrifted),
+    },
+  };
+}
+
+// Mirrors sim.js's WAR_CAUSES. Duplicated rather than exported because the
+// worker speaks to the UI in finished phrases, and the sim shouldn't own
+// wording.
+const WAR_CAUSE_LABELS = {
+  border: 'a disputed border',
+  conquest: 'plain conquest',
+  succession: 'a contested succession',
+  revanche: 'ground lost in an earlier war',
+  dynastic: 'a feud between ruling houses',
+  culture: 'kin under foreign rule',
+};
 
 // Whether the thing still exists in the world, as opposed to only in the
 // record. The two diverge in both directions: a state can outlive every event
@@ -279,6 +420,10 @@ self.addEventListener('message', (event) => {
         });
         break;
       }
+
+      case 'analysis':
+        self.postMessage(analysisFor(msg.eventId));
+        break;
 
       case 'search':
         self.postMessage({

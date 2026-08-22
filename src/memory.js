@@ -36,7 +36,13 @@ const STRUCTURAL = {
   'settle.city':       1.2,
   'war.begin':         1.4,
   'war.end':           1.6,
+  'war.stalemate':     1.1,
   'war.sack':          1.5,
+  'house.found':       0.8,
+  'house.ascend':      3.4,
+  'house.deposed':     2.2,
+  'house.restored':    3.0,
+  'house.extinct':     2.4,
   'ruler.crown':       0.7,
   'ruler.die':         0.6,
   'ruler.slain':       1.3,
@@ -125,7 +131,7 @@ export class Memory {
     this.nextEventId = 1;
     this.droppedCount = 0;
     this.mergedCount = 0;
-      this.compactionCount = 0;
+    this.compactionCount = 0;
   }
 
   // ---- writing -----------------------------------------------------------

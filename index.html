@@ -2,9 +2,10 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>Chronicle</title>
   <meta name="description" content="A world that keeps running, and an archive that forgets." />
+  <meta name="color-scheme" content="light dark" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E🗺%3C/text%3E%3C/svg%3E" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -12,95 +13,29 @@
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <header class="bar">
+  <header class="topbar">
     <h1>Chronicle</h1>
     <p class="strap">A world that keeps running, and an archive that forgets.</p>
-    <div class="seedbox">
-      <label for="search">look up</label>
-      <input id="search" type="search" spellcheck="false" autocomplete="off"
-             placeholder="a name…" aria-label="Search the record by name" />
-      <label for="seed">seed</label>
-      <input id="seed" type="text" spellcheck="false" autocomplete="off" />
-      <button id="regen" type="button">new world</button>
-    </div>
+    <button id="open-settings" class="icon" type="button" aria-label="Seed, search and new world">
+      <span aria-hidden="true">☰</span>
+    </button>
   </header>
 
-  <div id="results" class="results" hidden>
-    <h2>In the record</h2>
-    <ul id="results-list"></ul>
-  </div>
-
-  <article id="legends" class="legends" hidden>
-    <button id="legends-back" type="button" class="linky">← back to the map</button>
-    <header class="legends-head">
-      <p class="kind" id="legends-kind">—</p>
-      <h2 id="legends-name">—</h2>
-      <p class="dates" id="legends-dates"></p>
-    </header>
-    <div class="legends-cols">
-      <section>
-        <h3>What the record holds</h3>
-        <ol class="life" id="legends-life"></ol>
-      </section>
-      <aside>
-        <h3>Mentioned alongside</h3>
-        <ul class="related" id="legends-related"></ul>
-      </aside>
-    </div>
-  </article>
-
-  <main class="layout" id="mapview">
+  <main>
     <section class="mapwrap">
       <canvas id="map" aria-label="Map of the world, coloured by which state holds each region"></canvas>
-      <div id="mapnote" class="mapnote" hidden></div>
+      <p id="mapnote" class="mapnote" hidden></p>
     </section>
 
-    <aside class="side">
-      <div class="readout">
-        <div class="big"><span id="year">0</span><small>year</small></div>
-        <div class="epoch" id="epoch">—</div>
-        <dl class="figures">
-          <div><dt>states</dt><dd id="fig-polities">0</dd></div>
-          <div><dt>people</dt><dd id="fig-pop">0</dd></div>
-          <div><dt>towns</dt><dd id="fig-settle">0</dd></div>
-          <div><dt>rate</dt><dd id="fig-rate">—</dd></div>
-        </dl>
+    <section class="controls">
+      <button id="play" type="button" class="primary">Pause</button>
+      <div class="clock">
+        <span id="year">0</span>
+        <small id="epoch">—</small>
       </div>
-
-      <div class="panel" id="detail" hidden>
-        <h2 id="detail-title">—</h2>
-        <div id="detail-body"></div>
-        <button id="detail-close" type="button" class="linky">close</button>
-      </div>
-
-      <div class="panel">
-        <h2>Powers of the age</h2>
-        <ol class="powers" id="powers"></ol>
-      </div>
-
-      <div class="panel">
-        <h2>The archive</h2>
-        <p class="hint" id="archive-hint">
-          The record has a fixed budget. Events age into coarser tiers, merge, and
-          are dropped — what is left is what earned its place.
-        </p>
-        <ul class="tiers" id="tiers"></ul>
-        <dl class="figures small">
-          <div><dt>retained</dt><dd id="fig-events">0</dd></div>
-          <div><dt>forgotten</dt><dd id="fig-dropped">0</dd></div>
-          <div><dt>merged</dt><dd id="fig-merged">0</dd></div>
-          <div><dt>keyframes</dt><dd id="fig-keyframes">0</dd></div>
-        </dl>
-      </div>
-    </aside>
-  </main>
-
-  <section class="timeline" id="timeline">
-    <div class="controls">
-      <button id="play" type="button" class="primary">pause</button>
       <label class="speed">
-        speed
-        <select id="speed">
+        <span class="sr-only">Speed</span>
+        <select id="speed" aria-label="Years per second">
           <option value="0.5">0.5 yr/s</option>
           <option value="1">1 yr/s</option>
           <option value="5">5 yr/s</option>
@@ -108,20 +43,69 @@
           <option value="60">60 yr/s</option>
           <option value="400">400 yr/s</option>
           <option value="2000">2000 yr/s</option>
-          <option value="max">as fast as it goes</option>
+          <option value="max">fastest</option>
         </select>
       </label>
-      <button id="live" type="button">jump to now</button>
-      <span class="viewing" id="viewing">watching the present</span>
-    </div>
-    <input id="scrub" type="range" min="0" max="1000" value="1000"
-           aria-label="Scrub back through the world's history" />
-    <div class="scrubmarks"><span>the beginning</span><span>deep past</span><span>now</span></div>
-  </section>
+    </section>
 
-  <section class="ticker" id="tickerview">
-    <h2 id="ticker-title">Living memory</h2>
-    <ul id="events"></ul>
+    <section class="scrubwrap">
+      <input id="scrub" type="range" min="0" max="1000" value="1000"
+             aria-label="Scrub back through the world's history" />
+      <div class="scrubrow">
+        <span id="viewing">watching the present</span>
+        <button id="live" type="button">Jump to now</button>
+      </div>
+    </section>
+
+    <section class="record">
+      <div class="section-head">
+        <h2 id="ticker-title">Living memory</h2>
+        <button id="clear-filter" type="button" class="chip" hidden>Show all tiers</button>
+      </div>
+      <ul id="events" class="feed"></ul>
+    </section>
+
+    <aside class="side">
+    <section class="panel">
+      <h2>Powers of the age</h2>
+      <ol class="powers" id="powers"></ol>
+    </section>
+
+    <section class="panel">
+      <h2>The archive</h2>
+      <p class="hint">
+        The record has a fixed budget. Events age into coarser tiers, merge, and
+        are dropped — what is left is what earned its place. Tap a tier to read
+        only what still survives at that depth.
+      </p>
+      <ul class="tiers" id="tiers"></ul>
+      <dl class="figures">
+        <div><dt>Retained</dt><dd id="fig-events">0</dd></div>
+        <div><dt>Forgotten</dt><dd id="fig-dropped">0</dd></div>
+        <div><dt>Merged</dt><dd id="fig-merged">0</dd></div>
+        <div><dt>Keyframes</dt><dd id="fig-keyframes">0</dd></div>
+      </dl>
+    </section>
+
+    <section class="panel">
+      <h2>The world now</h2>
+      <dl class="figures">
+        <div><dt>States</dt><dd id="fig-polities">0</dd></div>
+        <div><dt>People</dt><dd id="fig-pop">0</dd></div>
+        <div><dt>Towns</dt><dd id="fig-settle">0</dd></div>
+        <div><dt>Rate</dt><dd id="fig-rate">—</dd></div>
+      </dl>
+    </section>
+    </aside>
+  </main>
+
+  <div id="scrim" class="scrim" hidden></div>
+  <section id="sheet" class="sheet" hidden role="dialog" aria-modal="true" aria-labelledby="sheet-title">
+    <div class="sheet-handle" id="sheet-handle">
+      <span class="grab" aria-hidden="true"></span>
+    </div>
+    <button id="sheet-close" class="sheet-close" type="button" aria-label="Close">✕</button>
+    <div class="sheet-body" id="sheet-body"></div>
   </section>
 
   <script type="module" src="src/app.js"></script>

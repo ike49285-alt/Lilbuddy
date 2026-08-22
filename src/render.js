@@ -30,6 +30,10 @@ export class MapRenderer {
     this.owners = null;
     this.settlements = [];
     this.highlight = -1;
+    // When set, only these polities keep their colour and everything else
+    // drops back — used to hold a war's two belligerents on the map while
+    // their analysis is open over it.
+    this.focus = null;
   }
 
   // Golden-angle hue stepping keeps adjacent ids visually far apart, which
@@ -46,16 +50,18 @@ export class MapRenderer {
     return c;
   }
 
-  setState({ owners, settlements, highlight }) {
+  setState({ owners, settlements, highlight, focus }) {
     if (owners) this.owners = owners;
     if (settlements) this.settlements = settlements;
     if (highlight !== undefined) this.highlight = highlight;
+    if (focus !== undefined) this.focus = focus && focus.length ? new Set(focus) : null;
   }
 
   draw() {
     const w = this.world;
     const { raster, palette } = w;
     const owners = this.owners;
+    const focus = this.focus;
     const data = this.image.data;
     const width = w.width;
     const height = w.height;
@@ -76,9 +82,12 @@ export class MapRenderer {
           const col = this.colorFor(owner);
           // Political colour over terrain rather than instead of it, so
           // mountains and desert still read through an empire.
-          r = (r * 0.32 + col[0] * 0.68) | 0;
-          g = (g * 0.32 + col[1] * 0.68) | 0;
-          b = (b * 0.32 + col[2] * 0.68) | 0;
+          const lit = !focus || focus.has(owner);
+          const mix = lit ? 0.68 : 0.16;
+          r = (r * (1 - mix) + col[0] * mix) | 0;
+          g = (g * (1 - mix) + col[1] * mix) | 0;
+          b = (b * (1 - mix) + col[2] * mix) | 0;
+          if (focus && !lit) { r = (r * 0.72) | 0; g = (g * 0.72) | 0; b = (b * 0.72) | 0; }
         }
 
         // Borders: a pixel whose right or lower neighbour belongs to someone

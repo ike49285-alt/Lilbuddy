@@ -1,5 +1,10 @@
 // app.js — the page. Owns no simulation state; it renders whatever the worker
 // last said and asks for the rest.
+//
+// Everything that isn't the map or the record opens in one bottom sheet: a
+// region, an event's analysis, an entity's page, the settings. One component,
+// one dismissal gesture, and each opening pushes a history entry so the phone's
+// back gesture closes it instead of leaving the page.
 
 import { MapRenderer } from './render.js';
 import { describe, provenance, formatYear, formatAge } from './legends.js';
@@ -8,7 +13,6 @@ const el = (id) => document.getElementById(id);
 
 const dom = {
   map: el('map'), mapnote: el('mapnote'),
-  seed: el('seed'), regen: el('regen'),
   year: el('year'), epoch: el('epoch'),
   polities: el('fig-polities'), pop: el('fig-pop'),
   settle: el('fig-settle'), rate: el('fig-rate'),
@@ -17,16 +21,12 @@ const dom = {
   merged: el('fig-merged'), keyframes: el('fig-keyframes'),
   play: el('play'), speed: el('speed'), live: el('live'),
   viewing: el('viewing'), scrub: el('scrub'),
-  ticker: el('events'), tickerTitle: el('ticker-title'),
-  detail: el('detail'), detailTitle: el('detail-title'),
-  detailBody: el('detail-body'), detailClose: el('detail-close'),
-  archiveHint: el('archive-hint'),
-  search: el('search'), results: el('results'), resultsList: el('results-list'),
-  mapview: el('mapview'), timeline: el('timeline'), tickerview: el('tickerview'),
-  legends: el('legends'), legendsBack: el('legends-back'),
-  legendsKind: el('legends-kind'), legendsName: el('legends-name'),
-  legendsDates: el('legends-dates'), legendsLife: el('legends-life'),
-  legendsRelated: el('legends-related'),
+  feed: el('events'), tickerTitle: el('ticker-title'),
+  clearFilter: el('clear-filter'),
+  openSettings: el('open-settings'),
+  scrim: el('scrim'), sheet: el('sheet'),
+  sheetBody: el('sheet-body'), sheetClose: el('sheet-close'),
+  sheetHandle: el('sheet-handle'),
 };
 
 const KIND_LABEL = {
@@ -41,8 +41,11 @@ let latest = null;        // most recent live snapshot
 let viewYear = null;      // null means "watching the present"
 let running = true;
 let seekPending = false;
-let pendingKey = null;   // entity to open once the world has loaded
-let pendingYear = null;  // year that entity link was made at
+let pendingKey = null;
+let pendingYear = null;
+let currentSeed = '';
+let tierFilter = null;    // index of the archive tier the record is pinned to
+let lastEvents = [];
 
 // ---------------------------------------------------------------------------
 // worker plumbing
@@ -53,12 +56,15 @@ function start(seed, openKey = null, openYear = null) {
   latest = null;
   viewYear = null;
   renderer = null;
+  tierFilter = null;
+  sheetStack.length = 0;
+  hideSheet();
+  currentSeed = seed;
   pendingKey = openKey;
   pendingYear = openYear;
   worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
   worker.addEventListener('message', onMessage);
   worker.postMessage({ type: 'init', seed });
-  dom.seed.value = seed;
   const want = `#${encodeURIComponent(seed)}`
     + (openKey ? `/${openKey.replace(':', '/')}/${Math.round(openYear || 0)}` : '');
   if (location.hash !== want) history.replaceState(null, '', want);
@@ -75,12 +81,12 @@ function onMessage(event) {
       applySnapshot(msg.snapshot);
       worker.postMessage({ type: 'run', speed: currentSpeed() });
       running = true;
-      dom.play.textContent = 'pause';
+      dom.play.textContent = 'Pause';
       if (pendingKey) {
         const key = pendingKey;
         pendingKey = null;
         if (pendingYear) replayThenOpen(key, pendingYear);
-        else openEntity(key, false);
+        else openEntity(key);
       }
       break;
     }
@@ -88,7 +94,7 @@ function onMessage(event) {
       latest = msg.snapshot;
       if (viewYear === null) {
         renderMap(msg.snapshot.owners, msg.snapshot.settlements);
-        renderEvents(msg.snapshot.year);
+        requestEvents(msg.snapshot.year);
       }
       applySnapshot(msg.snapshot);
       break;
@@ -99,23 +105,32 @@ function onMessage(event) {
       break;
 
     case 'events':
-      paintEvents(msg.events, viewYear ?? (latest ? latest.year : 0));
+      lastEvents = msg.events;
+      paintFeed(msg.events, viewYear ?? (latest ? latest.year : 0));
       break;
 
     case 'cell':
-      showCell(msg);
+      showSheet({ kind: 'cell', payload: msg });
       break;
 
-    case 'ranTo':
-      if (pendingKey) { const k = pendingKey; pendingKey = null; openEntity(k, false); }
+    case 'analysis':
+      showSheet({ kind: 'analysis', payload: msg });
       break;
 
     case 'entity':
-      showEntity(msg);
+      showSheet({
+        kind: 'entity', payload: msg,
+        hash: `#${encodeURIComponent(currentSeed)}/${msg.key.replace(':', '/')}`
+          + `/${Math.round(latest ? latest.year : 0)}`,
+      });
+      break;
+
+    case 'ranTo':
+      if (pendingKey) { const k = pendingKey; pendingKey = null; openEntity(k); }
       break;
 
     case 'search':
-      showResults(msg);
+      renderSearchResults(msg);
       break;
 
     case 'error':
@@ -129,7 +144,7 @@ function onMessage(event) {
 }
 
 // ---------------------------------------------------------------------------
-// rendering
+// map and panels
 // ---------------------------------------------------------------------------
 
 function renderMap(owners, settlements) {
@@ -139,10 +154,6 @@ function renderMap(owners, settlements) {
 }
 
 function applySnapshot(s) {
-  // Archive figures always describe the record as it stands. The world figures
-  // only describe the present, so while the past is on screen they are left to
-  // showPast — otherwise the panel reads "year 201k, 51 states" above a legend
-  // listing the states of year 177k.
   if (viewYear === null) {
     dom.year.textContent = formatYear(s.year);
     dom.epoch.textContent = s.epoch;
@@ -158,19 +169,30 @@ function applySnapshot(s) {
   dom.keyframes.textContent = s.stats.keyframes;
 
   paintTiers(s.stats.perTier);
-  if (viewYear === null) paintPowers(s.polities, s.politiesTotal);
-  if (viewYear === null) dom.scrub.value = String(dom.scrub.max);
+  if (viewYear === null) {
+    paintPowers(s.polities, s.politiesTotal);
+    dom.scrub.value = String(dom.scrub.max);
+  }
 }
 
 function paintTiers(perTier) {
   if (!tiers.length) return;
   dom.tiers.replaceChildren(...tiers.map((tier, i) => {
     const li = document.createElement('li');
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'rowbtn';
+    btn.setAttribute('aria-pressed', String(tierFilter === i));
     const pct = Math.min(100, (perTier[i] / tier.budget) * 100);
-    li.innerHTML = `
-      <div class="row"><span class="label">${tier.label}</span>
-      <span class="count">${perTier[i]} / ${tier.budget}</span></div>
-      <div class="meter"><div class="fill" style="width:${pct}%"></div></div>`;
+    const wrap = document.createElement('span');
+    wrap.innerHTML = `
+      <span class="row"><span class="label"></span><span class="count"></span></span>
+      <span class="meter"><span class="fill" style="width:${pct}%"></span></span>`;
+    wrap.querySelector('.label').textContent = tier.label;
+    wrap.querySelector('.count').textContent = `${perTier[i]} / ${tier.budget}`;
+    btn.append(wrap);
+    btn.addEventListener('click', () => setTierFilter(tierFilter === i ? null : i));
+    li.append(btn);
     return li;
   }));
 }
@@ -178,98 +200,134 @@ function paintTiers(perTier) {
 function paintPowers(list, total) {
   const rows = list.slice(0, 12).map((p) => {
     const li = document.createElement('li');
+    const [r, g, b] = renderer.colorFor(p.id);
+    if (!p.name) {
+      li.className = 'static';
+      li.textContent = `a state no one remembers · ${p.cells}`;
+      return li;
+    }
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'rowbtn';
     const swatch = document.createElement('span');
     swatch.className = 'swatch';
-    const [r, g, b] = renderer.colorFor(p.id);
     swatch.style.background = `rgb(${r},${g},${b})`;
     const name = document.createElement('span');
-    name.className = p.name ? 'nm' : 'nm forgotten';
-    name.textContent = p.name || 'a state no one remembers';
-    name.title = p.name || 'Its borders survive in a keyframe; its name does not.';
-    // Only states the archive still has a record for can be opened; a forgotten
-    // one has nothing behind the swatch.
-    if (p.name) { li.dataset.key = `p:${p.id}`; li.style.cursor = 'pointer'; }
+    name.className = 'nm';
+    name.textContent = p.name;
     const count = document.createElement('span');
     count.className = 'ct';
     count.textContent = p.cells;
-    li.append(swatch, name, count);
+    btn.append(swatch, name, count);
+    btn.addEventListener('click', () => openEntity(`p:${p.id}`));
+    li.append(btn);
     return li;
   });
   if (total > rows.length) {
     const li = document.createElement('li');
-    li.innerHTML = `<span class="swatch"></span><span class="nm forgotten">and ${total - rows.length} lesser powers</span>`;
+    li.className = 'static';
+    li.textContent = `and ${total - rows.length} lesser powers`;
     rows.push(li);
   }
   dom.powers.replaceChildren(...rows);
 }
 
-function renderEvents(year) {
+function requestEvents(year) {
   if (!latest) return;
+  if (tierFilter !== null) {
+    // Pinned to one tier: ask for the whole span that tier covers, and let the
+    // filter below keep only what actually still lives there.
+    const tier = tiers[tierFilter];
+    const from = tier.maxAge === null || !isFinite(tier.maxAge) ? 0 : latest.year - tier.maxAge;
+    worker.postMessage({ type: 'events', from: Math.max(0, from), to: latest.year, limit: 200 });
+    return;
+  }
   const span = Math.max(20, Math.round(year * 0.002));
   worker.postMessage({ type: 'events', from: year - span, to: year, limit: 40 });
 }
 
-function paintEvents(events, atYear) {
-  dom.ticker.replaceChildren(...events.map((ev) => {
+function tierIndexFor(age) {
+  for (let i = 0; i < tiers.length; i++) if (age <= tiers[i].maxAge) return i;
+  return tiers.length - 1;
+}
+
+function setTierFilter(index) {
+  tierFilter = index;
+  dom.clearFilter.hidden = index === null;
+  if (latest) requestEvents(latest.year);
+  paintTiers(latest ? latest.stats.perTier : tiers.map(() => 0));
+}
+
+function paintFeed(events, atYear) {
+  const now = latest ? latest.year : atYear;
+  const shown = tierFilter === null
+    ? events
+    : events.filter((ev) => tierIndexFor(now - ev.t) === tierFilter);
+
+  if (!shown.length) {
     const li = document.createElement('li');
-    if (ev.dist >= 2) li.className = 'hazy';
-    const when = document.createElement('span');
-    when.className = 'when';
-    when.textContent = formatYear(ev.t);
-    const what = document.createElement('span');
-    what.className = 'what';
-    what.textContent = describe(ev);
-    const prov = provenance(ev);
-    if (prov) {
-      const note = document.createElement('em');
-      note.className = 'prov';
-      note.textContent = prov;
-      what.append(note);
-    }
-    li.append(when, what);
-    return li;
-  }));
-  if (!events.length) {
-    const li = document.createElement('li');
-    li.innerHTML = '<span class="when"></span><span class="what">Nothing from this stretch survives in the record.</span>';
-    dom.ticker.replaceChildren(li);
+    li.className = 'empty';
+    li.textContent = tierFilter !== null
+      ? `Nothing survives at this depth yet.`
+      : 'Nothing from this stretch survives in the record.';
+    dom.feed.replaceChildren(li);
+  } else {
+    dom.feed.replaceChildren(...shown.map((ev) => {
+      const li = document.createElement('li');
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = ev.dist >= 2 ? 'rowbtn hazy' : 'rowbtn';
+      const text = document.createElement('span');
+      const when = document.createElement('span');
+      when.className = 'when';
+      when.textContent = `year ${formatYear(ev.t)}`;
+      const what = document.createElement('span');
+      what.className = 'what';
+      what.textContent = describe(ev);
+      text.append(when, what);
+      const prov = provenance(ev);
+      if (prov) {
+        const note = document.createElement('em');
+        note.className = 'prov';
+        note.textContent = prov;
+        text.append(note);
+      }
+      btn.append(text);
+      btn.addEventListener('click', () => openAnalysis(ev.id));
+      li.append(btn);
+      return li;
+    }));
   }
-  dom.tickerTitle.textContent = tierNameFor(atYear);
+
+  dom.tickerTitle.textContent = tierFilter !== null
+    ? sentenceCase(tiers[tierFilter].label)
+    : sentenceCase(tiers[tierIndexFor(now - atYear)]?.label || 'the record');
 }
 
-function tierNameFor(atYear) {
-  if (!latest) return 'The record';
-  const age = latest.year - atYear;
-  const tier = tiers.find((t) => age <= t.maxAge) || tiers[tiers.length - 1];
-  return tier ? tier.label.charAt(0).toUpperCase() + tier.label.slice(1) : 'The record';
-}
-
-// The past as the archive can still render it: borders from the nearest
-// keyframe, names only where the registry still has them.
+// The past as the archive can still render it.
 function showPast(msg) {
   if (!renderer) return;
   renderer.setState({ owners: msg.owners, settlements: [] });
   renderer.draw();
   paintPowers(msg.polities, msg.polities.length);
-  paintEvents(msg.events, msg.resolvedYear);
+  lastEvents = msg.events;
+  paintFeed(msg.events, msg.resolvedYear);
 
-  // Borders are the only thing keyframes preserve. Population and town counts
-  // for a given past year were never stored, so they are shown as absent rather
-  // than filled in with today's numbers.
+  const drift = msg.year - msg.resolvedYear;
+  dom.viewing.textContent = `year ${formatYear(msg.resolvedYear)} · ${formatAge(latest.year - msg.resolvedYear)}`;
+  dom.mapnote.hidden = false;
+  dom.mapnote.textContent = drift > 0
+    ? `Nearest surviving keyframe: year ${formatYear(msg.resolvedYear)}, ${formatYear(drift)} years off. `
+      + `At this depth the record keeps one map every ${formatYear(msg.resolution)} years.`
+    : `Year ${formatYear(msg.resolvedYear)}. Only borders are kept for the past.`;
+
+  // Borders are the only thing keyframes preserve.
   dom.year.textContent = formatYear(msg.resolvedYear);
   dom.epoch.textContent = 'as the record has it';
   dom.polities.textContent = msg.polities.length;
   dom.pop.textContent = '—';
   dom.settle.textContent = '—';
   dom.rate.textContent = '—';
-
-  const drift = msg.year - msg.resolvedYear;
-  dom.viewing.textContent = `year ${formatYear(msg.resolvedYear)} · ${formatAge(latest.year - msg.resolvedYear)}`;
-  dom.mapnote.hidden = false;
-  dom.mapnote.textContent = drift > 0
-    ? `Nearest surviving keyframe: year ${formatYear(msg.resolvedYear)}, ${formatYear(drift)} years off what you asked for. `
-      + `At this depth the record keeps one map every ${formatYear(msg.resolution)} years.`
-    : `Year ${formatYear(msg.resolvedYear)}. Towns are not drawn for the past — only borders are kept.`;
 }
 
 function backToNow() {
@@ -280,18 +338,531 @@ function backToNow() {
   if (latest) {
     renderMap(latest.owners, latest.settlements);
     paintPowers(latest.polities, latest.politiesTotal);
-    renderEvents(latest.year);
+    requestEvents(latest.year);
     applySnapshot(latest);
   }
+}
+
+// ---------------------------------------------------------------------------
+// the sheet
+// ---------------------------------------------------------------------------
+
+const sheetStack = [];
+
+function showSheet(entry, push = true) {
+  if (push) {
+    sheetStack.push(entry);
+    const url = entry.hash || location.href;
+    history.pushState({ sheetDepth: sheetStack.length }, '', url);
+  }
+  renderSheet(entry);
+  dom.sheet.hidden = false;
+  dom.scrim.hidden = false;
+  // A frame's delay so the transition has a start state to move from.
+  requestAnimationFrame(() => {
+    dom.sheet.classList.add('open');
+    dom.scrim.classList.add('open');
+  });
+  dom.sheetBody.scrollTop = 0;
+}
+
+function hideSheet() {
+  dom.sheet.classList.remove('open');
+  dom.scrim.classList.remove('open');
+  dom.sheet.style.transform = '';
+  if (renderer && renderer.focus) {
+    renderer.setState({ focus: null });
+    renderer.draw();
+  }
+  const done = () => { dom.sheet.hidden = true; dom.scrim.hidden = true; };
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) done();
+  else setTimeout(done, 240);
+}
+
+// Back closes the sheet, and closes one level at a time through a chain of
+// them — tapping from a war to one of its belligerents and back should land
+// on the war, not on the map.
+function closeSheet() {
+  if (sheetStack.length) history.back();
+  else hideSheet();
+}
+
+function renderSheet(entry) {
+  switch (entry.kind) {
+    case 'analysis': renderAnalysis(entry.payload); break;
+    case 'entity': renderEntity(entry.payload); break;
+    case 'cell': renderCell(entry.payload); break;
+    case 'settings': renderSettings(); break;
+    default: dom.sheetBody.replaceChildren();
+  }
+}
+
+window.addEventListener('popstate', () => {
+  const { seed, key, year } = readHash();
+  if (seed && seed !== currentSeed) { start(seed, key, year); return; }
+
+  const depth = (history.state && history.state.sheetDepth) || 0;
+  if (depth === 0) { sheetStack.length = 0; hideSheet(); return; }
+  sheetStack.length = Math.min(sheetStack.length, depth);
+  const top = sheetStack[sheetStack.length - 1];
+  if (top) showSheet(top, false);
+  else hideSheet();
+});
+
+dom.sheetClose.addEventListener('click', closeSheet);
+dom.scrim.addEventListener('click', closeSheet);
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !dom.sheet.hidden) closeSheet();
+});
+
+// Drag the handle down to dismiss. Pointer events cover touch and mouse alike;
+// `touch-action: none` on the handle keeps the gesture from scrolling instead.
+let dragFrom = null;
+dom.sheetHandle.addEventListener('pointerdown', (e) => {
+  dragFrom = e.clientY;
+  dom.sheet.classList.add('dragging');
+  dom.sheetHandle.setPointerCapture(e.pointerId);
+});
+dom.sheetHandle.addEventListener('pointermove', (e) => {
+  if (dragFrom === null) return;
+  const dy = Math.max(0, e.clientY - dragFrom);
+  dom.sheet.style.transform = `translateY(${dy}px)`;
+});
+const endDrag = (e) => {
+  if (dragFrom === null) return;
+  const dy = Math.max(0, e.clientY - dragFrom);
+  dragFrom = null;
+  dom.sheet.classList.remove('dragging');
+  dom.sheet.style.transform = '';
+  if (dy > 90) closeSheet();
+};
+dom.sheetHandle.addEventListener('pointerup', endDrag);
+dom.sheetHandle.addEventListener('pointercancel', endDrag);
+
+// ---------------------------------------------------------------------------
+// sheet contents
+// ---------------------------------------------------------------------------
+
+function sheetHeader(kicker, title, dek) {
+  const frag = document.createDocumentFragment();
+  const k = document.createElement('p');
+  k.className = 'sheet-kicker';
+  k.textContent = kicker;
+  const h = document.createElement('h2');
+  h.id = 'sheet-title';
+  h.textContent = title;
+  frag.append(k, h);
+  if (dek) {
+    const d = document.createElement('p');
+    d.className = 'dek';
+    d.textContent = dek;
+    frag.append(d);
+  }
+  return frag;
+}
+
+function heading(text) {
+  const h = document.createElement('h3');
+  h.textContent = text;
+  return h;
+}
+
+function openAnalysis(eventId) {
+  worker.postMessage({ type: 'analysis', eventId });
+}
+
+function renderAnalysis(msg) {
+  const body = dom.sheetBody;
+  if (msg.missing) {
+    body.replaceChildren(sheetHeader('gone', 'Forgotten',
+      'The record dropped this while you were reading it.'));
+    return;
+  }
+
+  const parts = [];
+  const ev = msg.event;
+
+  if (msg.war) {
+    const w = msg.war;
+    parts.push(sheetHeader('war', w.name,
+      w.causeLabel ? `Fought over ${w.causeLabel}.` : null));
+
+    // Belligerents, each carrying its colour from the map.
+    const sides = document.createElement('ul');
+    sides.className = 'belligerents';
+    for (const side of w.sides) {
+      const li = document.createElement('li');
+      li.className = 'belligerent';
+      if (w.victor && side.name === w.victor) li.classList.add('victor');
+      const bar = document.createElement('span');
+      bar.className = 'bar';
+      if (side.id !== undefined && renderer) {
+        const [r, g, b] = renderer.colorFor(side.id);
+        bar.style.background = `rgb(${r},${g},${b})`;
+      }
+      const text = document.createElement('span');
+      const nm = document.createElement('span');
+      nm.className = 'nm';
+      nm.textContent = side.name || 'a state no one remembers';
+      const meta = document.createElement('span');
+      meta.className = 'meta';
+      const bits = [];
+      if (side.ruler) bits.push(`under ${side.ruler}`);
+      if (side.house) bits.push(`house of ${side.house}`);
+      if (side.alive === false) bits.push('since fallen');
+      meta.textContent = bits.join(' · ') || 'nothing else is known';
+      text.append(nm, meta);
+      li.append(bar, text);
+      if (side.name) {
+        li.style.cursor = 'pointer';
+        li.addEventListener('click', () => openEntity(side.key));
+      }
+      sides.append(li);
+    }
+    parts.push(sides);
+
+    // Light the belligerents on the map behind the sheet.
+    if (renderer) {
+      const ids = w.sides.map((s) => s.id).filter((i) => i !== undefined);
+      renderer.setState({ focus: ids });
+      renderer.draw();
+    }
+
+    const tally = document.createElement('dl');
+    tally.className = 'tally';
+    const rows = [
+      ['Years', w.years != null ? formatYear(w.years) : '—'],
+      ['Dead', w.dead != null ? shortNumber(w.dead) : '—'],
+      ['Cities sacked', w.sacks != null ? String(w.sacks) : '—'],
+      ['Regions taken', w.taken ? String(w.taken[0] + w.taken[1]) : '—'],
+    ];
+    for (const [k, v] of rows) {
+      const div = document.createElement('div');
+      const dt = document.createElement('dt'); dt.textContent = k;
+      const dd = document.createElement('dd'); dd.textContent = v;
+      div.append(dt, dd);
+      tally.append(div);
+    }
+    parts.push(heading('What it cost'), tally);
+
+    const outcome = document.createElement('p');
+    outcome.className = 'dek';
+    outcome.textContent = w.ongoing
+      ? 'Still being fought.'
+      : w.stalemate
+        ? `Burned out after ${formatYear(w.years)} years with the border unmoved.`
+        : `${w.victor} prevailed over ${w.defeated}.`;
+    parts.push(heading('How it ended'), outcome);
+  } else {
+    const rec = msg.subjectRecord;
+    const kind = msg.subject ? msg.subject.split(':')[0] : null;
+    parts.push(sheetHeader(
+      kind ? KIND_LABEL[kind] || 'entry' : 'the record',
+      rec ? rec.name : describe(ev),
+      rec ? describe(ev) : null,
+    ));
+  }
+
+  // The course of it — every surviving event that belongs to this subject.
+  if (msg.contained.length) {
+    const course = document.createElement('ol');
+    course.className = 'course';
+    for (const item of msg.contained) {
+      const li = document.createElement('li');
+      if (item.dist >= 2) li.className = 'hazy';
+      const when = document.createElement('span');
+      when.className = 'when';
+      when.textContent = `year ${formatYear(item.t)}`;
+      const what = document.createElement('span');
+      what.className = 'what';
+      what.textContent = describe(item);
+      li.append(when, what);
+      course.append(li);
+    }
+    parts.push(heading(msg.war ? 'The course of it' : 'What the record holds'), course);
+  }
+
+  const links = relatedLinks(msg.related, msg.subject);
+  if (links) parts.push(heading('Named alongside'), links);
+
+  parts.push(attestation(msg.provenance));
+  body.replaceChildren(...parts);
+}
+
+// What the archive can still vouch for. This is the point of tapping in: the
+// deeper the event has fallen, the less of it is left, and the sheet should say
+// so rather than presenting a merged composite as a report.
+function attestation(prov) {
+  const box = document.createElement('div');
+  box.className = 'attest';
+  const lead = document.createElement('p');
+  lead.style.margin = '0';
+  lead.innerHTML = `Held in <strong></strong>, ${formatAge(prov.age)}.`;
+  lead.querySelector('strong').textContent = prov.tierLabel;
+  box.append(lead);
+
+  const notes = [];
+  if (prov.merged > 1) notes.push(`${prov.merged} separate accounts have been run together into this one.`);
+  if (prov.causeApocryphal) notes.push('The cause given is not attested — the real one is gone.');
+  if (prov.attributionDrifted) notes.push('Who did what has drifted between the parties.');
+  if (prov.inverted) notes.push('Sources disagree on the outcome, and no copy of the truth was kept.');
+  if (prov.dist && !notes.length) notes.push('Retold enough times that the details have moved.');
+  if (notes.length) {
+    const ul = document.createElement('ul');
+    for (const note of notes) {
+      const li = document.createElement('li');
+      li.textContent = note;
+      ul.append(li);
+    }
+    box.append(ul);
+  } else {
+    const p = document.createElement('p');
+    p.style.margin = '7px 0 0';
+    p.textContent = 'Still recorded as it happened.';
+    box.append(p);
+  }
+  return box;
+}
+
+function relatedLinks(related, exclude) {
+  const keys = Object.keys(related || {}).filter((k) => k !== exclude).slice(0, 20);
+  if (!keys.length) return null;
+  const ul = document.createElement('ul');
+  ul.className = 'linkrow';
+  for (const key of keys) {
+    const li = document.createElement('li');
+    const rec = related[key];
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    const k = document.createElement('span');
+    k.className = 'k';
+    k.textContent = KIND_LABEL[key.split(':')[0]] || '';
+    if (rec) {
+      btn.append(k, document.createTextNode(rec.name));
+      btn.addEventListener('click', () => openEntity(key));
+    } else {
+      btn.append(k, document.createTextNode('forgotten'));
+      btn.disabled = true;
+    }
+    li.append(btn);
+    ul.append(li);
+  }
+  return ul;
+}
+
+function openEntity(key) {
+  if (!worker) return;
+  worker.postMessage({ type: 'entity', key });
+}
+
+function replayThenOpen(key, year) {
+  dom.mapnote.hidden = false;
+  dom.mapnote.textContent =
+    `Nothing is stored between visits. Re-running this world from its seed to year ${formatYear(year)}…`;
+  pendingKey = key;
+  worker.postMessage({ type: 'pause' });
+  worker.postMessage({ type: 'runTo', year });
+}
+
+function renderEntity(msg) {
+  const rec = msg.record;
+  const kind = msg.key.split(':')[0];
+  const bits = [];
+  if (rec) {
+    if (rec.epithet) bits.push(rec.epithet);
+    const from = rec.born ?? rec.founded ?? rec.began;
+    if (from !== undefined && from !== null) {
+      bits.push(rec.died != null
+        ? `${formatYear(from)} – ${formatYear(rec.died)}`
+        : `from ${formatYear(from)}`);
+    }
+    if (rec.culture) bits.push(rec.culture);
+    if (rec.house) bits.push(`house of ${rec.house}`);
+    if (rec.great) bits.push('a great house');
+    if (rec.rulers) bits.push(`${rec.rulers} rulers`);
+    if (rec.peak) bits.push(`${rec.peak} regions at its height`);
+    bits.push(msg.alive ? 'still standing' : 'gone from the world');
+  }
+
+  const parts = [sheetHeader(
+    KIND_LABEL[kind] || 'entry',
+    rec ? rec.name : 'Forgotten',
+    rec ? bits.join(' · ') : 'The record no longer holds anything under this name.',
+  )];
+
+  if (msg.events.length) {
+    const course = document.createElement('ol');
+    course.className = 'course';
+    for (const ev of msg.events) {
+      const li = document.createElement('li');
+      if (ev.dist >= 2) li.className = 'hazy';
+      const when = document.createElement('span');
+      when.className = 'when';
+      when.textContent = `year ${formatYear(ev.t)} · ${formatAge(msg.now - ev.t)}`;
+      const what = document.createElement('span');
+      what.className = 'what';
+      what.textContent = describe(ev);
+      li.append(when, what);
+      course.append(li);
+    }
+    parts.push(heading('What the record holds'), course);
+  } else {
+    const p = document.createElement('p');
+    p.className = 'nothing';
+    p.textContent = 'Nothing about it survives in the record.';
+    parts.push(p);
+  }
+
+  const links = relatedLinks(msg.related, msg.key);
+  if (links) parts.push(heading('Named alongside'), links);
+  dom.sheetBody.replaceChildren(...parts);
+}
+
+function renderCell(msg) {
+  const s = msg.settlement;
+  const parts = [sheetHeader(
+    s ? 'settlement' : msg.owner ? 'region' : 'unclaimed',
+    s ? s.name : (msg.owner ? msg.owner.name : 'Unclaimed ground'),
+    msg.owner && s ? `Held by ${msg.owner.name}.` : null,
+  )];
+
+  const tally = document.createElement('dl');
+  tally.className = 'tally';
+  const rows = [['People', shortNumber(msg.pop * 100000)]];
+  if (msg.ruler) rows.push(['Ruler', msg.ruler.epithet ? `${msg.ruler.name} ${msg.ruler.epithet}` : msg.ruler.name]);
+  if (msg.owner && msg.owner.culture) rows.push(['Culture', msg.owner.culture]);
+  if (s) rows.push(['Settled', `year ${formatYear(s.founded)}`]);
+  if (msg.unrest > 0.15) rows.push(['Unrest', `${Math.round(msg.unrest * 100)}%`]);
+  for (const [k, v] of rows) {
+    const div = document.createElement('div');
+    const dt = document.createElement('dt'); dt.textContent = k;
+    const dd = document.createElement('dd'); dd.textContent = v;
+    dd.style.fontSize = '14px';
+    div.append(dt, dd);
+    tally.append(div);
+  }
+  parts.push(tally);
+
+  if (msg.history.length) {
+    const course = document.createElement('ol');
+    course.className = 'course';
+    for (const ev of msg.history.slice(-10).reverse()) {
+      const li = document.createElement('li');
+      const when = document.createElement('span');
+      when.className = 'when';
+      when.textContent = `year ${formatYear(ev.t)}`;
+      const what = document.createElement('span');
+      what.className = 'what';
+      what.textContent = describe(ev);
+      li.append(when, what);
+      course.append(li);
+    }
+    parts.push(heading('What happened here'), course);
+  }
+
+  const links = document.createElement('ul');
+  links.className = 'linkrow';
+  const add = (key, label) => {
+    const li = document.createElement('li');
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = label;
+    btn.addEventListener('click', () => openEntity(key));
+    li.append(btn);
+    links.append(li);
+  };
+  if (msg.owner) add(`p:${msg.owner.id}`, `Read of ${msg.owner.name}`);
+  if (s) add(`s:${s.id}`, `Read of ${s.name}`);
+  if (links.childElementCount) parts.push(heading('Go on'), links);
+
+  dom.sheetBody.replaceChildren(...parts);
+}
+
+function renderSettings() {
+  const parts = [sheetHeader('this world', 'Seed and search',
+    'A world is rebuilt from its seed every time. The same seed always gives the same history.')];
+
+  const seedField = document.createElement('div');
+  seedField.className = 'field';
+  const seedLabel = document.createElement('label');
+  seedLabel.textContent = 'Seed';
+  seedLabel.htmlFor = 'seed-input';
+  const seedInput = document.createElement('input');
+  seedInput.id = 'seed-input';
+  seedInput.type = 'text';
+  seedInput.spellcheck = false;
+  seedInput.autocomplete = 'off';
+  seedInput.value = currentSeed;
+  seedField.append(seedLabel, seedInput);
+
+  const newWorld = document.createElement('button');
+  newWorld.type = 'button';
+  newWorld.className = 'primary';
+  newWorld.textContent = 'New world';
+  newWorld.addEventListener('click', () => {
+    const seed = seedInput.value.trim() || randomSeed();
+    sheetStack.length = 0;
+    hideSheet();
+    start(seed);
+  });
+  seedInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') newWorld.click(); });
+
+  const searchField = document.createElement('div');
+  searchField.className = 'field';
+  const searchLabel = document.createElement('label');
+  searchLabel.textContent = 'Look up a name';
+  searchLabel.htmlFor = 'search-input';
+  const searchInput = document.createElement('input');
+  searchInput.id = 'search-input';
+  searchInput.type = 'search';
+  searchInput.spellcheck = false;
+  searchInput.placeholder = 'a state, a house, a city…';
+  searchField.append(searchLabel, searchInput);
+
+  const results = document.createElement('ul');
+  results.className = 'linkrow';
+  results.id = 'search-results';
+
+  let timer = null;
+  searchInput.addEventListener('input', () => {
+    clearTimeout(timer);
+    const query = searchInput.value.trim();
+    if (query.length < 2) { results.replaceChildren(); return; }
+    timer = setTimeout(() => worker.postMessage({ type: 'search', query }), 180);
+  });
+
+  parts.push(seedField, newWorld, searchField, results);
+  dom.sheetBody.replaceChildren(...parts);
+}
+
+function renderSearchResults(msg) {
+  const results = document.getElementById('search-results');
+  if (!results) return;
+  if (!msg.results.length) {
+    const li = document.createElement('li');
+    li.className = 'nothing';
+    li.textContent = `Nothing in the record answers to "${msg.query}".`;
+    results.replaceChildren(li);
+    return;
+  }
+  results.replaceChildren(...msg.results.map((r) => {
+    const li = document.createElement('li');
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    const k = document.createElement('span');
+    k.className = 'k';
+    k.textContent = KIND_LABEL[r.kind] || r.kind;
+    btn.append(k, document.createTextNode(r.name));
+    btn.addEventListener('click', () => openEntity(r.key));
+    li.append(btn);
+    return li;
+  }));
 }
 
 // ---------------------------------------------------------------------------
 // controls
 // ---------------------------------------------------------------------------
 
-// The slider is logarithmic in age, not linear in year: without that, the last
-// two hundred years — the only stretch the archive still holds in detail —
-// would occupy a fraction of a pixel on a million-year run.
 function sliderToYear(value) {
   if (!latest) return 0;
   const s = value / Number(dom.scrub.max);
@@ -319,7 +890,7 @@ dom.scrub.addEventListener('input', () => {
 
 dom.play.addEventListener('click', () => {
   running = !running;
-  dom.play.textContent = running ? 'pause' : 'run';
+  dom.play.textContent = running ? 'Pause' : 'Run';
   worker.postMessage(running ? { type: 'run', speed: currentSpeed() } : { type: 'pause' });
 });
 
@@ -328,18 +899,24 @@ dom.speed.addEventListener('change', () => {
 });
 
 dom.live.addEventListener('click', backToNow);
+dom.clearFilter.addEventListener('click', () => setTierFilter(null));
+dom.openSettings.addEventListener('click', () => showSheet({ kind: 'settings' }));
 
-dom.regen.addEventListener('click', () => {
-  const seed = dom.seed.value.trim() || randomSeed();
-  start(seed);
+// Map interaction. Hover is a mouse affordance and never fires on touch, so the
+// highlight is gated on pointer type, while the tap opens the region either way.
+dom.map.addEventListener('pointermove', (e) => {
+  if (!renderer || e.pointerType !== 'mouse') return;
+  const cell = renderer.cellAt(e.clientX, e.clientY);
+  if (cell !== renderer.highlight) {
+    renderer.setState({ highlight: cell });
+    renderer.draw();
+  }
 });
-
-dom.seed.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') dom.regen.click();
+dom.map.addEventListener('pointerleave', () => {
+  if (!renderer || renderer.highlight < 0) return;
+  renderer.setState({ highlight: -1 });
+  renderer.draw();
 });
-
-dom.detailClose.addEventListener('click', () => { dom.detail.hidden = true; });
-
 dom.map.addEventListener('click', (e) => {
   if (!renderer) return;
   const cell = renderer.cellAt(e.clientX, e.clientY);
@@ -347,293 +924,9 @@ dom.map.addEventListener('click', (e) => {
   worker.postMessage({ type: 'cell', cell });
 });
 
-dom.map.addEventListener('mousemove', (e) => {
-  if (!renderer) return;
-  const cell = renderer.cellAt(e.clientX, e.clientY);
-  if (cell !== renderer.highlight) {
-    renderer.setState({ highlight: cell });
-    renderer.draw();
-  }
-});
-
-dom.map.addEventListener('mouseleave', () => {
-  if (!renderer) return;
-  renderer.setState({ highlight: -1 });
-  renderer.draw();
-});
-
-function showCell(msg) {
-  dom.detail.hidden = false;
-  const s = msg.settlement;
-  dom.detailTitle.textContent = s ? s.name : (msg.owner ? msg.owner.name : 'Unclaimed ground');
-
-  const rows = [];
-  if (msg.owner) rows.push(['held by', msg.owner.name]);
-  if (msg.ruler) rows.push(['ruler', msg.ruler.epithet ? `${msg.ruler.name} ${msg.ruler.epithet}` : msg.ruler.name]);
-  if (msg.owner && msg.owner.culture) rows.push(['culture', msg.owner.culture]);
-  if (msg.owner && msg.owner.born !== undefined) rows.push(['founded', `year ${formatYear(msg.owner.born)}`]);
-  if (s) rows.push(['settled', `year ${formatYear(s.founded)}`]);
-  rows.push(['people', shortNumber(msg.pop * 100000)]);
-  if (msg.unrest > 0.15) rows.push(['unrest', `${Math.round(msg.unrest * 100)}%`]);
-
-  const dl = document.createElement('dl');
-  for (const [k, v] of rows) {
-    const dt = document.createElement('dt'); dt.textContent = k;
-    const dd = document.createElement('dd'); dd.textContent = v;
-    dl.append(dt, dd);
-  }
-
-  const list = document.createElement('ul');
-  list.className = 'mini';
-  for (const ev of msg.history.slice(-8).reverse()) {
-    const li = document.createElement('li');
-    const when = document.createElement('span');
-    when.className = 'when';
-    when.textContent = formatYear(ev.t);
-    li.append(when, document.createTextNode(describe(ev)));
-    list.append(li);
-  }
-
-  dom.detailBody.replaceChildren(dl);
-  if (msg.history.length) dom.detailBody.append(list);
-
-  // Routes from the map into the record: whatever is here that has a page.
-  const links = document.createElement('p');
-  links.className = 'links';
-  if (msg.owner) links.append(entityLink(`p:${msg.owner.id}`, { name: `read of ${msg.owner.name}` }));
-  if (s) links.append(entityLink(`s:${s.id}`, { name: `read of ${s.name}` }));
-  if (links.childElementCount) dom.detailBody.append(links);
-}
-
-// ---------------------------------------------------------------------------
-// the legends browser
 // ---------------------------------------------------------------------------
 
-// The hash carries the seed and, optionally, the entity being read and the year
-// to read it at:
-//   #<seed>              the map
-//   #<seed>/p/17/48200   that state's page, in a world replayed to year 48200
-//
-// The year is not decoration. Nothing is persisted between visits — a world is
-// re-derived from its seed every time the page loads — so a link to an entity
-// is only meaningful together with the point in time at which that entity
-// existed. Seed plus tick count is the whole save file.
-function writeHash(seed, key, year) {
-  const suffix = key ? `/${key.replace(':', '/')}/${Math.round(year || 0)}` : '';
-  const next = `#${encodeURIComponent(seed)}${suffix}`;
-  if (location.hash !== next) history.pushState(null, '', next);
-}
-
-function readHash() {
-  const raw = decodeURIComponent(location.hash.slice(1));
-  if (!raw) return { seed: null, key: null, year: null };
-  const parts = raw.split('/');
-  return {
-    seed: parts[0] || null,
-    key: parts.length >= 3 ? `${parts[1]}:${parts[2]}` : null,
-    year: parts.length >= 4 ? Number(parts[3]) || 0 : null,
-  };
-}
-
-function openEntity(key, push = true) {
-  if (!worker) return;
-  if (push) writeHash(dom.seed.value, key, latest ? latest.year : 0);
-  worker.postMessage({ type: 'entity', key });
-}
-
-// Opening a shared link: replay the world to the year the link was made at,
-// then show the page. Until then there is nothing to show, because that state
-// has not been founded yet.
-function replayThenOpen(key, year) {
-  dom.legends.hidden = false;
-  dom.mapview.hidden = true;
-  dom.timeline.hidden = true;
-  dom.tickerview.hidden = true;
-  dom.legendsKind.textContent = 'replaying';
-  dom.legendsName.textContent = 'Catching up…';
-  dom.legendsDates.textContent =
-    `Nothing is stored between visits. Re-running this world from its seed to year ${formatYear(year)}.`;
-  dom.legendsLife.replaceChildren();
-  dom.legendsRelated.replaceChildren();
-  pendingKey = key;
-  worker.postMessage({ type: 'pause' });
-  worker.postMessage({ type: 'runTo', year });
-}
-
-function closeLegends(push = true) {
-  dom.legends.hidden = true;
-  dom.mapview.hidden = false;
-  dom.timeline.hidden = false;
-  dom.tickerview.hidden = false;
-  if (push) writeHash(dom.seed.value, null);
-  if (renderer) { renderer.resize(); renderer.draw(); }
-}
-
-function showEntity(msg) {
-  dom.legends.hidden = false;
-  dom.mapview.hidden = true;
-  dom.timeline.hidden = true;
-  dom.tickerview.hidden = true;
-  dom.results.hidden = true;
-
-  const rec = msg.record;
-  const kind = msg.key.split(':')[0];
-  dom.legendsKind.textContent = KIND_LABEL[kind] || 'entry';
-  dom.legendsName.textContent = rec ? rec.name : 'Forgotten';
-
-  // Everything an entity page can say comes from the same event log the map
-  // reads. There is no separate biography store — a life is just the events
-  // that still mention it.
-  const bits = [];
-  if (rec) {
-    if (rec.epithet) bits.push(rec.epithet);
-    const from = rec.born ?? rec.founded ?? rec.began;
-    if (from !== undefined && from !== null) {
-      bits.push(rec.died != null
-        ? `${formatYear(from)} – ${formatYear(rec.died)}`
-        : `from ${formatYear(from)}`);
-    }
-    if (rec.culture) bits.push(rec.culture);
-    if (rec.dynasty) bits.push(`of the house of ${rec.dynasty}`);
-    if (rec.peak) bits.push(`held ${rec.peak} regions at its height`);
-    bits.push(msg.alive ? 'still standing' : 'gone from the world');
-  }
-  dom.legendsDates.innerHTML = rec
-    ? bits.join(' · ')
-    : '<span class="gone">The record no longer holds anything under this name.</span>';
-
-  const life = msg.events.map((ev) => {
-    const li = document.createElement('li');
-    if (ev.dist >= 2) li.className = 'hazy';
-    const when = document.createElement('span');
-    when.className = 'when';
-    when.textContent = `year ${formatYear(ev.t)} · ${formatAge(msg.now - ev.t)}`;
-    const what = document.createElement('span');
-    what.className = 'what';
-    what.textContent = describe(ev);
-    const prov = provenance(ev);
-    if (prov) {
-      const note = document.createElement('em');
-      note.className = 'prov';
-      note.textContent = prov;
-      what.append(note);
-    }
-    li.append(when, what);
-
-    const others = ev.refs.filter((r) => r !== msg.key && msg.related[r]);
-    if (others.length) {
-      const links = document.createElement('span');
-      links.className = 'links';
-      for (const ref of others) links.append(entityLink(ref, msg.related[ref]));
-      li.append(links);
-    }
-    return li;
-  });
-
-  if (life.length) {
-    dom.legendsLife.replaceChildren(...life);
-  } else {
-    const p = document.createElement('p');
-    p.className = 'nothing';
-    p.textContent = 'Nothing about it survives in the record.';
-    dom.legendsLife.replaceChildren(p);
-  }
-
-  // Long-lived states accumulate hundreds of connections; the sidebar shows a
-  // readable slice and says how many more there are.
-  const allRelated = Object.keys(msg.related);
-  const relatedKeys = allRelated.slice(0, 24);
-  dom.legendsRelated.replaceChildren(...relatedKeys.map((ref) => {
-    const li = document.createElement('li');
-    const k = document.createElement('span');
-    k.className = 'k';
-    k.textContent = KIND_LABEL[ref.split(':')[0]] || '';
-    li.append(k, entityLink(ref, msg.related[ref]));
-    return li;
-  }));
-  if (!relatedKeys.length) {
-    const li = document.createElement('li');
-    li.className = 'nothing';
-    li.textContent = 'No one else appears beside it.';
-    dom.legendsRelated.replaceChildren(li);
-  } else if (allRelated.length > relatedKeys.length) {
-    const li = document.createElement('li');
-    li.className = 'nothing';
-    li.textContent = `and ${allRelated.length - relatedKeys.length} more`;
-    dom.legendsRelated.append(li);
-  }
-  window.scrollTo(0, 0);
-}
-
-function entityLink(key, record) {
-  const btn = document.createElement('button');
-  btn.type = 'button';
-  if (record) {
-    btn.textContent = record.name;
-  } else {
-    // The event kept a reference to something the registry has already swept.
-    btn.textContent = 'someone forgotten';
-    btn.className = 'gone';
-    btn.disabled = true;
-    return btn;
-  }
-  btn.addEventListener('click', () => openEntity(key));
-  return btn;
-}
-
-function showResults(msg) {
-  dom.results.hidden = false;
-  if (!msg.results.length) {
-    const li = document.createElement('li');
-    li.className = 'empty';
-    li.textContent = `Nothing in the record answers to "${msg.query}".`;
-    dom.resultsList.replaceChildren(li);
-    return;
-  }
-  dom.resultsList.replaceChildren(...msg.results.map((r) => {
-    const li = document.createElement('li');
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    const k = document.createElement('span');
-    k.className = 'k';
-    k.textContent = KIND_LABEL[r.kind] || r.kind;
-    btn.append(k, document.createTextNode(r.name));
-    btn.addEventListener('click', () => {
-      dom.results.hidden = true;
-      dom.search.value = '';
-      openEntity(r.key);
-    });
-    li.append(btn);
-    return li;
-  }));
-}
-
-let searchTimer = null;
-dom.search.addEventListener('input', () => {
-  clearTimeout(searchTimer);
-  const query = dom.search.value.trim();
-  if (query.length < 2) { dom.results.hidden = true; return; }
-  searchTimer = setTimeout(() => worker.postMessage({ type: 'search', query }), 180);
-});
-
-dom.legendsBack.addEventListener('click', () => closeLegends());
-
-window.addEventListener('popstate', () => {
-  const { seed, key } = readHash();
-  const { year } = readHash();
-  if (seed && seed !== dom.seed.value) { start(seed, key, year); return; }
-  if (key) openEntity(key, false);
-  else closeLegends(false);
-});
-
-// Any state named in the legend opens its page.
-dom.powers.addEventListener('click', (e) => {
-  const li = e.target.closest('li');
-  if (!li || !li.dataset.key) return;
-  openEntity(li.dataset.key);
-});
-
-// ---------------------------------------------------------------------------
+function sentenceCase(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
 
 // The slow settings run below one year a second, where rounding to an integer
 // would show a steady "0 yr/s".
@@ -654,6 +947,17 @@ function randomSeed() {
   const words = ['ash', 'kel', 'moro', 'vast', 'tern', 'oro', 'hail', 'dun', 'seln', 'brack'];
   const pick = () => words[Math.floor(Math.random() * words.length)];
   return `${pick()}-${pick()}-${Math.floor(Math.random() * 900 + 100)}`;
+}
+
+function readHash() {
+  const raw = decodeURIComponent(location.hash.slice(1));
+  if (!raw) return { seed: null, key: null, year: null };
+  const parts = raw.split('/');
+  return {
+    seed: parts[0] || null,
+    key: parts.length >= 3 ? `${parts[1]}:${parts[2]}` : null,
+    year: parts.length >= 4 ? Number(parts[3]) || 0 : null,
+  };
 }
 
 let resizeTimer = null;
@@ -682,6 +986,8 @@ window.Chronicle = {
   runTo: (year) => ask({ type: 'runTo', year }, 'ranTo'),
   digest: () => ask({ type: 'digest' }, 'digest'),
   state: () => latest,
+  events: () => lastEvents,
+  sheetOpen: () => !dom.sheet.hidden,
   setSpeed: (v) => { dom.speed.value = String(v); worker.postMessage({ type: 'speed', speed: v }); },
   pause: () => worker.postMessage({ type: 'pause' }),
   resume: () => worker.postMessage({ type: 'run', speed: currentSpeed() }),

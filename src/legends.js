@@ -13,7 +13,8 @@ const n = (v) => (typeof v === 'number' ? NUM.format(Math.round(v)) : v);
 const TEMPLATES = {
   'world.begin': () => 'The world takes shape.',
 
-  'polity.found': (d) => `${d.name} is founded${d.ruler ? `, under ${d.ruler}` : ''}.`,
+  'polity.found': (d) => `${d.name} is founded${d.ruler ? `, under ${d.ruler}` : ''}`
+    + `${d.house ? ` of the house of ${d.house}` : ''}.`,
   'polity.collapse': (d) => (d.parts
     ? `${d.name} breaks apart after ${n(d.years)} years, into ${d.parts} successor states.`
     : `${d.name} comes to an end after ${n(d.years)} years.`),
@@ -26,6 +27,10 @@ const TEMPLATES = {
     + `${d.strength ? `, ${n(d.strength)} under arms` : ''}`
     + `${d.cause ? `, over ${d.cause}` : ''}.`,
   'war.end': (d) => `${d.victor} prevails over ${d.defeated} after ${n(d.years)} years`
+    + `${d.taken ? `, taking ${n(d.taken)} regions` : ''}`
+    + `${d.dead ? `; ${n(d.dead)} dead` : ''}.`,
+  'war.stalemate': (d) => `The war between ${d.a} and ${d.b} burns out after `
+    + `${n(d.years)} years with the border unmoved`
     + `${d.dead ? `; ${n(d.dead)} dead` : ''}.`,
   'war.sack': (d) => `${d.by} sacks ${d.place}${d.dead ? `, ${n(d.dead)} put to the sword` : ''}.`,
 
@@ -35,6 +40,17 @@ const TEMPLATES = {
   'succession.crisis': (d) => `The succession in ${d.polity} is disputed; the house of ${d.house} takes the throne.`,
 
   'revolt': (d) => `${d.rebel} rises against ${d.against}.`,
+
+  'house.found': (d) => `The house of ${d.house} is raised up.`,
+  'house.ascend': (d) => `The house of ${d.house} holds ${n(d.thrones)} thrones at once, `
+    + `and is counted among the great houses.`,
+  'house.deposed': (d) => `The house of ${d.house} loses the last of its crowns with `
+    + `${d.polity}, after ${n(d.rulers)} rulers.`,
+  'house.restored': (d) => `The house of ${d.house} is restored to a throne it lost `
+    + `${n(d.years)} years before.`,
+  'house.extinct': (d) => (d.great
+    ? `The great house of ${d.house} fails; ${n(d.rulers)} of its line had reigned across ${n(d.years)} years.`
+    : `The house of ${d.house} fails, its line ended after ${n(d.rulers)} rulers.`),
   'culture.split': (d) => (d.died
     ? `The ${d.from} tongue passes out of use${d.to ? `, its speakers turning to ${d.to}` : ''}.`
     : `${d.to} diverges from ${d.from}.`),

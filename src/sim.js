@@ -64,6 +64,33 @@ const ORDER_FLOOR = 0.55;
 const WINTER_CHANCE = 0.00014;
 const WINTER_SEVERITY = 0.36;
 
+// Great houses. A house survives losing its last throne and can be restored to
+// ground it once held, which is what turns a dynasty from a label on a king
+// into an actor with a story of its own.
+const MAX_HOUSES = 90;
+const MAX_HOUSE_SPANS = 8;     // throne spans kept per house; oldest fall away
+const MAX_FEUDS = 6;
+// Three crowns at once, not two. Houses branch readily, so two is common enough
+// that over half of them would qualify and the distinction would mean nothing.
+const GREAT_HOUSE_THRONES = 3;
+const RESTORATION_WINDOW = 600; // years a deposed house can still press a claim
+const HOUSE_OVERFLOW_SLACK = 1.15;  // inline trim once the table runs this far over
+// Both bleed off per prune (every 250 years), so a grievance lasts centuries
+// rather than for ever.
+const GRUDGE_DECAY = 0.35;
+const FEUD_DECAY = 0.25;
+
+// Why states go to war. Written down at the declaration so the archive has a
+// true answer to lose when it later swaps in a stock one.
+const WAR_CAUSES = {
+  border: 'a disputed border',
+  conquest: 'plain conquest',
+  succession: 'a contested succession',
+  revanche: 'ground lost in an earlier war',
+  dynastic: 'a feud between ruling houses',
+  culture: 'kin under foreign rule',
+};
+
 export class Simulation {
   constructor(seed) {
     this.seed = String(seed);
@@ -83,11 +110,11 @@ export class Simulation {
     this.polities = new Map();
     this.settlements = new Map();
     this.cultures = new Map();
-    this.dynasties = new Map();
+    this.houses = new Map();
     this.people = new Map();
     this.wars = new Map();
 
-    this.nextId = { polity: 1, settlement: 1, culture: 1, dynasty: 1, person: 1, war: 1 };
+    this.nextId = { polity: 1, settlement: 1, culture: 1, house: 1, person: 1, war: 1 };
     this.year = 0;
     this.epochIndex = 0;
     this.knowledge = 0;      // accumulated civilised-years; drives the ratchet
@@ -250,14 +277,14 @@ export class Simulation {
     return fallback;
   }
 
-  newPerson(culture, dynasty) {
+  newPerson(culture, house) {
     const id = this.nextId.person++;
     const phon = culture.phonology;
     const person = {
       id,
       name: personName(phon, this.rng),
       epithet: this.rng.chance(0.35) ? epithet(phon, this.rng) : null,
-      dynastyId: dynasty ? dynasty.id : null,
+      houseId: house ? house.id : null,
       born: this.year,
       died: null,
       lifespan: Math.max(24, Math.round(this.rng.normal(58, 13))),
@@ -266,20 +293,184 @@ export class Simulation {
     this.people.set(id, person);
     this.memory.register('n', id, {
       name: person.name, epithet: person.epithet,
-      born: person.born, dynasty: dynasty ? dynasty.name : null,
+      born: person.born, house: house ? house.name : null,
     });
     return person;
   }
 
-  newDynasty(culture) {
-    const id = this.nextId.dynasty++;
-    const dynasty = {
-      id, name: dynastyName(culture.phonology, this.rng),
-      born: this.year, ended: null, rulers: 0,
+  // ---- great houses ------------------------------------------------------
+  //
+  // A house is not a label on a king. It outlives the state it ruled, can hold
+  // more than one throne at a time, can be deposed and restored generations
+  // later, and remembers who it has fought. That durability is also what keeps
+  // old events in the archive: salience rises with entities that still exist,
+  // so a founding survives centuries because the house that made it still
+  // reigns somewhere.
+
+  newHouse(culture) {
+    const id = this.nextId.house++;
+    const house = {
+      id,
+      name: dynastyName(culture.phonology, this.rng),
+      cultureId: culture.id,
+      founded: this.year,
+      thrones: new Set(),      // polity ids held right now
+      heldPast: [],            // {polity, name, from, to}, capped
+      rulers: 0,
+      prestige: 1,
+      feuds: new Map(),        // houseId -> weight, capped
+      deposedAt: null,
+      extinguished: null,
+      peakThrones: 0,
+      great: false,
     };
-    this.dynasties.set(id, dynasty);
-    this.memory.register('d', id, { name: dynasty.name, born: this.year });
-    return dynasty;
+    this.houses.set(id, house);
+    this.memory.register('d', id, {
+      name: house.name, born: this.year, culture: culture.name,
+    });
+    this.memory.push({
+      t: this.year, type: 'house.found', mag: 0.25,
+      refs: [entityKey('d', id), entityKey('c', culture.id)],
+      data: { house: house.name },
+    });
+    this.checkHouseOverflow();
+    return house;
+  }
+
+  // Which house takes a new throne. Minting a fresh one every time is what made
+  // houses disposable; most of the time an existing house should be reaching
+  // for it instead — a branch of a neighbour's house, or an old house coming
+  // back to ground it used to hold.
+  houseForThrone(cell, culture) {
+    const restorable = [];
+    const branchable = [];
+    for (const house of this.houses.values()) {
+      if (house.extinguished) continue;
+      if (house.thrones.size === 0 && house.heldPast.length) {
+        // Only where it has history, and only for a few centuries after losing
+        // the last of it — beyond that nobody is left to press the claim.
+        const since = this.year - (house.deposedAt ?? this.year);
+        if (since < RESTORATION_WINDOW && this.houseHeldNear(house, cell)) restorable.push(house);
+      } else if (house.thrones.size > 0 && house.cultureId === culture.id) {
+        branchable.push(house);
+      }
+    }
+
+    if (restorable.length && this.rng.chance(0.42)) {
+      const house = restorable[this.rng.int(restorable.length)];
+      this.memory.push({
+        t: this.year, type: 'house.restored', mag: 1.1,
+        refs: [entityKey('d', house.id)], cell,
+        data: {
+          house: house.name,
+          years: this.year - (house.deposedAt ?? this.year),
+        },
+      });
+      house.deposedAt = null;
+      house.prestige += 2;
+      return house;
+    }
+    if (branchable.length && this.rng.chance(0.3)) {
+      return branchable[this.rng.int(branchable.length)];
+    }
+    return this.newHouse(culture);
+  }
+
+  // Whether the house once ruled a state whose seat was near this cell.
+  houseHeldNear(house, cell) {
+    for (const held of house.heldPast) {
+      if (held.capital >= 0 && this.cellDistance(held.capital, cell) < this.cellPx * 14) return true;
+    }
+    return false;
+  }
+
+  takeThrone(house, pol) {
+    house.thrones.add(pol.id);
+    house.prestige += 1;
+    if (house.thrones.size > house.peakThrones) house.peakThrones = house.thrones.size;
+    // Holding two crowns at once is the moment a house becomes one of the great
+    // ones, and it is worth logging loudly — these are the entities deep time
+    // still remembers when it has forgotten the states themselves.
+    if (!house.great && house.thrones.size >= GREAT_HOUSE_THRONES) {
+      house.great = true;
+      house.prestige += 4;
+      this.memory.push({
+        t: this.year, type: 'house.ascend', mag: 1.6,
+        refs: [entityKey('d', house.id)], cell: pol.capital,
+        data: { house: house.name, thrones: house.thrones.size },
+      });
+    }
+  }
+
+  loseThrone(house, pol) {
+    if (!house || !house.thrones.has(pol.id)) return;
+    house.thrones.delete(pol.id);
+    house.heldPast.push({
+      polity: pol.id, name: pol.name, capital: pol.capital,
+      from: pol.houseSince ?? pol.born, to: this.year,
+    });
+    // Bounded: the oldest spans fall away rather than accumulating for ever.
+    if (house.heldPast.length > MAX_HOUSE_SPANS) house.heldPast.shift();
+
+    if (house.thrones.size === 0) {
+      house.deposedAt = this.year;
+      this.memory.push({
+        t: this.year, type: 'house.deposed', mag: 0.6 + Math.min(1, house.prestige / 12),
+        refs: [entityKey('d', house.id), entityKey('p', pol.id)],
+        cell: pol.capital,
+        data: { house: house.name, polity: pol.name, rulers: house.rulers },
+      });
+    }
+  }
+
+  // Two houses whose states have fought remember it. High enough, and it
+  // becomes a cause of war in its own right.
+  feud(aId, bId, weight) {
+    const a = this.houses.get(aId);
+    const b = this.houses.get(bId);
+    if (!a || !b || a === b) return;
+    for (const [x, y] of [[a, b], [b, a]]) {
+      x.feuds.set(y.id, Math.min(8, (x.feuds.get(y.id) || 0) + weight));
+      if (x.feuds.size > MAX_FEUDS) {
+        // Keep only the grudges that still burn hottest.
+        const worst = [...x.feuds.entries()].sort((p, q) => q[1] - p[1]).slice(0, MAX_FEUDS);
+        x.feuds = new Map(worst);
+      }
+    }
+  }
+
+  // Houses are bounded the same way cultures are: a hard cap, and the least
+  // consequential go first. A house with a living throne is never retired.
+  retireHouses() {
+    if (this.houses.size <= MAX_HOUSES) return;
+    const candidates = [];
+    for (const house of this.houses.values()) {
+      if (house.thrones.size > 0) continue;
+      candidates.push(house);
+    }
+    candidates.sort((a, b) => (a.prestige - b.prestige) || (a.founded - b.founded));
+    let excess = this.houses.size - MAX_HOUSES;
+    for (const house of candidates) {
+      if (excess <= 0) break;
+      if (house.prestige >= 4 || house.great) {
+        this.memory.push({
+          t: this.year, type: 'house.extinct',
+          mag: 0.5 + Math.min(1.2, house.prestige / 10),
+          refs: [entityKey('d', house.id)],
+          data: {
+            house: house.name, rulers: house.rulers,
+            years: this.year - house.founded, great: house.great,
+          },
+        });
+      }
+      house.extinguished = this.year;
+      this.memory.updateEntity(entityKey('d', house.id), {
+        died: this.year, rulers: house.rulers, great: house.great,
+      });
+      for (const other of this.houses.values()) other.feuds.delete(house.id);
+      this.houses.delete(house.id);
+      excess--;
+    }
   }
 
   foundSettlement(cell, culture, isSeat) {
@@ -304,10 +495,10 @@ export class Simulation {
 
   foundPolity(cell, culture, primordial = false) {
     const id = this.nextId.polity++;
-    const dynasty = this.newDynasty(culture);
-    const ruler = this.newPerson(culture, dynasty);
+    const house = this.houseForThrone(cell, culture);
+    const ruler = this.newPerson(culture, house);
     ruler.crowned = this.year;
-    dynasty.rulers = 1;
+    house.rulers++;
 
     // A rebel or successor state rises in a city that already exists — its own
     // capital if the seed cell has one, otherwise the nearest neighbouring
@@ -324,7 +515,9 @@ export class Simulation {
     const form = primordial ? 'chiefdom' : this.rng.pick(['chiefdom', 'kingdom', 'republic', 'theocracy']);
     const pol = {
       id, name: polityName(culture.phonology, this.rng, form, seat.name),
-      form, cultureId: culture.id, dynastyId: dynasty.id, rulerId: ruler.id,
+      form, cultureId: culture.id, houseId: house.id, rulerId: ruler.id,
+      houseSince: this.year,
+      grudges: new Map(),
       capital: cell, seat: seat.id,
       born: this.year, died: null,
       cells: 1, pop: this.pop[cell], stability: 0.55,
@@ -333,17 +526,23 @@ export class Simulation {
       peakCells: 1, peakYear: this.year,
     };
     this.polities.set(id, pol);
+    this.takeThrone(house, pol);
     this.setOwner(cell, id);
     this.cellCulture[cell] = culture.id;
     if (this.pop[cell] < 0.15) this.pop[cell] = 0.15;
 
     this.memory.register('p', id, {
       name: pol.name, form, born: this.year, culture: culture.name,
+      house: house.name,
     });
     this.memory.push({
       t: this.year, type: 'polity.found', mag: 0.5,
-      refs: [entityKey('p', id), entityKey('n', ruler.id), entityKey('s', seat.id)],
-      cell, data: { name: pol.name, ruler: ruler.name },
+      refs: [
+        entityKey('p', id), entityKey('n', ruler.id),
+        entityKey('d', house.id), entityKey('s', seat.id),
+      ],
+      cell,
+      data: { name: pol.name, ruler: ruler.name, house: house.name },
       first: primordial,
     });
     return pol;
@@ -380,19 +579,37 @@ export class Simulation {
   // housekeeping — but without it the tables grow with elapsed time and the
   // flat-cost guarantee is a lie.
   pruneEntities() {
-    const liveDynasties = new Set();
     const livePeople = new Set();
     for (const pol of this.polities.values()) {
-      liveDynasties.add(pol.dynastyId);
       livePeople.add(pol.rulerId);
-    }
-    for (const id of this.dynasties.keys()) {
-      if (!liveDynasties.has(id)) this.dynasties.delete(id);
+      // Grievances fade. Without this a state accumulates every slight it ever
+      // suffered and the war system seizes up on ancient history.
+      for (const [id, weight] of pol.grudges) {
+        const next = weight - GRUDGE_DECAY;
+        if (next <= 0 || !this.polities.has(id)) pol.grudges.delete(id);
+        else pol.grudges.set(id, next);
+      }
     }
     for (const id of this.people.keys()) {
       if (!livePeople.has(id)) this.people.delete(id);
     }
+    for (const house of this.houses.values()) {
+      for (const [id, weight] of house.feuds) {
+        const next = weight - FEUD_DECAY;
+        if (next <= 0) house.feuds.delete(id);
+        else house.feuds.set(id, next);
+      }
+    }
     this.retireCultures();
+    this.retireHouses();
+  }
+
+  // Houses are only retired on the periodic prune, so between prunes the table
+  // runs over its cap. Left at that, the overshoot is set by how many states
+  // happen to be founded in a 250-year window — bounded, but loosely. This
+  // trims the worst of it inline when the overshoot gets wide.
+  checkHouseOverflow() {
+    if (this.houses.size > MAX_HOUSES * HOUSE_OVERFLOW_SLACK) this.retireHouses();
   }
 
   // Population, capacity and assimilation. One sweep, flat body.
@@ -585,18 +802,35 @@ export class Simulation {
       } else {
         const foe = this.polities.get(on);
         if (!foe) { this.claim(nb, pol); continue; }
-        if (!pol.wars.size || !this.atWarWith(pol, on)) continue;
+        if (!pol.wars.size) continue;
+        const war = this.warWith(pol, on);
+        if (!war) continue;
         const attack = pol.pop * (1 + pol.stability) * ep.lethality * this.rng.range(0.5, 1.5);
         const defend = foe.pop * (1 + foe.stability) * (1 + this.unrest[nb] * -0.5) * this.rng.range(0.7, 1.4);
         if (attack > defend) {
-          this.pop[nb] *= 1 - 0.25 * ep.lethality * this.rng.range(0.4, 1);
+          const fallen = this.pop[nb] * 0.25 * ep.lethality * this.rng.range(0.4, 1);
+          this.pop[nb] -= fallen;
           this.unrest[nb] = Math.min(1, this.unrest[nb] + 0.35);
           this.claim(nb, pol);
+
+          // Tallied on the war itself, so the analysis can say what it cost
+          // rather than only who won.
+          war.dead += fallen * 100000;
+          war.taken[war.a === pol.id ? 0 : 1]++;
+
           const s = this.cellSettlement[nb] >= 0 && this.settlements.get(this.cellSettlement[nb]);
           if (s && this.rng.chance(0.3)) {
+            war.sacks++;
             this.memory.push({
               t: this.year, type: 'war.sack', mag: 0.55 + s.tier * 0.1,
-              refs: [entityKey('p', pol.id), entityKey('p', foe.id), entityKey('s', s.id)],
+              // The war key is what lets its page gather its own battles;
+              // without it a sack is orphaned from the conflict it belonged to.
+              refs: [
+                entityKey('w', war.id),
+                entityKey('p', pol.id),
+                entityKey('p', foe.id),
+                entityKey('s', s.id),
+              ],
               cell: nb,
               data: {
                 place: s.name, by: pol.name, from: foe.name,
@@ -607,9 +841,11 @@ export class Simulation {
           pol.exhaustion += 0.02;
           foe.exhaustion += 0.05;
           foe.stability -= 0.02;
+          this.addGrudge(foe, pol.id, 0.35);
         } else {
           pol.exhaustion += 0.04;
           pol.stability -= 0.008;
+          war.repulsed++;
         }
       }
     }
@@ -633,12 +869,23 @@ export class Simulation {
     return Math.sqrt(dx * dx + dy * dy);
   }
 
-  atWarWith(pol, otherId) {
+  // The war between these two, or null. Returns the war rather than a boolean
+  // because every caller that asks also needs to record something against it —
+  // a captured cell, a sacked city, the dead.
+  warWith(pol, otherId) {
     for (const wid of pol.wars) {
       const war = this.wars.get(wid);
-      if (war && (war.a === otherId || war.b === otherId)) return true;
+      if (war && (war.a === otherId || war.b === otherId)) return war;
     }
-    return false;
+    return null;
+  }
+
+  // A grudge is what makes a war remembered by the people who lost it. Bounded
+  // by neighbour count, decayed on the periodic prune, and read back as the
+  // `revanche` cause when the wronged side is strong enough to try again.
+  addGrudge(pol, againstId, weight) {
+    if (!pol || pol.id === againstId) return;
+    pol.grudges.set(againstId, Math.min(6, (pol.grudges.get(againstId) || 0) + weight));
   }
 
   // Rulers, stability, war and collapse. O(live polities).
@@ -652,7 +899,7 @@ export class Simulation {
         // Belt and braces: a polity with no living ruler can never crown one,
         // and would re-enter succession every tick.
         const culture = this.cultureFor(pol);
-        const heir = this.newPerson(culture, this.dynasties.get(pol.dynastyId));
+        const heir = this.newPerson(culture, this.houses.get(pol.houseId));
         heir.crowned = this.year;
         pol.rulerId = heir.id;
       } else if (this.year - ruler.born > ruler.lifespan) {
@@ -721,34 +968,42 @@ export class Simulation {
     });
 
     const culture = this.cultureFor(pol);
-    let dynasty = this.dynasties.get(pol.dynastyId);
-    if (!dynasty) {
-      dynasty = this.newDynasty(culture);
-      pol.dynastyId = dynasty.id;
+    let house = this.houses.get(pol.houseId);
+    if (!house) {
+      house = this.newHouse(culture);
+      pol.houseId = house.id;
+      pol.houseSince = this.year;
+      this.takeThrone(house, pol);
     }
 
     // A contested succession is the cheapest way for a stable empire to become
     // an unstable one, which is what keeps long runs from flattening out.
     const crisis = this.rng.chance(0.22 - pol.stability * 0.12);
-    let heirDynasty = dynasty;
+    let heirHouse = house;
     if (crisis) {
       pol.stability -= this.rng.range(0.2, 0.45);
       if (this.rng.chance(0.4)) {
-        if (dynasty) { dynasty.ended = this.year; }
-        heirDynasty = this.newDynasty(culture);
-        pol.dynastyId = heirDynasty.id;
+        // The throne changes hands between houses. The old one is not
+        // destroyed — it loses this crown and may hold others, or wait in
+        // exile for a restoration.
+        this.loseThrone(house, pol);
+        heirHouse = this.houseForThrone(pol.capital, culture);
+        pol.houseId = heirHouse.id;
+        pol.houseSince = this.year;
+        this.takeThrone(heirHouse, pol);
+        this.feud(house.id, heirHouse.id, 1.2);
       }
       this.memory.push({
         t: this.year, type: 'succession.crisis', mag: 0.45,
-        refs: [entityKey('p', pol.id), entityKey('d', heirDynasty.id)],
+        refs: [entityKey('p', pol.id), entityKey('d', heirHouse.id)],
         cell: pol.capital,
-        data: { polity: pol.name, house: heirDynasty.name },
+        data: { polity: pol.name, house: heirHouse.name },
       });
     }
 
-    const heir = this.newPerson(culture, heirDynasty);
+    const heir = this.newPerson(culture, heirHouse);
     heir.crowned = this.year;
-    if (heirDynasty) heirDynasty.rulers++;
+    if (heirHouse) heirHouse.rulers++;
     pol.rulerId = heir.id;
     // The sim only ever needs living rulers; the dead are the archive's
     // problem now. Keeping them here would grow a table forever, which is
@@ -756,34 +1011,80 @@ export class Simulation {
     this.people.delete(ruler.id);
     this.memory.push({
       t: this.year, type: 'ruler.crown', mag: 0.2,
-      refs: [entityKey('n', heir.id), entityKey('p', pol.id), entityKey('d', heirDynasty.id)],
+      refs: [entityKey('n', heir.id), entityKey('p', pol.id), entityKey('d', heirHouse.id)],
       cell: pol.capital,
-      data: { name: heir.name, polity: pol.name, house: heirDynasty.name },
+      data: { name: heir.name, polity: pol.name, house: heirHouse.name },
     });
+  }
+
+  // Why one state marches on another. Read off the actual state of the world
+  // rather than picked from a hat: the archive will overwrite this with a stock
+  // phrase once the event has been merged a few times, and that substitution
+  // only means anything if there was a true answer to lose.
+  warCause(pol, foe) {
+    const grudge = pol.grudges.get(foe.id) || 0;
+    const house = this.houses.get(pol.houseId);
+    const foeHouse = this.houses.get(foe.houseId);
+    const feud = house && foeHouse ? (house.feuds.get(foeHouse.id) || 0) : 0;
+
+    if (feud >= 2) return 'dynastic';
+    if (grudge >= 1.5) return 'revanche';
+    if (foe.stability < -0.12) return 'succession';
+    if (pol.pop > foe.pop * 2.2) return 'conquest';
+    // Foreign-ruled ground on their side of the border that has not settled.
+    let restive = 0;
+    const sample = Math.min(5, foe.borderCells.length);
+    for (let i = 0; i < sample; i++) {
+      const c = foe.borderCells[this.rng.int(foe.borderCells.length)];
+      if (this.cellCulture[c] === pol.cultureId && this.unrest[c] > 0.3) restive++;
+    }
+    if (restive >= 2) return 'culture';
+    return 'border';
   }
 
   considerWar(pol) {
     const ids = [...pol.neighbors];
-    const targetId = ids[this.rng.int(ids.length)];
+    // A standing grudge makes a particular neighbour likelier to be the target
+    // than simple proximity would.
+    let targetId = ids[this.rng.int(ids.length)];
+    for (const id of ids) {
+      if ((pol.grudges.get(id) || 0) >= 1.5 && this.rng.chance(0.5)) { targetId = id; break; }
+    }
     const foe = this.polities.get(targetId);
-    if (!foe || this.atWarWith(pol, targetId)) return;
+    if (!foe || this.warWith(pol, targetId)) return;
+
     const id = this.nextId.war++;
+    const cause = this.warCause(pol, foe);
     const war = {
       id, a: pol.id, b: foe.id, began: this.year,
       name: `the war of ${this.year}`,
+      cause,
+      aName: pol.name, bName: foe.name,
+      aHouse: pol.houseId, bHouse: foe.houseId,
+      dead: 0, sacks: 0, repulsed: 0, taken: [0, 0],
     };
     this.wars.set(id, war);
     pol.wars.add(id);
     foe.wars.add(id);
-    this.memory.register('w', id, { name: war.name, began: this.year });
+
+    if (cause === 'dynastic') this.feud(pol.houseId, foe.houseId, 0.6);
+
+    this.memory.register('w', id, {
+      name: war.name, began: this.year, cause,
+      attacker: pol.name, defender: foe.name,
+    });
     this.memory.push({
       t: this.year, type: 'war.begin', mag: 0.4,
-      refs: [entityKey('p', pol.id), entityKey('p', foe.id), entityKey('w', id)],
+      refs: [entityKey('w', id), entityKey('p', pol.id), entityKey('p', foe.id)],
       cell: pol.capital,
       // A couple of per cent of the population under arms. The archive will
       // inflate this every time the event is merged, so the figure it starts
       // from has to be one a chronicler could have plausibly written down.
-      data: { attacker: pol.name, defender: foe.name, strength: Math.round(pol.pop * 2000) },
+      data: {
+        attacker: pol.name, defender: foe.name,
+        strength: Math.round(pol.pop * 2000),
+        cause: WAR_CAUSES[cause],
+      },
     });
   }
 
@@ -796,20 +1097,58 @@ export class Simulation {
         || (a.exhaustion > 0.6 && b.exhaustion > 0.6);
       if (!over) continue;
 
+      // Outcome by ground actually taken, not by who happens to be bigger —
+      // a small state that held its border has not lost.
+      const netTaken = war.taken[0] - war.taken[1];
+      const dead = Math.round(war.dead + (a && b ? (a.pop + b.pop) * duration * 20 * ep.lethality : 0));
+      const decisive = Math.abs(netTaken) >= 3;
+      let victor = null;
+      let defeated = null;
+      if (a && b && netTaken !== 0) {
+        victor = netTaken > 0 ? a : b;
+        defeated = netTaken > 0 ? b : a;
+      }
+
+      // The war leaves sim state now, so everything the analysis will ever need
+      // has to be written into the archive here.
+      this.memory.updateEntity(entityKey('w', war.id), {
+        ended: this.year, years: duration, dead,
+        sacks: war.sacks, repulsed: war.repulsed,
+        taken: war.taken.slice(),
+        victor: victor ? victor.name : null,
+        defeated: defeated ? defeated.name : null,
+        stalemate: !victor,
+      });
+
       if (a && b) {
-        const winner = a.cells >= b.cells ? a : b;
-        const loser = winner === a ? b : a;
         this.memory.push({
-          t: this.year, type: 'war.end', mag: 0.35,
-          refs: [entityKey('w', war.id), entityKey('p', winner.id), entityKey('p', loser.id)],
-          cell: winner.capital,
+          t: this.year, type: victor ? 'war.end' : 'war.stalemate',
+          mag: 0.35 + (decisive ? 0.2 : 0),
+          refs: [
+            entityKey('w', war.id),
+            entityKey('p', (victor || a).id),
+            entityKey('p', (defeated || b).id),
+          ],
+          cell: (victor || a).capital,
           data: {
-            victor: winner.name, defeated: loser.name, years: duration,
-            dead: Math.round((a.pop + b.pop) * duration * 60 * ep.lethality),
+            victor: victor ? victor.name : null,
+            defeated: defeated ? defeated.name : null,
+            a: a.name, b: b.name,
+            years: duration, dead, taken: Math.abs(netTaken),
           },
         });
-        winner.exhaustion *= 0.5;
-        loser.stability -= 0.08;
+        if (victor) {
+          victor.exhaustion *= 0.5;
+          defeated.stability -= 0.08;
+          // Losing ground is what a grudge is made of, and it is what sends the
+          // same two states back to war a century later.
+          this.addGrudge(defeated, victor.id, 1 + Math.min(2, Math.abs(netTaken) * 0.2));
+        } else {
+          a.exhaustion *= 0.7;
+          b.exhaustion *= 0.7;
+        }
+        // Houses remember the war their states fought, whoever won.
+        this.feud(a.houseId, b.houseId, decisive ? 1 : 0.5);
       }
       if (a) a.wars.delete(war.id);
       if (b) b.wars.delete(war.id);
@@ -909,6 +1248,10 @@ export class Simulation {
     this.memory.updateEntity(entityKey('p', pol.id), {
       died: this.year, peak: pol.peakCells, peakYear: pol.peakYear, end: how,
     });
+    // The state ends; the house that ruled it does not. It gives up this crown
+    // and either holds others or goes into exile with a claim it can press for
+    // a few centuries yet.
+    this.loseThrone(this.houses.get(pol.houseId), pol);
     for (const wid of pol.wars) {
       const war = this.wars.get(wid);
       if (war) {
@@ -1059,7 +1402,7 @@ export class Simulation {
     for (const p of this.polities.values()) {
       keys.add(entityKey('p', p.id));
       keys.add(entityKey('n', p.rulerId));
-      keys.add(entityKey('d', p.dynastyId));
+      keys.add(entityKey('d', p.houseId));
       keys.add(entityKey('c', p.cultureId));
     }
     for (const s of this.settlements.values()) keys.add(entityKey('s', s.id));

@@ -67,9 +67,18 @@ works — the type just changes.
 
 ## What you're looking at
 
+Built for a phone: one column, everything tappable, and anything you open
+arrives as a bottom sheet you can drag away or dismiss with the back gesture.
+The wide layout is the secondary case.
+
 - **Map** — colour is who holds the ground; terrain still reads through it.
-  Dots are settlements, pale ones are cities. Click anywhere for that region's
+  Dots are settlements, pale ones are cities. Tap anywhere for that region's
   holder, ruler and history.
+- **The record** — every announcement is tappable. Tap a war and you get the
+  war: both belligerents with their rulers and houses, what it was actually
+  fought over, its course, what it cost, and how it ended — with the two sides
+  held lit on the map behind the sheet. Every sheet ends with what the archive
+  can still vouch for at that depth.
 - **Timeline** — logarithmic in age, not linear in year, so the last two
   centuries don't collapse into a single pixel on a million-year run. Drag back
   and the map redraws from the archive rather than from live state; states the
@@ -77,9 +86,8 @@ works — the type just changes.
   remembers*.
 - **The archive panel** — how full each tier is, and how much has been dropped
   and merged. The retained count stops growing; the forgotten count doesn't.
-- **Events** — the record for the stretch you're viewing, hedged where the
-  archive can no longer vouch for it.
-- **The record** — click any state in the legend, or search a name, to open its
+  Tap a tier to read only what still survives at that depth.
+- **Entity pages** — tap any state in the legend, or search a name, to open its
   page: everything the archive still holds that mentions it, cross-linked to
   everyone it appears beside. States, people, houses, settlements, cultures and
   wars all have pages, and all of them are just filtered views of the one event
@@ -93,6 +101,28 @@ is stored between visits; a world is re-derived from its seed every time the
 page loads, so a link to a state is only meaningful together with a point in
 time at which that state existed. Open one and it replays the world to that year
 before showing you the page. Seed plus tick count is the entire save file.
+
+## Wars and great houses
+
+A war is an object, not a label. It is declared for a **real reason** read off
+the state of the world — a disputed border, a contested succession, ground lost
+in an earlier war, a feud between ruling houses, kin under foreign rule, or
+plain conquest — and it tallies its own cost as it runs. That matters because
+the archive will later swap in a stock cause once the event has been merged
+enough times: the substitution only means something if there was a true answer
+to lose.
+
+**Houses outlive the states they ruled.** A house can hold several thrones at
+once, and holding three makes it one of the great houses. When its last state
+falls it is deposed rather than deleted, and for a few centuries it can still be
+restored to ground it once held — a house returning after two hundred years in
+exile is one of the better things the record turns up. Houses remember the wars
+their states fought, and a hot enough feud becomes a cause of war in its own
+right.
+
+Houses are also the clearest case of the salience rule: a long-lived house keeps
+its own founding alive in the archive for tens of thousands of years, simply by
+still existing.
 
 ## Design constraints
 
