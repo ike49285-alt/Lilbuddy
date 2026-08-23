@@ -465,6 +465,7 @@ main { display: flex; flex-direction: column; gap: 18px; padding-bottom: 40px; }
   color: var(--ink-faint); font-style: italic;
   opacity: 0.75; cursor: default;
 }
+.linkrow button.hazy { color: var(--ink-faint); }
 .linkrow .k {
   font-size: 10px; letter-spacing: 0.08em;
   text-transform: uppercase; color: var(--ink-faint);

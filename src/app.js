@@ -875,6 +875,8 @@ function renderEntity(msg) {
     parts.push(heading('Rivalries'), rivalryList(msg.grudges));
   }
 
+  if (msg.tree) parts.push(...renderCultureTree(msg.tree));
+
   const links = relatedLinks(msg.related, msg.key);
   if (links) parts.push(heading('Named alongside'), links);
   dom.sheetBody.replaceChildren(...parts);
@@ -908,6 +910,68 @@ function rivalryList(grudges) {
     ul.append(li);
   }
   return ul;
+}
+
+// A culture's lineage: what it split from, reading oldest to nearest as a
+// tappable chain, then what's split off from it since. Both directions are
+// pure archive lookups — even a long-retired ancestor or descendant still
+// shows up here as long as the record survives, and simply stops appearing
+// once the archive has genuinely forgotten it.
+function renderCultureTree(tree) {
+  const parts = [heading('Family tree')];
+
+  if (tree.sample) {
+    const p = document.createElement('p');
+    p.className = 'dek';
+    p.textContent = `Sounds like ${tree.sample.place} or ${tree.sample.person}.`;
+    parts.push(p);
+  }
+
+  if (tree.ancestors.length) {
+    const label = document.createElement('p');
+    label.className = 'nothing';
+    label.textContent = 'Descended from:';
+    const chain = document.createElement('ul');
+    chain.className = 'linkrow';
+    for (const a of tree.ancestors) {
+      const li = document.createElement('li');
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.textContent = a.name;
+      btn.addEventListener('click', () => openEntity(a.key));
+      li.append(btn);
+      chain.append(li);
+    }
+    parts.push(label, chain);
+  }
+
+  if (tree.children.length) {
+    const label = document.createElement('p');
+    label.className = 'nothing';
+    label.textContent = 'Split into:';
+    const list = document.createElement('ul');
+    list.className = 'linkrow';
+    for (const c of tree.children) {
+      const li = document.createElement('li');
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.textContent = c.name;
+      if (!c.alive) btn.classList.add('hazy');
+      btn.addEventListener('click', () => openEntity(c.key));
+      li.append(btn);
+      list.append(li);
+    }
+    parts.push(label, list);
+  }
+
+  if (!tree.ancestors.length && !tree.children.length) {
+    const p = document.createElement('p');
+    p.className = 'nothing';
+    p.textContent = 'No other culture the record still holds branches from this one.';
+    parts.push(p);
+  }
+
+  return parts;
 }
 
 function renderCell(msg) {
@@ -1428,6 +1492,26 @@ window.Chronicle = {
     viewScale: renderer.viewScale, viewCenterX: renderer.viewCenterX, viewCenterY: renderer.viewCenterY,
     overlay: renderer.overlay, hasUnrest: !!renderer.unrest,
   },
+  // Client-space point for a world cell, honouring the current zoom/pan —
+  // for tests to click precisely on a known settlement rather than guessing
+  // at random map coordinates.
+  debugCellPoint: (cell) => {
+    if (!renderer) return null;
+    const rect = dom.map.getBoundingClientRect();
+    const { sx, sy, sw, sh } = renderer.viewRect();
+    const fx = (renderer.world.sx[cell] - sx) / sw;
+    const fy = (renderer.world.sy[cell] - sy) / sh;
+    return { x: rect.left + fx * rect.width, y: rect.top + fy * rect.height };
+  },
+  // Opens a cell's region sheet directly through the worker, the same
+  // message a real tap sends — for tests, so opening a specific settlement
+  // doesn't depend on screen-coordinate math or sheet-transition timing.
+  debugOpenCell: (cell) => worker.postMessage({ type: 'cell', cell }),
+  // Opens any entity by key directly, the same call every tappable link in
+  // the app already goes through — for tests that need a specific, known
+  // entity (e.g. culture ids are sequential from world creation) rather than
+  // whatever a UI-navigation path happens to still hold onto in the archive.
+  debugOpenEntity: (key) => openEntity(key),
 };
 
 const route = readHash();

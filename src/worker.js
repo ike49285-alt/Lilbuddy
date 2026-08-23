@@ -9,7 +9,8 @@
 import { Simulation } from './sim.js';
 import { biomePalette } from './world.js';
 import { entityKey, TIERS, keyframeSpacing, tierFor } from './memory.js';
-import { hashNumbers, cyrb128 } from './rng.js';
+import { hashNumbers, cyrb128, makeRng } from './rng.js';
+import { placeName, personName } from './names.js';
 
 const hashString = (s) => cyrb128(s)[0] | 0;
 
@@ -167,6 +168,53 @@ function grudgesFor(key) {
       return rec ? { key: entityKey('p', id), name: rec.name, weight } : null;
     })
     .filter(Boolean); // a grudge against a state the archive has forgotten isn't worth showing
+}
+
+// A culture's family tree, read straight off the archive: every culture's
+// entity record already carries the id of the one it split from, so the
+// ancestor chain is a walk up `.parent`, no live sim state needed and no
+// bound on how far back it can reach that the archive itself doesn't
+// already impose. Children go the other way — anything in the archive's
+// whole entity registry naming this one as parent, live or long since
+// retired. A branch the archive has genuinely forgotten (no surviving
+// record, no surviving event that named it) just doesn't appear, same as
+// everywhere else in Chronicle.
+function cultureTree(key, rec) {
+  const ancestors = [];
+  const seen = new Set([key]);
+  let cur = rec;
+  while (cur && cur.parent != null) {
+    const pkey = entityKey('c', cur.parent);
+    if (seen.has(pkey)) break; // cycle guard; shouldn't happen, but never loop forever on it
+    seen.add(pkey);
+    const prec = sim.memory.entity(pkey);
+    if (!prec) break; // the archive doesn't remember what came before this
+    ancestors.unshift({ key: pkey, name: prec.name, born: prec.born ?? null });
+    cur = prec;
+  }
+
+  const id = Number(key.split(':')[1]);
+  const children = [];
+  for (const e of sim.memory.entities.values()) {
+    if (e.kind === 'c' && e.parent === id) {
+      children.push({ key: entityKey('c', e.id), name: e.name, born: e.born ?? null, alive: sim.cultures.has(e.id) });
+    }
+  }
+  children.sort((a, b) => (a.born ?? 0) - (b.born ?? 0));
+
+  // A flavour sample in this culture's own voice — only possible while it's
+  // still spoken; its phonology was never anything but live sim state, and a
+  // retired culture doesn't carry one in the archive. Seeded independently of
+  // sim.rng: this is a read-only display query, and it must never be able to
+  // perturb the tick loop's own random sequence.
+  let sample = null;
+  const live = sim.cultures.get(id);
+  if (live) {
+    const displayRng = makeRng(`${sim.seed}:culturesample:${id}`);
+    sample = { place: placeName(live.phonology, displayRng), person: personName(live.phonology, displayRng) };
+  }
+
+  return { ancestors, children, sample };
 }
 
 // Everything the archive still holds about what an event belonged to. For a
@@ -496,6 +544,7 @@ self.addEventListener('message', (event) => {
           type: 'entity', key: msg.key, record, events, related,
           alive: isAlive(msg.key), now: sim.year, cell: locationOf(msg.key),
           grudges: grudgesFor(msg.key),
+          tree: record && record.kind === 'c' ? cultureTree(msg.key, record) : null,
         });
         break;
       }
