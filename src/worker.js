@@ -150,6 +150,25 @@ function describeEntity(key) {
   return out;
 }
 
+// Live rivalries for a still-standing state — its hottest few grudges,
+// resolved to names. A fallen state carries none: the Map that held them
+// stopped existing the moment sim.polities dropped it, same as everything
+// else that's only ever live sim state rather than archived record.
+function grudgesFor(key) {
+  const [kind, raw] = key.split(':');
+  if (kind !== 'p') return [];
+  const pol = sim.polities.get(Number(raw));
+  if (!pol || !pol.grudges.size) return [];
+  return [...pol.grudges.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([id, weight]) => {
+      const rec = sim.memory.entity(entityKey('p', id));
+      return rec ? { key: entityKey('p', id), name: rec.name, weight } : null;
+    })
+    .filter(Boolean); // a grudge against a state the archive has forgotten isn't worth showing
+}
+
 // Everything the archive still holds about what an event belonged to. For a
 // war that is both sides, why it started, every engagement inside it, what it
 // cost and how it ended — assembled from the event log and the war's own
@@ -476,6 +495,7 @@ self.addEventListener('message', (event) => {
         self.postMessage({
           type: 'entity', key: msg.key, record, events, related,
           alive: isAlive(msg.key), now: sim.year, cell: locationOf(msg.key),
+          grudges: grudgesFor(msg.key),
         });
         break;
       }

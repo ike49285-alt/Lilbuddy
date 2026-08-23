@@ -871,9 +871,43 @@ function renderEntity(msg) {
     parts.push(p);
   }
 
+  if (msg.grudges && msg.grudges.length) {
+    parts.push(heading('Rivalries'), rivalryList(msg.grudges));
+  }
+
   const links = relatedLinks(msg.related, msg.key);
   if (links) parts.push(heading('Named alongside'), links);
   dom.sheetBody.replaceChildren(...parts);
+}
+
+// Live grudges, hottest first — a bar under each name rather than a bare
+// number, since the weight's own scale (capped at 6, decaying yearly) isn't
+// meaningful to a reader on its own.
+function rivalryList(grudges) {
+  const ul = document.createElement('ul');
+  ul.className = 'linkrow rivalries';
+  const max = 6; // ADDGRUDGE's own cap in sim.js
+  for (const g of grudges) {
+    const li = document.createElement('li');
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    const row = document.createElement('span');
+    row.className = 'row';
+    const nm = document.createElement('span');
+    nm.textContent = g.name;
+    row.append(nm);
+    const meter = document.createElement('span');
+    meter.className = 'meter';
+    const fill = document.createElement('span');
+    fill.className = 'fill';
+    fill.style.width = `${Math.min(100, (g.weight / max) * 100)}%`;
+    meter.append(fill);
+    btn.append(row, meter);
+    btn.addEventListener('click', () => openEntity(g.key));
+    li.append(btn);
+    ul.append(li);
+  }
+  return ul;
 }
 
 function renderCell(msg) {

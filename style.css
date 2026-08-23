@@ -471,6 +471,15 @@ main { display: flex; flex-direction: column; gap: 18px; padding-bottom: 40px; }
   margin-right: 7px;
 }
 
+.linkrow.rivalries { flex-direction: column; gap: 6px; }
+.linkrow.rivalries button {
+  display: flex; flex-direction: column; align-items: stretch;
+  width: 100%; gap: 6px; text-align: left; border-radius: 10px;
+}
+.linkrow.rivalries .row { font-size: 14px; }
+.linkrow.rivalries .meter { height: 4px; background: var(--sunk); border-radius: 2px; overflow: hidden; }
+.linkrow.rivalries .fill { display: block; height: 100%; background: var(--accent); }
+
 .attest {
   margin-top: 22px; padding: 12px;
   border-radius: 12px; border: 1px dashed var(--rule);
