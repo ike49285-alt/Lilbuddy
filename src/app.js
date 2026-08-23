@@ -965,6 +965,8 @@ function renderEntity(msg) {
 
   if (msg.tree) parts.push(...renderCultureTree(msg.tree));
 
+  if (msg.lineage) parts.push(...renderHouseLineage(msg.lineage));
+
   const links = relatedLinks(msg.related, msg.key);
   if (links) parts.push(heading('Named alongside'), links);
   dom.sheetBody.replaceChildren(...parts);
@@ -973,10 +975,9 @@ function renderEntity(msg) {
 // Live grudges, hottest first — a bar under each name rather than a bare
 // number, since the weight's own scale (capped at 6, decaying yearly) isn't
 // meaningful to a reader on its own.
-function rivalryList(grudges) {
+function rivalryList(grudges, max = 6) {
   const ul = document.createElement('ul');
   ul.className = 'linkrow rivalries';
-  const max = 6; // ADDGRUDGE's own cap in sim.js
   for (const g of grudges) {
     const li = document.createElement('li');
     const btn = document.createElement('button');
@@ -1057,6 +1058,65 @@ function renderCultureTree(tree) {
     p.className = 'nothing';
     p.textContent = 'No other culture the record still holds branches from this one.';
     parts.push(p);
+  }
+
+  return parts;
+}
+
+// A living house's thrones, past reigns, and hottest feuds. Every bit of it
+// is live sim state — gone once the house itself is retired, same as the
+// worker query it comes from. A fully extinct house still tells its own
+// story fine through the ordinary event history above (house.found,
+// house.ascend, house.deposed, house.extinct), just without this section.
+function renderHouseLineage(lineage) {
+  const parts = [];
+  if (!lineage.thrones.length && !lineage.heldPast.length && !lineage.feuds.length) return parts;
+
+  parts.push(heading('Lineage'));
+
+  if (lineage.thrones.length) {
+    const label = document.createElement('p');
+    label.className = 'nothing';
+    label.textContent = lineage.thrones.length > 1 ? 'Holds the thrones of:' : 'Holds the throne of:';
+    const list = document.createElement('ul');
+    list.className = 'linkrow';
+    for (const t of lineage.thrones) {
+      const li = document.createElement('li');
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.textContent = t.name;
+      btn.addEventListener('click', () => openEntity(t.key));
+      li.append(btn);
+      list.append(li);
+    }
+    parts.push(label, list);
+  }
+
+  if (lineage.heldPast.length) {
+    const label = document.createElement('p');
+    label.className = 'nothing';
+    label.textContent = 'Past reigns:';
+    const course = document.createElement('ol');
+    course.className = 'course';
+    for (const span of lineage.heldPast) {
+      const li = document.createElement('li');
+      if (!span.alive) li.className = 'hazy';
+      const when = document.createElement('span');
+      when.className = 'when';
+      when.textContent = `${formatYear(span.from)} – ${formatYear(span.to)}`;
+      const what = document.createElement('span');
+      what.className = 'what';
+      what.textContent = span.name;
+      li.append(when, what);
+      li.style.cursor = 'pointer';
+      li.addEventListener('click', () => openEntity(span.key));
+      course.append(li);
+    }
+    parts.push(label, course);
+  }
+
+  if (lineage.feuds.length) {
+    parts.push(heading('Feuds'), rivalryList(lineage.feuds, 8)); // feud()'s own cap in sim.js
   }
 
   return parts;

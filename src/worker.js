@@ -217,6 +217,43 @@ function cultureTree(key, rec) {
   return { ancestors, children, sample };
 }
 
+// A living house's lineage: every throne it holds now, its past reigns, and
+// its hottest feuds — all of it live sim state (`heldPast` already carries
+// resolved names and capitals from the moment each throne was lost, so no
+// archive lookups are needed for those). Gone once the house itself is
+// retired: retireHouses() only leaves a summary behind via updateEntity, by
+// design — the full lineage was never meant to outlive the house that held
+// it, the same way a state's own detail doesn't outlive the state.
+function houseLineage(key) {
+  const [kind, raw] = key.split(':');
+  if (kind !== 'd') return null;
+  const house = sim.houses.get(Number(raw));
+  if (!house) return null;
+
+  const thrones = [...house.thrones]
+    .map((id) => { const pol = sim.polities.get(id); return pol ? { key: entityKey('p', id), name: pol.name } : null; })
+    .filter(Boolean);
+
+  const heldPast = house.heldPast
+    .map((span) => ({
+      key: entityKey('p', span.polity), name: span.name, from: span.from, to: span.to,
+      alive: sim.polities.has(span.polity),
+    }))
+    .reverse(); // most recent reign first
+
+  const feuds = [...house.feuds.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([id, weight]) => {
+      const other = sim.houses.get(id);
+      const name = other ? other.name : (sim.memory.entity(entityKey('d', id)) || {}).name;
+      return name ? { key: entityKey('d', id), name, weight } : null;
+    })
+    .filter(Boolean);
+
+  return { thrones, heldPast, feuds };
+}
+
 // Everything the archive still holds about what an event belonged to. For a
 // war that is both sides, why it started, every engagement inside it, what it
 // cost and how it ended — assembled from the event log and the war's own
@@ -545,6 +582,7 @@ self.addEventListener('message', (event) => {
           alive: isAlive(msg.key), now: sim.year, cell: locationOf(msg.key),
           grudges: grudgesFor(msg.key),
           tree: record && record.kind === 'c' ? cultureTree(msg.key, record) : null,
+          lineage: houseLineage(msg.key),
         });
         break;
       }
