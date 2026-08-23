@@ -27,6 +27,7 @@ const dom = {
   scrim: el('scrim'), sheet: el('sheet'),
   sheetBody: el('sheet-body'), sheetClose: el('sheet-close'),
   sheetHandle: el('sheet-handle'),
+  zoomIn: el('zoom-in'), zoomOut: el('zoom-out'), zoomReset: el('zoom-reset'),
 };
 
 const KIND_LABEL = {
@@ -205,6 +206,14 @@ function onMessage(event) {
       break;
 
     case 'entity':
+      // Wherever the thing still is, tapping into it is also the "take me
+      // there" gesture — a search result, a power in the list, a name inside
+      // someone else's page, they all resolve through here.
+      if (renderer && msg.cell != null) {
+        renderer.centerOnCell(msg.cell);
+        renderer.draw();
+        updateZoomUI();
+      }
       showSheet({
         kind: 'entity', payload: msg,
         hash: `#${encodeURIComponent(currentSeed)}/${msg.key.replace(':', '/')}`
@@ -1118,26 +1127,117 @@ dom.live.addEventListener('click', backToNow);
 dom.clearFilter.addEventListener('click', () => setTierFilter(null));
 dom.openSettings.addEventListener('click', () => showSheet({ kind: 'settings' }));
 
-// Map interaction. Hover is a mouse affordance and never fires on touch, so the
-// highlight is gated on pointer type, while the tap opens the region either way.
-dom.map.addEventListener('pointermove', (e) => {
-  if (!renderer || e.pointerType !== 'mouse') return;
-  const cell = renderer.cellAt(e.clientX, e.clientY);
-  if (cell !== renderer.highlight) {
-    renderer.setState({ highlight: cell });
-    renderer.draw();
+// Map interaction: drag pans, pinch or wheel zooms, and a tap that didn't
+// move opens the region. All of it runs through pointer events — one finger
+// is a pan, two is a pinch, and a mouse without any button down is just the
+// hover highlight.
+const activePointers = new Map(); // pointerId -> {x, y}
+let dragLast = null;      // last position while one finger/button is down
+let pinchDist = null;     // previous two-finger distance, for the next delta
+let pinchMid = null;
+let gestureMoved = false; // a drag or pinch happened; the next click is not a tap
+
+function pointerDist(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
+function pointerMid(a, b) { return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }; }
+
+function updateZoomUI() {
+  dom.zoomReset.hidden = !renderer || renderer.viewScale <= 1.001;
+}
+
+dom.map.addEventListener('pointerdown', (e) => {
+  if (!renderer) return;
+  dom.map.setPointerCapture(e.pointerId);
+  activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  gestureMoved = false;
+  if (activePointers.size === 1) {
+    dragLast = { x: e.clientX, y: e.clientY };
+  } else if (activePointers.size === 2) {
+    const [a, b] = activePointers.values();
+    pinchDist = pointerDist(a, b);
+    pinchMid = pointerMid(a, b);
+    dragLast = null;
   }
 });
-dom.map.addEventListener('pointerleave', () => {
-  if (!renderer || renderer.highlight < 0) return;
-  renderer.setState({ highlight: -1 });
-  renderer.draw();
+
+dom.map.addEventListener('pointermove', (e) => {
+  if (!renderer) return;
+  // Hover highlight is a mouse-only affordance, and only while nothing is
+  // pressed — a mouse drag pans exactly like a touch drag does.
+  if (e.pointerType === 'mouse' && activePointers.size === 0) {
+    const cell = renderer.cellAt(e.clientX, e.clientY);
+    if (cell !== renderer.highlight) { renderer.setState({ highlight: cell }); renderer.draw(); }
+    return;
+  }
+  if (!activePointers.has(e.pointerId)) return;
+  activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+  if (activePointers.size === 1 && dragLast) {
+    const dx = e.clientX - dragLast.x;
+    const dy = e.clientY - dragLast.y;
+    if (!gestureMoved && Math.hypot(dx, dy) > 6) gestureMoved = true;
+    if (gestureMoved) { renderer.panByClientDelta(dx, dy); renderer.draw(); updateZoomUI(); }
+    dragLast = { x: e.clientX, y: e.clientY };
+  } else if (activePointers.size === 2) {
+    const [a, b] = activePointers.values();
+    const dist = pointerDist(a, b);
+    const mid = pointerMid(a, b);
+    if (pinchDist) {
+      gestureMoved = true;
+      renderer.zoomAt(mid.x, mid.y, dist / pinchDist);
+      renderer.draw();
+      updateZoomUI();
+    }
+    pinchDist = dist;
+    pinchMid = mid;
+  }
 });
+
+const endMapPointer = (e) => {
+  activePointers.delete(e.pointerId);
+  if (activePointers.size < 2) { pinchDist = null; pinchMid = null; }
+  dragLast = activePointers.size === 1 ? [...activePointers.values()][0] : null;
+};
+dom.map.addEventListener('pointerup', endMapPointer);
+dom.map.addEventListener('pointercancel', endMapPointer);
+dom.map.addEventListener('pointerleave', (e) => {
+  if (renderer && renderer.highlight >= 0 && activePointers.size === 0) {
+    renderer.setState({ highlight: -1 });
+    renderer.draw();
+  }
+  endMapPointer(e);
+});
+
+// Desktop zoom. preventDefault keeps it from scrolling the page underneath.
+dom.map.addEventListener('wheel', (e) => {
+  if (!renderer) return;
+  e.preventDefault();
+  renderer.zoomAt(e.clientX, e.clientY, Math.exp(-e.deltaY * 0.0015));
+  renderer.draw();
+  updateZoomUI();
+}, { passive: false });
+
 dom.map.addEventListener('click', (e) => {
+  if (gestureMoved) { gestureMoved = false; return; }
   if (!renderer) return;
   const cell = renderer.cellAt(e.clientX, e.clientY);
   if (cell < 0) return;
   worker.postMessage({ type: 'cell', cell });
+});
+
+function zoomButton(factor) {
+  if (!renderer) return;
+  const rect = dom.map.getBoundingClientRect();
+  renderer.zoomAt(rect.left + rect.width / 2, rect.top + rect.height / 2, factor);
+  renderer.draw();
+  updateZoomUI();
+}
+dom.zoomIn.addEventListener('click', () => zoomButton(1.6));
+dom.zoomOut.addEventListener('click', () => zoomButton(1 / 1.6));
+dom.zoomReset.addEventListener('click', () => {
+  if (!renderer) return;
+  renderer.resetView();
+  renderer.draw();
+  updateZoomUI();
 });
 
 // ---------------------------------------------------------------------------
@@ -1219,6 +1319,7 @@ window.Chronicle = {
   setSpeed: (v) => { dom.speed.value = String(v); worker.postMessage({ type: 'speed', speed: v }); },
   pause: () => worker.postMessage({ type: 'pause' }),
   resume: () => worker.postMessage({ type: 'run', speed: currentSpeed() }),
+  debugRenderer: () => renderer && { viewScale: renderer.viewScale, viewCenterX: renderer.viewCenterX, viewCenterY: renderer.viewCenterY },
 };
 
 const route = readHash();

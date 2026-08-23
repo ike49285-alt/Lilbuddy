@@ -24,6 +24,11 @@
   <main>
     <section class="mapwrap">
       <canvas id="map" aria-label="Map of the world, coloured by which state holds each region"></canvas>
+      <div class="mapzoom" role="group" aria-label="Map zoom">
+        <button id="zoom-in" type="button" aria-label="Zoom in">+</button>
+        <button id="zoom-out" type="button" aria-label="Zoom out">–</button>
+        <button id="zoom-reset" type="button" aria-label="Reset view" hidden>⤢</button>
+      </div>
       <p id="mapnote" class="mapnote" hidden></p>
     </section>
 

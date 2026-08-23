@@ -152,9 +152,29 @@ main { display: flex; flex-direction: column; gap: 18px; padding-bottom: 40px; }
   aspect-ratio: 640 / 400;
   background: var(--panel);
   border-block: 1px solid var(--rule);
-  /* Taps select a region; the page still pans and pinches normally. */
+  /* The map owns its own drag-to-pan and pinch-to-zoom now, so the browser's
+     native touch gestures have to stay out of the way entirely — a tap still
+     selects a region, but that's decided in script, not by touch-action. */
+  touch-action: none;
+}
+
+.mapzoom {
+  position: absolute; right: 10px; top: 10px; z-index: 2;
+  display: flex; flex-direction: column;
+  border-radius: 10px; overflow: hidden;
+  background: color-mix(in srgb, var(--panel) 90%, transparent);
+  border: 1px solid var(--rule);
+  backdrop-filter: blur(8px);
+}
+.mapzoom button {
+  display: block; width: var(--tap); height: var(--tap);
+  padding: 0; border: 0; background: none;
+  font-size: 18px; line-height: 1; color: var(--ink);
   touch-action: manipulation;
 }
+.mapzoom button:not(:last-child) { border-bottom: 1px solid var(--rule); }
+.mapzoom button[hidden] { display: none; }
+#zoom-reset { font-size: 15px; }
 
 .mapnote {
   position: absolute; left: var(--gutter); right: var(--gutter); bottom: 10px;

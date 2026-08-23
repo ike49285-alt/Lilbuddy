@@ -254,10 +254,34 @@ function isAlive(key) {
     case 'p': return sim.polities.has(id);
     case 's': return sim.settlements.has(id);
     case 'c': return sim.cultures.has(id);
-    case 'd': return sim.dynasties.has(id);
+    case 'd': return sim.houses.has(id);
     case 'n': return sim.people.has(id);
     case 'w': return sim.wars.has(id);
     default: return false;
+  }
+}
+
+// Where something can be found on the map right now, for centering the view.
+// Only entities that still exist have ground — a fallen state's old capital
+// isn't its own any more, and there's no live cell to point the camera at.
+function locationOf(key) {
+  const [kind, raw] = key.split(':');
+  const id = Number(raw);
+  switch (kind) {
+    case 'p': { const pol = sim.polities.get(id); return pol ? pol.capital : null; }
+    case 's': { const s = sim.settlements.get(id); return s ? s.cell : null; }
+    case 'd': {
+      const house = sim.houses.get(id);
+      if (!house || !house.thrones.size) return null;
+      const pol = sim.polities.get(house.thrones.values().next().value);
+      return pol ? pol.capital : null;
+    }
+    case 'n': {
+      if (!sim.people.has(id)) return null;
+      for (const pol of sim.polities.values()) if (pol.rulerId === id) return pol.capital;
+      return null;
+    }
+    default: return null;
   }
 }
 
@@ -416,7 +440,7 @@ self.addEventListener('message', (event) => {
         }
         self.postMessage({
           type: 'entity', key: msg.key, record, events, related,
-          alive: isAlive(msg.key), now: sim.year,
+          alive: isAlive(msg.key), now: sim.year, cell: locationOf(msg.key),
         });
         break;
       }
@@ -429,10 +453,14 @@ self.addEventListener('message', (event) => {
         self.postMessage({
           type: 'search',
           query: msg.query,
-          results: sim.memory.searchEntities(msg.query, 24).map((e) => ({
-            key: entityKey(e.kind, e.id), name: e.name, kind: e.kind,
-            born: e.born ?? e.founded ?? e.began, died: e.died ?? null,
-          })),
+          results: sim.memory.searchEntities(msg.query, 24).map((e) => {
+            const key = entityKey(e.kind, e.id);
+            return {
+              key, name: e.name, kind: e.kind,
+              born: e.born ?? e.founded ?? e.began, died: e.died ?? null,
+              cell: locationOf(key),
+            };
+          }),
         });
         break;
 

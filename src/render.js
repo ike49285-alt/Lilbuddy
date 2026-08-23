@@ -11,6 +11,11 @@
 const TIER_MARKERS = [0, 1.3, 2.4, 4.2];
 const TIER_ALPHA = [0, 0.3, 0.55, 0.95];
 
+// Zoom is expressed as how much of the raster's shorter side the view window
+// covers: 1 shows the whole world, MAX_SCALE shows the smallest patch.
+const MIN_SCALE = 1;
+const MAX_SCALE = 8;
+
 export class MapRenderer {
   constructor(canvas, world) {
     this.canvas = canvas;
@@ -18,7 +23,10 @@ export class MapRenderer {
     this.ctx = canvas.getContext('2d');
 
     // Painted at raster resolution, then scaled up. Scaling one bitmap beats
-    // touching four times as many pixels.
+    // touching four times as many pixels. Zoom and pan only change which
+    // window of this same buffer gets blown up onto the canvas — the pixel
+    // loop that paints it never runs more often than the data actually
+    // changes, so panning and zooming stay free of it.
     this.buffer = document.createElement('canvas');
     this.buffer.width = world.width;
     this.buffer.height = world.height;
@@ -34,6 +42,12 @@ export class MapRenderer {
     // drops back — used to hold a war's two belligerents on the map while
     // their analysis is open over it.
     this.focus = null;
+
+    // View transform: viewScale 1 shows the whole raster; the centre is
+    // where zooming and panning both pivot around.
+    this.viewScale = MIN_SCALE;
+    this.viewCenterX = world.width / 2;
+    this.viewCenterY = world.height / 2;
   }
 
   // Golden-angle hue stepping keeps adjacent ids visually far apart, which
@@ -55,6 +69,74 @@ export class MapRenderer {
     if (settlements) this.settlements = settlements;
     if (highlight !== undefined) this.highlight = highlight;
     if (focus !== undefined) this.focus = focus && focus.length ? new Set(focus) : null;
+  }
+
+  // The raster-space rectangle the canvas currently shows, clamped so it
+  // never pans past the world's edge — zooming in near a corner shows that
+  // corner, not empty canvas beyond it.
+  viewRect() {
+    const w = this.world;
+    const sw = w.width / this.viewScale;
+    const sh = w.height / this.viewScale;
+    const sx = Math.min(Math.max(this.viewCenterX - sw / 2, 0), w.width - sw);
+    const sy = Math.min(Math.max(this.viewCenterY - sh / 2, 0), w.height - sh);
+    return { sx, sy, sw, sh };
+  }
+
+  clampCenter() {
+    const { sx, sy, sw, sh } = this.viewRect();
+    this.viewCenterX = sx + sw / 2;
+    this.viewCenterY = sy + sh / 2;
+  }
+
+  // Zoom to a raster cell and centre on it — what tapping a search result or
+  // an entity page's "show on map" link does.
+  centerOnCell(cell, scale = 4) {
+    const w = this.world;
+    this.viewCenterX = w.sx[cell];
+    this.viewCenterY = w.sy[cell];
+    this.viewScale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, scale));
+    this.clampCenter();
+  }
+
+  resetView() {
+    const w = this.world;
+    this.viewScale = MIN_SCALE;
+    this.viewCenterX = w.width / 2;
+    this.viewCenterY = w.height / 2;
+  }
+
+  // Zoom around a fixed canvas-space point (cursor position, pinch midpoint)
+  // rather than the view centre, so the thing under your fingers stays under
+  // your fingers as the scale changes.
+  zoomAt(clientX, clientY, factor) {
+    const rect = this.canvas.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    const { sx, sy, sw, sh } = this.viewRect();
+    const fx = (clientX - rect.left) / rect.width;
+    const fy = (clientY - rect.top) / rect.height;
+    const anchorX = sx + fx * sw;
+    const anchorY = sy + fy * sh;
+    const nextScale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, this.viewScale * factor));
+    if (nextScale === this.viewScale) return;
+    this.viewScale = nextScale;
+    // Recentre so the anchor point lands back under the same canvas fraction.
+    const nsw = this.world.width / nextScale;
+    const nsh = this.world.height / nextScale;
+    this.viewCenterX = anchorX - (fx - 0.5) * nsw;
+    this.viewCenterY = anchorY - (fy - 0.5) * nsh;
+    this.clampCenter();
+  }
+
+  // Pan by a delta in canvas (client) pixels — converted into raster space at
+  // the current zoom, so a drag always tracks the point under the finger.
+  panByClientDelta(dx, dy) {
+    const rect = this.canvas.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    const { sw, sh } = this.viewRect();
+    this.viewCenterX -= (dx / rect.width) * sw;
+    this.viewCenterY -= (dy / rect.height) * sh;
+    this.clampCenter();
   }
 
   draw() {
@@ -117,22 +199,26 @@ export class MapRenderer {
     const ctx = this.ctx;
     const cw = this.canvas.width;
     const ch = this.canvas.height;
+    const { sx, sy, sw, sh } = this.viewRect();
     ctx.clearRect(0, 0, cw, ch);
     ctx.imageSmoothingEnabled = true;
-    ctx.drawImage(this.buffer, 0, 0, cw, ch);
+    // Blit only the zoomed-to window of the same buffer — the pixel loop
+    // above never has to know the view moved.
+    ctx.drawImage(this.buffer, sx, sy, sw, sh, 0, 0, cw, ch);
 
-    this.drawSettlements(ctx, cw / width, ch / height);
+    this.drawSettlements(ctx, cw / sw, ch / sh, sx, sy);
   }
 
-  drawSettlements(ctx, scaleX, scaleY) {
+  drawSettlements(ctx, scaleX, scaleY, sx, sy) {
     const w = this.world;
     ctx.save();
     for (const s of this.settlements) {
       const tier = Math.min(3, s.tier);
       const radius = TIER_MARKERS[tier] * (scaleX * 0.6);
       if (radius <= 0) continue;
-      const x = w.sx[s.cell] * scaleX;
-      const y = w.sy[s.cell] * scaleY;
+      const x = (w.sx[s.cell] - sx) * scaleX;
+      const y = (w.sy[s.cell] - sy) * scaleY;
+      if (x < -radius || y < -radius || x > ctx.canvas.width + radius || y > ctx.canvas.height + radius) continue;
       ctx.beginPath();
       ctx.arc(x, y, radius, 0, Math.PI * 2);
       ctx.fillStyle = tier >= 3 ? '#fff8e8' : '#12141a';
@@ -148,12 +234,15 @@ export class MapRenderer {
     ctx.restore();
   }
 
-  // Canvas coordinates back to a cell index, for hover and click.
+  // Canvas coordinates back to a cell index, for hover and click — inverts
+  // the same view window draw() just blitted.
   cellAt(clientX, clientY) {
     const rect = this.canvas.getBoundingClientRect();
+    if (!rect.width || !rect.height) return -1;
     const w = this.world;
-    const x = Math.floor(((clientX - rect.left) / rect.width) * w.width);
-    const y = Math.floor(((clientY - rect.top) / rect.height) * w.height);
+    const { sx, sy, sw, sh } = this.viewRect();
+    const x = Math.floor(sx + ((clientX - rect.left) / rect.width) * sw);
+    const y = Math.floor(sy + ((clientY - rect.top) / rect.height) * sh);
     if (x < 0 || y < 0 || x >= w.width || y >= w.height) return -1;
     return w.raster[y * w.width + x];
   }
