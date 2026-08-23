@@ -23,6 +23,7 @@ let tickDebt = 0;        // years owed but not yet run, carried as a fraction
 let rateTicks = 0;       // ticks since the rate window opened
 let rateSince = 0;
 let shownRate = 0;       // years per wall-clock second, as displayed
+let sendUnrest = false;  // whether the live frame should carry the unrest overlay
 
 const FRAME_MS = 50;       // cap UI updates at 20/sec; the sim is not slowed by this
 const BUDGET_MS = 12;      // per-slice tick budget, leaves the worker responsive
@@ -98,7 +99,15 @@ function postFrame(rate) {
   lastPost = now();
   const snapshot = sim.snapshot();
   if (rate !== undefined) snapshot.rate = rate;
-  self.postMessage({ type: 'frame', snapshot }, [snapshot.owners.buffer]);
+  const transfer = [snapshot.owners.buffer];
+  // Unrest is per-cell sim state that never leaves the worker otherwise —
+  // sent only while something is actually asking to see it, so watching the
+  // map plainly doesn't pay for a second array every frame.
+  if (sendUnrest) {
+    snapshot.unrest = sim.unrest.slice();
+    transfer.push(snapshot.unrest.buffer);
+  }
+  self.postMessage({ type: 'frame', snapshot }, transfer);
 }
 
 const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
@@ -364,6 +373,14 @@ self.addEventListener('message', (event) => {
 
       case 'seek':
         seek(msg.year);
+        break;
+
+      // Toggle the unrest overlay. Posts one frame immediately so turning it
+      // on shows something right away even if the sim is paused and no tick
+      // is about to produce a fresh one on its own.
+      case 'overlay':
+        sendUnrest = !!msg.unrest;
+        if (sendUnrest && sim) postFrame();
         break;
 
       case 'events':

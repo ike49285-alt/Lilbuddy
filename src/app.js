@@ -28,6 +28,7 @@ const dom = {
   sheetBody: el('sheet-body'), sheetClose: el('sheet-close'),
   sheetHandle: el('sheet-handle'),
   zoomIn: el('zoom-in'), zoomOut: el('zoom-out'), zoomReset: el('zoom-reset'),
+  layerUnrest: el('layer-unrest'),
 };
 
 const KIND_LABEL = {
@@ -47,6 +48,7 @@ let pendingYear = null;
 let currentSeed = '';
 let tierFilter = null;    // index of the archive tier the record is pinned to
 let lastEvents = [];
+let showUnrest = false;   // the map overlay toggle; persists across a new world/load
 let lastAutoSave = 0;     // performance.now() of the last continue-slot write
 
 // ---------------------------------------------------------------------------
@@ -148,6 +150,9 @@ function start(seed, openKey = null, openYear = null) {
   worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
   worker.addEventListener('message', onMessage);
   worker.postMessage({ type: 'init', seed });
+  // The overlay toggle is a page-level preference that outlives any one
+  // world — a fresh worker doesn't know it was on until told.
+  if (showUnrest) worker.postMessage({ type: 'overlay', unrest: true });
   const want = hashFor(seed, openKey, openYear);
   if (location.hash !== want) history.replaceState(null, '', want);
 }
@@ -180,7 +185,7 @@ function onMessage(event) {
     case 'frame':
       latest = msg.snapshot;
       if (viewYear === null) {
-        renderMap(msg.snapshot.owners, msg.snapshot.settlements);
+        renderMap(msg.snapshot.owners, msg.snapshot.settlements, msg.snapshot.unrest);
         requestEvents(msg.snapshot.year);
       }
       applySnapshot(msg.snapshot);
@@ -252,9 +257,9 @@ function onMessage(event) {
 // map and panels
 // ---------------------------------------------------------------------------
 
-function renderMap(owners, settlements) {
+function renderMap(owners, settlements, unrest) {
   if (!renderer) return;
-  renderer.setState({ owners, settlements });
+  renderer.setState({ owners, settlements, unrest });
   renderer.draw();
 }
 
@@ -412,7 +417,10 @@ function paintFeed(events, atYear) {
 // The past as the archive can still render it.
 function showPast(msg) {
   if (!renderer) return;
-  renderer.setState({ owners: msg.owners, settlements: [] });
+  // Keyframes only ever kept borders — there is no archived unrest to show,
+  // so the overlay goes quiet rather than painting stale live data over an
+  // old map.
+  renderer.setState({ owners: msg.owners, settlements: [], unrest: null });
   renderer.draw();
   paintPowers(msg.polities, msg.polities.length);
   lastEvents = msg.events;
@@ -441,7 +449,7 @@ function backToNow() {
   dom.viewing.textContent = 'watching the present';
   dom.scrub.value = String(dom.scrub.max);
   if (latest) {
-    renderMap(latest.owners, latest.settlements);
+    renderMap(latest.owners, latest.settlements, latest.unrest);
     paintPowers(latest.polities, latest.politiesTotal);
     requestEvents(latest.year);
     applySnapshot(latest);
@@ -1127,6 +1135,18 @@ dom.live.addEventListener('click', backToNow);
 dom.clearFilter.addEventListener('click', () => setTierFilter(null));
 dom.openSettings.addEventListener('click', () => showSheet({ kind: 'settings' }));
 
+dom.layerUnrest.addEventListener('click', () => {
+  showUnrest = !showUnrest;
+  dom.layerUnrest.setAttribute('aria-pressed', String(showUnrest));
+  if (worker) worker.postMessage({ type: 'overlay', unrest: showUnrest });
+  if (renderer) {
+    renderer.setState({ overlay: showUnrest ? 'unrest' : null });
+    // Turning it off should clear immediately; turning it on shows whatever
+    // is already known and then sharpens once the worker's frame lands.
+    if (!showUnrest || viewYear === null) renderer.draw();
+  }
+});
+
 // Map interaction: drag pans, pinch or wheel zooms, and a tap that didn't
 // move opens the region. All of it runs through pointer events — one finger
 // is a pan, two is a pinch, and a mouse without any button down is just the
@@ -1319,7 +1339,10 @@ window.Chronicle = {
   setSpeed: (v) => { dom.speed.value = String(v); worker.postMessage({ type: 'speed', speed: v }); },
   pause: () => worker.postMessage({ type: 'pause' }),
   resume: () => worker.postMessage({ type: 'run', speed: currentSpeed() }),
-  debugRenderer: () => renderer && { viewScale: renderer.viewScale, viewCenterX: renderer.viewCenterX, viewCenterY: renderer.viewCenterY },
+  debugRenderer: () => renderer && {
+    viewScale: renderer.viewScale, viewCenterX: renderer.viewCenterX, viewCenterY: renderer.viewCenterY,
+    overlay: renderer.overlay, hasUnrest: !!renderer.unrest,
+  },
 };
 
 const route = readHash();

@@ -42,6 +42,12 @@ export class MapRenderer {
     // drops back — used to hold a war's two belligerents on the map while
     // their analysis is open over it.
     this.focus = null;
+    // Per-cell unrest (0..1) and whether to actually paint it. Kept separate
+    // from whether data exists: leaving stale unrest sitting in `this.unrest`
+    // is harmless as long as `overlay` is the only thing draw() checks to
+    // decide whether to show it.
+    this.unrest = null;
+    this.overlay = null; // null | 'unrest'
 
     // View transform: viewScale 1 shows the whole raster; the centre is
     // where zooming and panning both pivot around.
@@ -64,11 +70,13 @@ export class MapRenderer {
     return c;
   }
 
-  setState({ owners, settlements, highlight, focus }) {
+  setState({ owners, settlements, highlight, focus, unrest, overlay }) {
     if (owners) this.owners = owners;
     if (settlements) this.settlements = settlements;
     if (highlight !== undefined) this.highlight = highlight;
     if (focus !== undefined) this.focus = focus && focus.length ? new Set(focus) : null;
+    if (unrest !== undefined) this.unrest = unrest;
+    if (overlay !== undefined) this.overlay = overlay;
   }
 
   // The raster-space rectangle the canvas currently shows, clamped so it
@@ -147,6 +155,7 @@ export class MapRenderer {
     const data = this.image.data;
     const width = w.width;
     const height = w.height;
+    const unrest = this.overlay === 'unrest' ? this.unrest : null;
 
     for (let y = 0; y < height; y++) {
       const row = y * width;
@@ -170,6 +179,19 @@ export class MapRenderer {
           g = (g * (1 - mix) + col[1] * mix) | 0;
           b = (b * (1 - mix) + col[2] * mix) | 0;
           if (focus && !lit) { r = (r * 0.72) | 0; g = (g * 0.72) | 0; b = (b * 0.72) | 0; }
+        }
+
+        // Unrest overlay: a heat tint over the political colour, not instead
+        // of it — the map underneath should still read while it's on.
+        if (unrest) {
+          const u = unrest[cell];
+          if (u > 0.03) {
+            const [hr, hg, hb] = heatColor(u);
+            const mix = Math.min(0.8, u * 0.85 + 0.1);
+            r = (r * (1 - mix) + hr * mix) | 0;
+            g = (g * (1 - mix) + hg * mix) | 0;
+            b = (b * (1 - mix) + hb * mix) | 0;
+          }
         }
 
         // Borders: a pixel whose right or lower neighbour belongs to someone
@@ -262,4 +284,24 @@ function hslToRgb(h, s, l) {
     return l - a * Math.max(-1, Math.min(Math.min(k - 3, 9 - k), 1));
   };
   return [Math.round(f(0) * 255), Math.round(f(8) * 255), Math.round(f(4) * 255)];
+}
+
+// Unrest 0..1 to a heat colour: pale yellow at the low end, through orange,
+// to a deep red at the top — the same three-stop gradient the eye already
+// reads as "warning" from every other heatmap.
+const HEAT_STOPS = [
+  [255, 241, 168],
+  [255, 150, 60],
+  [190, 30, 30],
+];
+function heatColor(u) {
+  const t = Math.min(1, Math.max(0, u)) * (HEAT_STOPS.length - 1);
+  const i = Math.min(HEAT_STOPS.length - 2, Math.floor(t));
+  const f = t - i;
+  const a = HEAT_STOPS[i], b = HEAT_STOPS[i + 1];
+  return [
+    a[0] + (b[0] - a[0]) * f,
+    a[1] + (b[1] - a[1]) * f,
+    a[2] + (b[2] - a[2]) * f,
+  ];
 }

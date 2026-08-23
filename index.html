@@ -24,6 +24,9 @@
   <main>
     <section class="mapwrap">
       <canvas id="map" aria-label="Map of the world, coloured by which state holds each region"></canvas>
+      <div class="maplayers" role="group" aria-label="Map overlays">
+        <button id="layer-unrest" type="button" class="chip" aria-pressed="false">Unrest</button>
+      </div>
       <div class="mapzoom" role="group" aria-label="Map zoom">
         <button id="zoom-in" type="button" aria-label="Zoom in">+</button>
         <button id="zoom-out" type="button" aria-label="Zoom out">–</button>

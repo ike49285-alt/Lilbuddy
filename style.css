@@ -158,6 +158,19 @@ main { display: flex; flex-direction: column; gap: 18px; padding-bottom: 40px; }
   touch-action: none;
 }
 
+.maplayers {
+  position: absolute; left: 10px; top: 10px; z-index: 2;
+  display: flex; gap: 6px;
+}
+.maplayers .chip {
+  background: color-mix(in srgb, var(--panel) 90%, transparent);
+  border: 1px solid var(--rule);
+  backdrop-filter: blur(8px);
+}
+.maplayers .chip[aria-pressed="true"] {
+  background: var(--accent); color: var(--accent-ink); border-color: var(--accent);
+}
+
 .mapzoom {
   position: absolute; right: 10px; top: 10px; z-index: 2;
   display: flex; flex-direction: column;
