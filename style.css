@@ -455,6 +455,25 @@ main { display: flex; flex-direction: column; gap: 18px; padding-bottom: 40px; }
 .course .what { display: block; font-size: 15px; line-height: 1.5; }
 .course li.hazy .what { color: var(--ink-soft); }
 
+.replay {
+  margin: 16px 0; padding: 14px;
+  border-radius: 12px; background: var(--sunk);
+}
+.replay-frame { min-height: 66px; }
+.replay-frame .when {
+  display: block; font-family: var(--mono); font-size: 11.5px;
+  color: var(--ink-faint); margin-bottom: 4px;
+}
+.replay-frame .what { margin: 0; font-size: 15px; line-height: 1.5; }
+.replay-controls { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+.replay-controls button { flex: 0 0 auto; min-width: var(--tap); padding: 8px; font-size: 17px; }
+.replay-controls button:disabled { opacity: 0.4; cursor: default; }
+.replay-counter {
+  flex: 1 1 auto; text-align: center;
+  font-family: var(--mono); font-size: 12.5px; color: var(--ink-soft);
+}
+.replay-play { width: 100%; margin-top: 8px; }
+
 .linkrow { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; padding: 0; list-style: none; }
 .linkrow button {
   min-height: var(--tap); padding: 9px 15px;

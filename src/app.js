@@ -54,6 +54,7 @@ let currentSeed = '';
 let tierFilter = null;    // index of the archive tier the record is pinned to
 let lastEvents = [];
 let showUnrest = false;   // the map overlay toggle; persists across a new world/load
+let replayTimer = null;   // the war replay's auto-play interval, if one is running
 let lastAutoSave = 0;     // performance.now() of the last continue-slot write
 
 // ---------------------------------------------------------------------------
@@ -520,6 +521,7 @@ function showSheet(entry, push = true) {
 }
 
 function hideSheet() {
+  stopWarReplay();
   dom.sheet.classList.remove('open');
   dom.scrim.classList.remove('open');
   dom.sheet.style.transform = '';
@@ -540,7 +542,16 @@ function closeSheet() {
   else hideSheet();
 }
 
+function stopWarReplay() {
+  if (replayTimer) { clearInterval(replayTimer); replayTimer = null; }
+}
+
 function renderSheet(entry) {
+  // Any content the previous render put in the sheet is about to be
+  // replaced — an auto-playing replay left running would keep firing
+  // against detached DOM and fight whatever renders next for the map's
+  // focus highlight.
+  stopWarReplay();
   switch (entry.kind) {
     case 'analysis': renderAnalysis(entry.payload); break;
     case 'entity': renderEntity(entry.payload); break;
@@ -681,6 +692,8 @@ function renderAnalysis(msg) {
       renderer.draw();
     }
 
+    if (msg.contained.length) parts.push(renderWarReplay(msg.contained));
+
     const tally = document.createElement('dl');
     tally.className = 'tally';
     const rows = [
@@ -740,6 +753,81 @@ function renderAnalysis(msg) {
 
   parts.push(attestation(msg.provenance));
   body.replaceChildren(...parts);
+}
+
+// Step through a war's contained events one at a time — prev/next, or an
+// auto-play — each step highlighting only that event's own belligerents on
+// the map behind the sheet, not the war's original two sides throughout: a
+// sack only involves the attacker and the city's owner, and a war that
+// changed hands can have a step naming neither of the state that started it.
+function renderWarReplay(contained) {
+  const box = document.createElement('div');
+  box.className = 'replay';
+
+  let step = 0;
+
+  const frame = document.createElement('div');
+  frame.className = 'replay-frame';
+  const when = document.createElement('span');
+  when.className = 'when';
+  const what = document.createElement('p');
+  what.className = 'what';
+  frame.append(when, what);
+
+  const nav = document.createElement('div');
+  nav.className = 'replay-controls';
+  const prevBtn = document.createElement('button');
+  prevBtn.type = 'button';
+  prevBtn.textContent = '‹';
+  prevBtn.setAttribute('aria-label', 'Previous step');
+  const counter = document.createElement('span');
+  counter.className = 'replay-counter';
+  const nextBtn = document.createElement('button');
+  nextBtn.type = 'button';
+  nextBtn.textContent = '›';
+  nextBtn.setAttribute('aria-label', 'Next step');
+  nav.append(prevBtn, counter, nextBtn);
+
+  const playBtn = document.createElement('button');
+  playBtn.type = 'button';
+  playBtn.className = 'replay-play';
+  playBtn.textContent = 'Play the war';
+
+  function render() {
+    const item = contained[step];
+    when.textContent = `year ${formatYear(item.t)}`;
+    what.textContent = describe(item);
+    counter.textContent = `${step + 1} / ${contained.length}`;
+    prevBtn.disabled = step === 0;
+    nextBtn.disabled = step === contained.length - 1;
+
+    if (renderer) {
+      const ids = item.refs
+        .filter((r) => r.startsWith('p:'))
+        .map((r) => Number(r.split(':')[1]));
+      renderer.setState({ focus: ids });
+      renderer.draw();
+    }
+  }
+
+  const goTo = (i) => { step = Math.max(0, Math.min(contained.length - 1, i)); render(); };
+  const stopAndReset = () => { stopWarReplay(); playBtn.textContent = 'Play the war'; };
+  prevBtn.addEventListener('click', () => { stopAndReset(); goTo(step - 1); });
+  nextBtn.addEventListener('click', () => { stopAndReset(); goTo(step + 1); });
+  playBtn.addEventListener('click', () => {
+    if (replayTimer) { stopWarReplay(); playBtn.textContent = 'Play the war'; return; }
+    if (step === contained.length - 1) step = -1; // replay from the top if already at the end
+    playBtn.textContent = 'Pause';
+    replayTimer = setInterval(() => {
+      if (step >= contained.length - 1) { stopWarReplay(); playBtn.textContent = 'Play the war'; return; }
+      goTo(step + 1);
+    }, 1600);
+    goTo(step + 1);
+  });
+
+  render();
+  box.append(frame, nav, playBtn);
+  return box;
 }
 
 // What the archive can still vouch for. This is the point of tapping in: the
@@ -1512,6 +1600,7 @@ window.Chronicle = {
   // entity (e.g. culture ids are sequential from world creation) rather than
   // whatever a UI-navigation path happens to still hold onto in the archive.
   debugOpenEntity: (key) => openEntity(key),
+  debugOpenAnalysis: (eventId) => openAnalysis(eventId),
 };
 
 const route = readHash();
