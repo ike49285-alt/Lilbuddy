@@ -46,6 +46,88 @@ let pendingYear = null;
 let currentSeed = '';
 let tierFilter = null;    // index of the archive tier the record is pinned to
 let lastEvents = [];
+let lastAutoSave = 0;     // performance.now() of the last continue-slot write
+
+// ---------------------------------------------------------------------------
+// saved worlds
+//
+// The save file is a seed and a year — nothing else. That is the whole point
+// of the archive being a pure function of the seed: "load" means "replay from
+// scratch to this year," the same path a shared entity link already takes.
+// ---------------------------------------------------------------------------
+
+const SAVES_KEY = 'chronicle:saves:v1';
+const MAX_SAVES = 30;
+
+function loadSaveData() {
+  try {
+    const raw = localStorage.getItem(SAVES_KEY);
+    return raw ? JSON.parse(raw) : { saves: [], continueSlot: null };
+  } catch {
+    // Private browsing, quota, or a disabled store — saves just don't
+    // persist. Nothing here should ever throw the app over it.
+    return { saves: [], continueSlot: null };
+  }
+}
+
+function writeSaveData(data) {
+  try { localStorage.setItem(SAVES_KEY, JSON.stringify(data)); } catch { /* see above */ }
+}
+
+function saveCurrentWorld(label) {
+  if (!latest) return null;
+  const data = loadSaveData();
+  const entry = {
+    id: (crypto.randomUUID && crypto.randomUUID()) || `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    seed: currentSeed, year: latest.year, label: label || defaultSaveLabel(),
+    savedAt: Date.now(), epoch: latest.epoch, politiesTotal: latest.politiesTotal,
+  };
+  data.saves.unshift(entry);
+  if (data.saves.length > MAX_SAVES) data.saves.length = MAX_SAVES;
+  writeSaveData(data);
+  return entry;
+}
+
+function deleteSave(id) {
+  const data = loadSaveData();
+  data.saves = data.saves.filter((s) => s.id !== id);
+  writeSaveData(data);
+}
+
+function loadSave(entry) {
+  sheetStack.length = 0;
+  hideSheet();
+  start(entry.seed, null, entry.year);
+}
+
+function defaultSaveLabel() {
+  return latest ? `${latest.epoch}, year ${formatYear(latest.year)}` : 'this world';
+}
+
+// Updated while watching live play, throttled so it isn't a write on every
+// frame. Never written while scrubbing a past year — the continue slot is a
+// bookmark of where you left off, not of wherever the scrubber happens to be.
+function maybeAutoSave(snapshot) {
+  if (viewYear !== null || !currentSeed) return;
+  const now = performance.now();
+  if (now - lastAutoSave < 10000) return;
+  lastAutoSave = now;
+  const data = loadSaveData();
+  data.continueSlot = { seed: currentSeed, year: snapshot.year, savedAt: Date.now() };
+  writeSaveData(data);
+}
+
+function flushAutoSave() {
+  if (!latest || viewYear !== null || !currentSeed) return;
+  const data = loadSaveData();
+  data.continueSlot = { seed: currentSeed, year: latest.year, savedAt: Date.now() };
+  writeSaveData(data);
+}
+
+window.addEventListener('pagehide', flushAutoSave);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') flushAutoSave();
+});
 
 // ---------------------------------------------------------------------------
 // worker plumbing
@@ -65,8 +147,7 @@ function start(seed, openKey = null, openYear = null) {
   worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
   worker.addEventListener('message', onMessage);
   worker.postMessage({ type: 'init', seed });
-  const want = `#${encodeURIComponent(seed)}`
-    + (openKey ? `/${openKey.replace(':', '/')}/${Math.round(openYear || 0)}` : '');
+  const want = hashFor(seed, openKey, openYear);
   if (location.hash !== want) history.replaceState(null, '', want);
 }
 
@@ -82,11 +163,16 @@ function onMessage(event) {
       worker.postMessage({ type: 'run', speed: currentSpeed() });
       running = true;
       dom.play.textContent = 'Pause';
-      if (pendingKey) {
+      if (pendingYear) {
+        const y = pendingYear;
+        const key = pendingKey;
+        pendingYear = null;
+        pendingKey = null;
+        replayTo(y, key);
+      } else if (pendingKey) {
         const key = pendingKey;
         pendingKey = null;
-        if (pendingYear) replayThenOpen(key, pendingYear);
-        else openEntity(key);
+        openEntity(key);
       }
       break;
     }
@@ -97,6 +183,7 @@ function onMessage(event) {
         requestEvents(msg.snapshot.year);
       }
       applySnapshot(msg.snapshot);
+      maybeAutoSave(msg.snapshot);
       break;
 
     case 'seeked':
@@ -125,9 +212,18 @@ function onMessage(event) {
       });
       break;
 
-    case 'ranTo':
+    case 'ranTo': {
+      // worker.js's runTo pauses the sim to tick synchronously and never
+      // resumes it — every replay used to land the world silently paused
+      // while the Pause/Run button kept claiming otherwise. Resuming here is
+      // the fix, for every caller of replayTo alike.
+      dom.mapnote.hidden = true;
+      running = true;
+      dom.play.textContent = 'Pause';
+      worker.postMessage({ type: 'run', speed: currentSpeed() });
       if (pendingKey) { const k = pendingKey; pendingKey = null; openEntity(k); }
       break;
+    }
 
     case 'search':
       renderSearchResults(msg);
@@ -655,11 +751,16 @@ function openEntity(key) {
   worker.postMessage({ type: 'entity', key });
 }
 
-function replayThenOpen(key, year) {
+// Every deep link — an entity link, a loaded save, the continue slot — lands
+// here. Nothing is stored between visits beyond the seed and a year: the
+// world is re-derived by ticking from scratch, which is what makes deleting
+// deep history safe in the first place. `thenKey` is optional; give it to
+// land on an entity's page afterward, omit it to just land on the map.
+function replayTo(year, thenKey = null) {
   dom.mapnote.hidden = false;
   dom.mapnote.textContent =
     `Nothing is stored between visits. Re-running this world from its seed to year ${formatYear(year)}…`;
-  pendingKey = key;
+  pendingKey = thenKey;
   worker.postMessage({ type: 'pause' });
   worker.postMessage({ type: 'runTo', year });
 }
@@ -831,8 +932,123 @@ function renderSettings() {
     timer = setTimeout(() => worker.postMessage({ type: 'search', query }), 180);
   });
 
-  parts.push(seedField, newWorld, searchField, results);
+  const saveSection = renderSaveSection();
+
+  parts.push(seedField, newWorld, searchField, results, ...saveSection);
   dom.sheetBody.replaceChildren(...parts);
+}
+
+// The save/load section of the settings sheet: a labelled "save this
+// world" action, then the continue slot and any named saves, each a load
+// button paired with a small delete button.
+function renderSaveSection() {
+  const parts = [heading('This world')];
+
+  const labelField = document.createElement('div');
+  labelField.className = 'field';
+  const labelLabel = document.createElement('label');
+  labelLabel.textContent = 'Name this save';
+  labelLabel.htmlFor = 'save-label-input';
+  const labelInput = document.createElement('input');
+  labelInput.id = 'save-label-input';
+  labelInput.type = 'text';
+  labelInput.spellcheck = false;
+  labelInput.autocomplete = 'off';
+  labelInput.value = defaultSaveLabel();
+  labelField.append(labelLabel, labelInput);
+
+  const saveBtn = document.createElement('button');
+  saveBtn.type = 'button';
+  saveBtn.className = 'primary';
+  saveBtn.textContent = latest ? 'Save' : 'Nothing to save yet';
+  saveBtn.disabled = !latest;
+  saveBtn.addEventListener('click', () => {
+    saveCurrentWorld(labelInput.value.trim());
+    saveBtn.textContent = 'Saved ✓';
+    setTimeout(() => { saveBtn.textContent = 'Save'; }, 1200);
+    labelInput.value = defaultSaveLabel();
+    renderSavedList();
+  });
+  labelInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') saveBtn.click(); });
+
+  parts.push(labelField, saveBtn);
+
+  const listHeading = heading('Saved worlds');
+  const list = document.createElement('ul');
+  list.className = 'saves';
+  list.id = 'saved-worlds-list';
+  parts.push(listHeading, list);
+
+  // Populate directly rather than through renderSavedList()'s
+  // getElementById lookup: `list` isn't attached to the document yet (that
+  // happens when the caller splices `parts` into the sheet body), so a
+  // document-wide lookup for its id would find nothing on this first render.
+  fillSavedList(list);
+  return parts;
+}
+
+// Re-render the saved-worlds list in place. Safe to call any time after the
+// settings sheet has actually been attached to the document (e.g. from a
+// save/delete click handler) — not during the initial build, see above.
+function renderSavedList() {
+  const list = document.getElementById('saved-worlds-list');
+  if (list) fillSavedList(list);
+}
+
+function fillSavedList(list) {
+  const data = loadSaveData();
+  const rows = [];
+
+  if (data.continueSlot) {
+    rows.push(saveRow({
+      id: null, label: 'Continue', seed: data.continueSlot.seed,
+      year: data.continueSlot.year, continueRow: true,
+    }));
+  }
+  for (const entry of data.saves) rows.push(saveRow(entry));
+
+  if (!rows.length) {
+    const li = document.createElement('li');
+    li.className = 'nothing';
+    li.textContent = 'Nothing saved yet.';
+    list.replaceChildren(li);
+    return;
+  }
+  list.replaceChildren(...rows);
+}
+
+function saveRow(entry) {
+  const li = document.createElement('li');
+  li.className = 'saverow';
+
+  const load = document.createElement('button');
+  load.type = 'button';
+  load.className = 'load';
+  const label = document.createElement('span');
+  label.className = 'label';
+  label.textContent = entry.label;
+  const meta = document.createElement('span');
+  meta.className = 'meta';
+  meta.textContent = `${entry.seed} · year ${formatYear(entry.year)}`;
+  load.append(label, meta);
+  load.addEventListener('click', () => loadSave(entry));
+
+  li.append(load);
+
+  if (!entry.continueRow) {
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.className = 'del';
+    del.setAttribute('aria-label', `Delete ${entry.label}`);
+    del.textContent = '✕';
+    del.addEventListener('click', (e) => {
+      e.stopPropagation();
+      deleteSave(entry.id);
+      renderSavedList();
+    });
+    li.append(del);
+  }
+  return li;
 }
 
 function renderSearchResults(msg) {
@@ -949,15 +1165,27 @@ function randomSeed() {
   return `${pick()}-${pick()}-${Math.floor(Math.random() * 900 + 100)}`;
 }
 
+// #seed                  the map, watching live
+// #seed/48200             the map, replayed to year 48200 — what a save loads
+// #seed/kind/id/48200     an entity's page, at the year it was opened
 function readHash() {
   const raw = decodeURIComponent(location.hash.slice(1));
   if (!raw) return { seed: null, key: null, year: null };
   const parts = raw.split('/');
+  if (parts.length === 2 && /^\d+$/.test(parts[1])) {
+    return { seed: parts[0] || null, key: null, year: Number(parts[1]) };
+  }
   return {
     seed: parts[0] || null,
     key: parts.length >= 3 ? `${parts[1]}:${parts[2]}` : null,
     year: parts.length >= 4 ? Number(parts[3]) || 0 : null,
   };
+}
+
+function hashFor(seed, key, year) {
+  if (key) return `#${encodeURIComponent(seed)}/${key.replace(':', '/')}/${Math.round(year || 0)}`;
+  if (year) return `#${encodeURIComponent(seed)}/${Math.round(year)}`;
+  return `#${encodeURIComponent(seed)}`;
 }
 
 let resizeTimer = null;
