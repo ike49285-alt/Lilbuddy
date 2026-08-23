@@ -1440,6 +1440,7 @@ export class Simulation {
       globalPop: this.globalPop,
       epoch: this.epoch.name,
       climate: this.climatePhase,
+      winterYears: this.winterYears,
       stats: this.memory.stats(this.year),
     };
   }

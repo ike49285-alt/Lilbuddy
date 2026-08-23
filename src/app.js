@@ -29,6 +29,7 @@ const dom = {
   sheetHandle: el('sheet-handle'),
   zoomIn: el('zoom-in'), zoomOut: el('zoom-out'), zoomReset: el('zoom-reset'),
   layerUnrest: el('layer-unrest'),
+  mapwrap: el('mapwrap'), winterBadge: el('winter-badge'),
 };
 
 const KIND_LABEL = {
@@ -144,6 +145,7 @@ function start(seed, openKey = null, openYear = null) {
   tierFilter = null;
   sheetStack.length = 0;
   hideSheet();
+  setWinterActive(false);
   currentSeed = seed;
   pendingKey = openKey;
   pendingYear = openYear;
@@ -187,6 +189,7 @@ function onMessage(event) {
       if (viewYear === null) {
         renderMap(msg.snapshot.owners, msg.snapshot.settlements, msg.snapshot.unrest);
         requestEvents(msg.snapshot.year);
+        setWinterActive(msg.snapshot.winterYears > 0);
       }
       applySnapshot(msg.snapshot);
       maybeAutoSave(msg.snapshot);
@@ -261,6 +264,15 @@ function renderMap(owners, settlements, unrest) {
   if (!renderer) return;
   renderer.setState({ owners, settlements, unrest });
   renderer.draw();
+}
+
+// A global cold shock is a CSS filter on the canvas itself, not a pixel-loop
+// concern — cheapest that way, and it never touches the flat-cost budget.
+// Archived keyframes never kept whether a winter was in effect, so like
+// unrest it only ever shows for the live present.
+function setWinterActive(active) {
+  dom.mapwrap.classList.toggle('winter', active);
+  dom.winterBadge.hidden = !active;
 }
 
 function applySnapshot(s) {
@@ -422,6 +434,7 @@ function showPast(msg) {
   // old map.
   renderer.setState({ owners: msg.owners, settlements: [], unrest: null });
   renderer.draw();
+  setWinterActive(false);
   paintPowers(msg.polities, msg.polities.length);
   lastEvents = msg.events;
   paintFeed(msg.events, msg.resolvedYear);
@@ -453,6 +466,7 @@ function backToNow() {
     paintPowers(latest.polities, latest.politiesTotal);
     requestEvents(latest.year);
     applySnapshot(latest);
+    setWinterActive(latest.winterYears > 0);
   }
 }
 
