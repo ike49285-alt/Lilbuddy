@@ -6,7 +6,8 @@
 // one dismissal gesture, and each opening pushes a history entry so the phone's
 // back gesture closes it instead of leaving the page.
 
-import { MapRenderer } from './render.js';
+import { MapRenderer, ClimateStrip, yearAtFraction, fractionAtYear } from './render.js';
+import { CLIMATE_PERIOD } from './sim.js';
 import { describe, provenance, formatYear, formatAge } from './legends.js';
 
 const el = (id) => document.getElementById(id);
@@ -30,6 +31,7 @@ const dom = {
   zoomIn: el('zoom-in'), zoomOut: el('zoom-out'), zoomReset: el('zoom-reset'),
   layerUnrest: el('layer-unrest'),
   mapwrap: el('mapwrap'), winterBadge: el('winter-badge'),
+  climateStrip: el('climate-strip'),
 };
 
 const KIND_LABEL = {
@@ -39,6 +41,8 @@ const KIND_LABEL = {
 
 let worker = null;
 let renderer = null;
+let climateStrip = null;
+let lastMarkersFetch = 0; // performance.now() of the last 'markers' request
 let tiers = [];
 let latest = null;        // most recent live snapshot
 let viewYear = null;      // null means "watching the present"
@@ -142,6 +146,7 @@ function start(seed, openKey = null, openYear = null) {
   latest = null;
   viewYear = null;
   renderer = null;
+  climateStrip = null;
   tierFilter = null;
   sheetStack.length = 0;
   hideSheet();
@@ -166,8 +171,12 @@ function onMessage(event) {
       tiers = msg.tiers;
       renderer = new MapRenderer(dom.map, msg.world);
       renderer.resize();
+      climateStrip = new ClimateStrip(dom.climateStrip);
+      climateStrip.resize();
       renderMap(msg.snapshot.owners, msg.snapshot.settlements);
       applySnapshot(msg.snapshot);
+      lastMarkersFetch = performance.now();
+      worker.postMessage({ type: 'markers' });
       worker.postMessage({ type: 'run', speed: currentSpeed() });
       running = true;
       dom.play.textContent = 'Pause';
@@ -193,6 +202,12 @@ function onMessage(event) {
       }
       applySnapshot(msg.snapshot);
       maybeAutoSave(msg.snapshot);
+      // Epoch/cataclysm markers change rarely; a throttled poll is plenty and
+      // beats re-scanning the whole event log every frame for no reason.
+      if (performance.now() - lastMarkersFetch > 5000) {
+        lastMarkersFetch = performance.now();
+        worker.postMessage({ type: 'markers' });
+      }
       break;
 
     case 'seeked':
@@ -246,6 +261,13 @@ function onMessage(event) {
       renderSearchResults(msg);
       break;
 
+    case 'markers':
+      if (climateStrip) {
+        climateStrip.setMarkers(msg.markers);
+        if (latest) climateStrip.draw(latest.year, CLIMATE_PERIOD);
+      }
+      break;
+
     case 'error':
       dom.mapnote.hidden = false;
       dom.mapnote.textContent = `The world stopped: ${msg.error}`;
@@ -295,6 +317,10 @@ function applySnapshot(s) {
     paintPowers(s.polities, s.politiesTotal);
     dom.scrub.value = String(dom.scrub.max);
   }
+  // Keyed on the live edge, not on whatever year is currently being viewed —
+  // scrubbing through the past pans within the strip's existing span rather
+  // than rescaling it, the same way the scrub track's own mapping works.
+  if (climateStrip) climateStrip.draw(s.year, CLIMATE_PERIOD);
 }
 
 function paintTiers(perTier) {
@@ -1112,10 +1138,7 @@ function renderSearchResults(msg) {
 
 function sliderToYear(value) {
   if (!latest) return 0;
-  const s = value / Number(dom.scrub.max);
-  const span = Math.max(1, latest.year);
-  const age = Math.pow(span + 1, 1 - s) - 1;
-  return Math.max(0, Math.round(latest.year - age));
+  return yearAtFraction(latest.year, value / Number(dom.scrub.max));
 }
 
 function currentSpeed() {
@@ -1133,6 +1156,17 @@ dom.scrub.addEventListener('input', () => {
     seekPending = true;
     worker.postMessage({ type: 'seek', year });
   }
+});
+
+// Tapping the climate strip jumps the scrubber there — the same gesture as
+// dragging it, just aimed at a point in history instead of a position on a
+// track. Reusing the scrub input's own listener (rather than duplicating the
+// seek logic) keeps the two paths from ever disagreeing.
+dom.climateStrip.addEventListener('click', (e) => {
+  if (!latest || !climateStrip) return;
+  const year = climateStrip.yearAt(e.clientX);
+  dom.scrub.value = String(Math.round(fractionAtYear(latest.year, year) * Number(dom.scrub.max)));
+  dom.scrub.dispatchEvent(new Event('input', { bubbles: true }));
 });
 
 dom.play.addEventListener('click', () => {
@@ -1326,9 +1360,11 @@ let resizeTimer = null;
 window.addEventListener('resize', () => {
   clearTimeout(resizeTimer);
   resizeTimer = setTimeout(() => {
-    if (!renderer) return;
-    renderer.resize();
-    renderer.draw();
+    if (renderer) { renderer.resize(); renderer.draw(); }
+    if (climateStrip) {
+      climateStrip.resize();
+      if (latest) climateStrip.draw(latest.year, CLIMATE_PERIOD);
+    }
   }, 120);
 });
 
@@ -1353,6 +1389,7 @@ window.Chronicle = {
   setSpeed: (v) => { dom.speed.value = String(v); worker.postMessage({ type: 'speed', speed: v }); },
   pause: () => worker.postMessage({ type: 'pause' }),
   resume: () => worker.postMessage({ type: 'run', speed: currentSpeed() }),
+  debugMarkers: () => climateStrip && climateStrip.markers,
   debugRenderer: () => renderer && {
     viewScale: renderer.viewScale, viewCenterX: renderer.viewCenterX, viewCenterY: renderer.viewCenterY,
     overlay: renderer.overlay, hasUnrest: !!renderer.unrest,

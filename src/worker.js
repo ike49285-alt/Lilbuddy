@@ -390,6 +390,24 @@ self.addEventListener('message', (event) => {
         });
         break;
 
+      // Everything the archive still holds for the climate strip: epoch
+      // transitions and global cataclysms/winters, across all of history —
+      // not just eventsInRange's recency window, since a marker at year 200
+      // needs to survive alongside one from last year. Scanning the whole
+      // in-memory event list is fine; it's bounded by the tier budgets and
+      // this is asked for occasionally, not once a frame. Naturally subject
+      // to the same decay as everything else: a forgotten cataclysm simply
+      // isn't in `sim.memory.events` any more to be found here.
+      case 'markers': {
+        const kinds = new Set(['epoch', 'winter', 'cataclysm']);
+        const markers = [];
+        for (const ev of sim.memory.events) {
+          if (kinds.has(ev.type)) markers.push({ t: ev.t, type: ev.type, data: ev.data, dist: ev.dist });
+        }
+        self.postMessage({ type: 'markers', markers });
+        break;
+      }
+
       case 'cell': {
         const cell = msg.cell;
         const ownerId = sim.owner[cell];

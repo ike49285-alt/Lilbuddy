@@ -11,6 +11,24 @@
 const TIER_MARKERS = [0, 1.3, 2.4, 4.2];
 const TIER_ALPHA = [0, 0.3, 0.55, 0.95];
 
+// The scrubber and the climate strip beneath it share one time mapping:
+// logarithmic in age rather than linear in year, so a run measured in
+// hundreds of thousands of years doesn't collapse the last few centuries
+// into a single pixel. `fraction` is 0 at the oldest point shown, 1 at the
+// present — exported so app.js's slider math and the strip's pixel columns
+// are provably the same formula, not two copies that can drift apart.
+export function yearAtFraction(latestYear, fraction) {
+  const span = Math.max(1, latestYear);
+  const age = Math.pow(span + 1, 1 - fraction) - 1;
+  return Math.max(0, Math.round(latestYear - age));
+}
+
+export function fractionAtYear(latestYear, year) {
+  const span = Math.max(1, latestYear);
+  const age = Math.max(0, latestYear - year);
+  return 1 - Math.log(age + 1) / Math.log(span + 1);
+}
+
 // Zoom is expressed as how much of the raster's shorter side the view window
 // covers: 1 shows the whole world, MAX_SCALE shows the smallest patch.
 const MIN_SCALE = 1;
@@ -304,4 +322,73 @@ function heatColor(u) {
     a[1] + (b[1] - a[1]) * f,
     a[2] + (b[2] - a[2]) * f,
   ];
+}
+
+// Cool slate at the depths of a cycle, warm gold at its peak — the same
+// climatePhase the sim itself computes, read back out as colour.
+const COLD = [118, 148, 189];
+const WARM = [214, 181, 92];
+
+function markerColor(m) {
+  if (m.type === 'epoch') return m.data && m.data.direction === 'returns' ? '#c97a2b' : '#3a8f80';
+  if (m.type === 'winter') return '#dbe9f2';
+  return '#b23a3a'; // cataclysm
+}
+
+// The thin strip above the scrubber: one pixel column per point in history,
+// coloured by climate phase, with tick marks for whatever the archive still
+// remembers happening at the epoch/global scale. Independent of the map
+// canvas — its own tiny buffer, redrawn only when asked, never per map frame.
+export class ClimateStrip {
+  constructor(canvas) {
+    this.canvas = canvas;
+    this.ctx = canvas.getContext('2d');
+    this.markers = [];
+  }
+
+  setMarkers(markers) { this.markers = markers; }
+
+  resize() {
+    const rect = this.canvas.getBoundingClientRect();
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    this.canvas.width = Math.max(1, Math.round(rect.width * dpr));
+    this.canvas.height = Math.max(1, Math.round(rect.height * dpr));
+  }
+
+  draw(latestYear, climatePeriod) {
+    this._lastYear = latestYear;
+    const ctx = this.ctx;
+    const w = this.canvas.width;
+    const h = this.canvas.height;
+    ctx.clearRect(0, 0, w, h);
+    if (!latestYear || w <= 0) return;
+
+    for (let x = 0; x < w; x++) {
+      const year = yearAtFraction(latestYear, x / w);
+      const phase = Math.sin((year / climatePeriod) * Math.PI * 2); // -1..1
+      const t = (phase + 1) / 2;
+      const r = (COLD[0] + (WARM[0] - COLD[0]) * t) | 0;
+      const g = (COLD[1] + (WARM[1] - COLD[1]) * t) | 0;
+      const b = (COLD[2] + (WARM[2] - COLD[2]) * t) | 0;
+      ctx.fillStyle = `rgb(${r},${g},${b})`;
+      ctx.fillRect(x, 0, 1, h);
+    }
+
+    for (const m of this.markers) {
+      const x = Math.round(fractionAtYear(latestYear, m.t) * w);
+      if (x < 0 || x >= w) continue;
+      ctx.globalAlpha = m.dist >= 2 ? 0.45 : 0.9;
+      ctx.fillStyle = markerColor(m);
+      ctx.fillRect(Math.max(0, x - 1), 0, 3, h);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // Canvas x back to the year at that column — what tapping the strip uses
+  // to jump the scrubber there, the same way tapping the map picks a cell.
+  yearAt(clientX) {
+    const rect = this.canvas.getBoundingClientRect();
+    if (!rect.width) return 0;
+    return yearAtFraction(this._lastYear || 0, (clientX - rect.left) / rect.width);
+  }
 }

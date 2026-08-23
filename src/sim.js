@@ -45,7 +45,7 @@ const EPOCHS = [
   { name: 'the Industrial era', popScale: 2.10, expand: 0.092, reach: 30, hold: 300, lethality: 1.45, settleAt: 0.70 },
 ];
 
-const CLIMATE_PERIOD = 41000; // Milankovitch-ish, because the number is nice.
+export const CLIMATE_PERIOD = 41000; // Milankovitch-ish, because the number is nice.
 
 // Accumulated civilised-years needed to reach each epoch. Tuned so a world
 // climbs the whole ladder over roughly twenty thousand years and loses ground
