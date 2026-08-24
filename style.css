@@ -236,13 +236,6 @@ main { display: flex; flex-direction: column; gap: 18px; padding-bottom: 40px; }
   display: block; font-size: 12px; color: var(--accent);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.speed select {
-  min-height: var(--tap);
-  padding: 8px 10px; border-radius: 10px;
-  background: var(--panel); color: var(--ink);
-  border: 1px solid var(--rule); font-size: 14px;
-}
-
 /* ---- scrubber ---- */
 
 .scrubwrap { padding: 0 var(--gutter); }

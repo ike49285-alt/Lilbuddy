@@ -20,7 +20,7 @@ const dom = {
   powers: el('powers'), tiers: el('tiers'),
   events: el('fig-events'), dropped: el('fig-dropped'),
   merged: el('fig-merged'), keyframes: el('fig-keyframes'),
-  play: el('play'), speed: el('speed'), live: el('live'),
+  live: el('live'),
   viewing: el('viewing'), scrub: el('scrub'),
   feed: el('events'), tickerTitle: el('ticker-title'),
   clearFilter: el('clear-filter'),
@@ -46,7 +46,12 @@ let lastMarkersFetch = 0; // performance.now() of the last 'markers' request
 let tiers = [];
 let latest = null;        // most recent live snapshot
 let viewYear = null;      // null means "watching the present"
-let running = true;
+// The sim's target tick rate. Fixed at 1 yr/s for real use — there is no
+// pause or speed control in the UI any more, on purpose: the record keeps
+// its own time, the way the world it's modelled on does. window.Chronicle's
+// test hooks can still override this to fast-forward through history for
+// automated verification; nothing in the page itself ever changes it.
+let speed = 1;
 let seekPending = false;
 let pendingKey = null;
 let pendingYear = null;
@@ -149,6 +154,12 @@ function start(seed, openKey = null, openYear = null) {
   renderer = null;
   climateStrip = null;
   tierFilter = null;
+  // A fresh world's early ids/counts can easily coincide with the previous
+  // world's, which would let the change-detection caches wrongly skip the
+  // very first paint of the new one.
+  lastTiersKey = null;
+  lastPowersKey = null;
+  lastFeedKey = null;
   sheetStack.length = 0;
   hideSheet();
   setWinterActive(false);
@@ -178,9 +189,7 @@ function onMessage(event) {
       applySnapshot(msg.snapshot);
       lastMarkersFetch = performance.now();
       worker.postMessage({ type: 'markers' });
-      worker.postMessage({ type: 'run', speed: currentSpeed() });
-      running = true;
-      dom.play.textContent = 'Pause';
+      worker.postMessage({ type: 'run', speed });
       if (pendingYear) {
         const y = pendingYear;
         const key = pendingKey;
@@ -247,13 +256,10 @@ function onMessage(event) {
 
     case 'ranTo': {
       // worker.js's runTo pauses the sim to tick synchronously and never
-      // resumes it — every replay used to land the world silently paused
-      // while the Pause/Run button kept claiming otherwise. Resuming here is
-      // the fix, for every caller of replayTo alike.
+      // resumes it — every replay used to land the world silently paused.
+      // Resuming here is the fix, for every caller of replayTo alike.
       dom.mapnote.hidden = true;
-      running = true;
-      dom.play.textContent = 'Pause';
-      worker.postMessage({ type: 'run', speed: currentSpeed() });
+      worker.postMessage({ type: 'run', speed });
       if (pendingKey) { const k = pendingKey; pendingKey = null; openEntity(k); }
       break;
     }
@@ -324,8 +330,20 @@ function applySnapshot(s) {
   if (climateStrip) climateStrip.draw(s.year, CLIMATE_PERIOD);
 }
 
+// Live viewing re-renders these panels every frame — the sim never stops
+// ticking now that there's no pause button. Rebuilding the DOM wholesale on
+// every tick even when nothing shown actually changed is what "bounces"
+// the page under a reader: same list, same order, but every row is a fresh
+// element, so any text selection, focus, or (on some browsers) scroll
+// position anchored to it resets. A cheap content-fingerprint skips the
+// rebuild whenever the outcome would be pixel-identical to what's already
+// there, and still updates immediately the moment something really changes.
+let lastTiersKey = null;
 function paintTiers(perTier) {
   if (!tiers.length) return;
+  const key = `${tierFilter}|${perTier.join(',')}`;
+  if (key === lastTiersKey) return;
+  lastTiersKey = key;
   dom.tiers.replaceChildren(...tiers.map((tier, i) => {
     const li = document.createElement('li');
     const btn = document.createElement('button');
@@ -346,8 +364,13 @@ function paintTiers(perTier) {
   }));
 }
 
+let lastPowersKey = null;
 function paintPowers(list, total) {
-  const rows = list.slice(0, 12).map((p) => {
+  const shown = list.slice(0, 12);
+  const key = `${total}|${shown.map((p) => `${p.id}:${p.name}:${p.cells}`).join(',')}`;
+  if (key === lastPowersKey) return;
+  lastPowersKey = key;
+  const rows = shown.map((p) => {
     const li = document.createElement('li');
     const [r, g, b] = renderer.colorFor(p.id);
     if (!p.name) {
@@ -407,11 +430,18 @@ function setTierFilter(index) {
   paintTiers(latest ? latest.stats.perTier : tiers.map(() => 0));
 }
 
+let lastFeedKey = null;
 function paintFeed(events, atYear) {
   const now = latest ? latest.year : atYear;
   const shown = tierFilter === null
     ? events
     : events.filter((ev) => tierIndexFor(now - ev.t) === tierFilter);
+
+  // Distortion (dist/merged) can change what an unchanged id renders as, so
+  // the fingerprint has to cover that too, not just which events are shown.
+  const key = `${tierFilter}|${shown.map((ev) => `${ev.id}:${ev.dist}:${ev.merged}`).join(',')}`;
+  if (key === lastFeedKey) { paintTickerTitle(now, atYear); return; }
+  lastFeedKey = key;
 
   if (!shown.length) {
     const li = document.createElement('li');
@@ -448,6 +478,10 @@ function paintFeed(events, atYear) {
     }));
   }
 
+  paintTickerTitle(now, atYear);
+}
+
+function paintTickerTitle(now, atYear) {
   dom.tickerTitle.textContent = tierFilter !== null
     ? sentenceCase(tiers[tierFilter].label)
     : sentenceCase(tiers[tierIndexFor(now - atYear)]?.label || 'the record');
@@ -1404,11 +1438,6 @@ function sliderToYear(value) {
   return yearAtFraction(latest.year, value / Number(dom.scrub.max));
 }
 
-function currentSpeed() {
-  const v = dom.speed.value;
-  return v === 'max' ? 'max' : Number(v);
-}
-
 dom.scrub.addEventListener('input', () => {
   if (!latest) return;
   const year = sliderToYear(Number(dom.scrub.value));
@@ -1430,16 +1459,6 @@ dom.climateStrip.addEventListener('click', (e) => {
   const year = climateStrip.yearAt(e.clientX);
   dom.scrub.value = String(Math.round(fractionAtYear(latest.year, year) * Number(dom.scrub.max)));
   dom.scrub.dispatchEvent(new Event('input', { bubbles: true }));
-});
-
-dom.play.addEventListener('click', () => {
-  running = !running;
-  dom.play.textContent = running ? 'Pause' : 'Run';
-  worker.postMessage(running ? { type: 'run', speed: currentSpeed() } : { type: 'pause' });
-});
-
-dom.speed.addEventListener('change', () => {
-  worker.postMessage({ type: 'speed', speed: currentSpeed() });
 });
 
 dom.live.addEventListener('click', backToNow);
@@ -1649,9 +1668,12 @@ window.Chronicle = {
   state: () => latest,
   events: () => lastEvents,
   sheetOpen: () => !dom.sheet.hidden,
-  setSpeed: (v) => { dom.speed.value = String(v); worker.postMessage({ type: 'speed', speed: v }); },
+  // Test-only: the UI itself never changes the tick rate any more. Kept for
+  // automated verification, which would otherwise have to wait in real time
+  // at the fixed 1 yr/s rate to reach any interesting stretch of history.
+  setSpeed: (v) => { speed = v; worker.postMessage({ type: 'speed', speed: v }); },
   pause: () => worker.postMessage({ type: 'pause' }),
-  resume: () => worker.postMessage({ type: 'run', speed: currentSpeed() }),
+  resume: () => worker.postMessage({ type: 'run', speed }),
   debugMarkers: () => climateStrip && climateStrip.markers,
   debugRenderer: () => renderer && {
     viewScale: renderer.viewScale, viewCenterX: renderer.viewCenterX, viewCenterY: renderer.viewCenterY,
