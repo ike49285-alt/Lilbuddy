@@ -4,6 +4,15 @@
 // deliberately destroys old history (see memory.js), and replaying from the seed
 // is the only way to get it back. So Math.random() must never appear anywhere in
 // the simulation or worldgen — if it does, deep time becomes unrecoverable.
+//
+// One deliberate, narrow exception: sim.js's `realChance()`, used only for the
+// house-learning war-trigger roll. That single call is real, not seeded, by
+// explicit product decision — a house's learned behaviour is allowed to make
+// the world genuinely unrepeatable. Because of it, "load" no longer means
+// "replay the seed" (see saveCurrentWorld/loadSave in app.js, which snapshot
+// live state instead) — but every other roll in the simulation still goes
+// through this file, and old history is still recoverable by replay up to
+// the point that roll first fires differently.
 
 // Hashes a string into four 32-bit values suitable for seeding sfc32.
 export function cyrb128(str) {

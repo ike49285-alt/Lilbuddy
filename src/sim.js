@@ -7,7 +7,11 @@
 //
 // The sim never reads the archive back. That is what makes the world a pure
 // function of its seed, and therefore what makes deliberately forgetting old
-// history safe.
+// history safe — with one narrow, deliberate exception: see `realChance()`
+// below, the one roll in house learning that uses real, not seeded,
+// randomness. Save/load and the continue slot compensate by snapshotting
+// live state instead of replaying (see app.js); shared seed+year links stay
+// an honest approximation past that point.
 
 import { makeRng } from './rng.js';
 import { generateWorld } from './world.js';
@@ -80,6 +84,26 @@ const HOUSE_OVERFLOW_SLACK = 1.15;  // inline trim once the table runs this far 
 const GRUDGE_DECAY = 0.35;
 const FEUD_DECAY = 0.25;
 
+// House "lightweight AI": every house's behavioural tendencies drift with its
+// own wins and losses, and with a small, cheap peek at whichever neighbouring
+// house is doing better right now. State is three bounded scalars per house —
+// no cap/prune logic needed, the shape never grows.
+const TENDENCY_CLAMP = 1;            // tendencies live in [-1, 1]
+const TENDENCY_OWN_NUDGE = 0.08;     // shift from the house's own war win/loss or restoration success
+const TENDENCY_THRONE_NUDGE = 0.04;  // half-weight shift from losing a throne outside war
+const TENDENCY_OBSERVE_NUDGE = 0.03; // smaller shift from imitating a thriving neighbour
+const TENDENCY_DECAY = 0.02;         // per prune (250 yr), pulls an idle house back toward neutral
+const MOMENTUM_CLAMP = 1;            // momentum lives in [-1, 1]
+const MOMENTUM_NUDGE = 0.3;          // shift from a war win/loss
+const MOMENTUM_THRONE_NUDGE = 0.15;  // half-weight shift from gaining/losing a throne outside war
+const MOMENTUM_DECAY = 0.15;         // per prune, same cadence as FEUD_DECAY/GRUDGE_DECAY
+const LEARN_SAMPLE = 2;              // neighbouring houses sampled per observation — bounded, cheap
+const LEARN_MOMENTUM_GAP = 0.15;     // how far ahead a neighbour's momentum must be to be worth imitating
+const WAR_TRIGGER_BASE = 0.0035;     // baseline per-tick war-trigger chance (was an inline literal)
+const AGGRESSION_WAR_SWING = 0.0025; // max +/- a house's own aggression can move that chance
+const RESTORE_WEIGHT_MIN = 0.2;      // floor on a restoration/branch candidate's selection weight
+const RESTORE_WEIGHT_MAX = 2;        // ceiling on the same
+
 // Why states go to war. Written down at the declaration so the archive has a
 // true answer to lose when it later swaps in a stock one.
 const WAR_CAUSES = {
@@ -91,13 +115,85 @@ const WAR_CAUSES = {
   culture: 'kin under foreign rule',
 };
 
+// The one deliberate exception to this file's own rule (see the header
+// comment, and rng.js): whether a war actually triggers, once a house's
+// learned aggression has nudged the odds, is allowed to make the world
+// genuinely unrepeatable. Every other roll in this file stays on the seeded
+// sim.rng — only this call uses real entropy, by explicit product decision.
+function realChance(p) { return Math.random() < p; }
+
+// ---- full-state snapshot helpers ------------------------------------------
+//
+// Plain-object <-> live-object conversion for the two record shapes that
+// carry nested Set/Map fields. Everything else in a save (settlements,
+// cultures, people, wars) is already flat and JSON-safe as-is.
+
+function polityToState(pol) {
+  return {
+    id: pol.id, name: pol.name, form: pol.form, cultureId: pol.cultureId,
+    houseId: pol.houseId, rulerId: pol.rulerId, houseSince: pol.houseSince,
+    grudges: [...pol.grudges.entries()],
+    capital: pol.capital, seat: pol.seat, born: pol.born, died: pol.died,
+    cells: pol.cells, pop: pol.pop, stability: pol.stability,
+    neighbors: [...pol.neighbors], borderCells: pol.borderCells.slice(),
+    wars: [...pol.wars], exhaustion: pol.exhaustion,
+    peakCells: pol.peakCells, peakYear: pol.peakYear,
+  };
+}
+
+// cellList isn't saved — it's rebuilt in full by the next cellPass(), same as
+// every tick already relies on, so restoring it would only duplicate data.
+function stateToPolity(s) {
+  return {
+    id: s.id, name: s.name, form: s.form, cultureId: s.cultureId,
+    houseId: s.houseId, rulerId: s.rulerId, houseSince: s.houseSince,
+    grudges: new Map(s.grudges),
+    capital: s.capital, seat: s.seat, born: s.born, died: s.died,
+    cells: s.cells, pop: s.pop, stability: s.stability,
+    neighbors: new Set(s.neighbors), borderCells: s.borderCells.slice(), cellList: [],
+    wars: new Set(s.wars), exhaustion: s.exhaustion,
+    peakCells: s.peakCells, peakYear: s.peakYear,
+  };
+}
+
+function houseToState(house) {
+  return {
+    id: house.id, name: house.name, cultureId: house.cultureId, founded: house.founded,
+    thrones: [...house.thrones], heldPast: house.heldPast.map((h) => ({ ...h })),
+    rulers: house.rulers, prestige: house.prestige,
+    feuds: [...house.feuds.entries()],
+    deposedAt: house.deposedAt, extinguished: house.extinguished,
+    peakThrones: house.peakThrones, great: house.great,
+    tendencies: { ...house.tendencies }, momentum: house.momentum,
+  };
+}
+
+function stateToHouse(s) {
+  return {
+    id: s.id, name: s.name, cultureId: s.cultureId, founded: s.founded,
+    thrones: new Set(s.thrones), heldPast: s.heldPast.map((h) => ({ ...h })),
+    rulers: s.rulers, prestige: s.prestige,
+    feuds: new Map(s.feuds),
+    deposedAt: s.deposedAt, extinguished: s.extinguished,
+    peakThrones: s.peakThrones, great: s.great,
+    tendencies: { ...s.tendencies }, momentum: s.momentum,
+  };
+}
+
 export class Simulation {
-  constructor(seed) {
+  // `restoreState` (from a prior saveState()) skips seeding a brand-new world
+  // and repopulates live state instead — see saveState()/fromState() below,
+  // and the note on realChance() above for why this exists at all: replaying
+  // from the seed can no longer reproduce a world that used it, so save/load
+  // now captures the world directly.
+  constructor(seed, restoreState = null) {
     this.seed = String(seed);
     const rootRng = makeRng(this.seed);
     this.rng = rootRng.fork('sim');
     this.world = generateWorld(rootRng);
-    this.memory = new Memory(rootRng, this.world.cellCount);
+    this.memory = restoreState
+      ? Memory.fromState(restoreState.memory, rootRng, this.world.cellCount)
+      : new Memory(rootRng, this.world.cellCount);
 
     const n = this.world.cellCount;
     this.owner = new Int32Array(n).fill(-1);
@@ -131,10 +227,72 @@ export class Simulation {
     this.baseCapSum = 0;
     for (const c of this.world.landCells) this.baseCapSum += this.world.baseCapacity[c];
 
-    this.seedWorld();
+    if (restoreState) this.restoreLiveState(restoreState);
+    else this.seedWorld();
   }
 
   get epoch() { return EPOCHS[this.epochIndex]; }
+
+  // ---- full-state snapshot (save/load) ------------------------------------
+  //
+  // Not used by the tick loop, and never by replay — only by save/load and
+  // the continue slot, which capture the live world directly rather than
+  // rebuilding it by ticking from the seed. Terrain/world generation is
+  // untouched by house learning and stays a pure function of the seed, so
+  // it's regenerated by the constructor rather than duplicated in every
+  // save — this is exactly the part that *isn't* implied by the seed alone.
+  saveState() {
+    return {
+      seed: this.seed,
+      year: this.year,
+      epochIndex: this.epochIndex,
+      knowledge: this.knowledge,
+      globalPop: this.globalPop,
+      climatePhase: this.climatePhase,
+      winterYears: this.winterYears,
+      largestPolity: this.largestPolity,
+      nextId: { ...this.nextId },
+      owner: Array.from(this.owner),
+      pop: Array.from(this.pop),
+      cellCulture: Array.from(this.cellCulture),
+      cellSettlement: Array.from(this.cellSettlement),
+      cellSettlementTier: Array.from(this.cellSettlementTier),
+      unrest: Array.from(this.unrest),
+      polities: [...this.polities.values()].map(polityToState),
+      settlements: [...this.settlements.values()],
+      cultures: [...this.cultures.values()],
+      houses: [...this.houses.values()].map(houseToState),
+      people: [...this.people.values()],
+      wars: [...this.wars.values()],
+      memory: this.memory.saveState(),
+    };
+  }
+
+  // Called only from the constructor, once the world/rng/typed arrays/empty
+  // Maps are already in place — fills them in from a saveState() payload
+  // instead of seedWorld()'s fresh founding.
+  restoreLiveState(state) {
+    this.year = state.year;
+    this.epochIndex = state.epochIndex;
+    this.knowledge = state.knowledge;
+    this.globalPop = state.globalPop;
+    this.climatePhase = state.climatePhase;
+    this.winterYears = state.winterYears;
+    this.largestPolity = state.largestPolity;
+    this.nextId = { ...state.nextId };
+    this.owner.set(state.owner);
+    this.pop.set(state.pop);
+    this.cellCulture.set(state.cellCulture);
+    this.cellSettlement.set(state.cellSettlement);
+    this.cellSettlementTier.set(state.cellSettlementTier);
+    this.unrest.set(state.unrest);
+    for (const p of state.polities) this.polities.set(p.id, stateToPolity(p));
+    for (const s of state.settlements) this.settlements.set(s.id, { ...s });
+    for (const c of state.cultures) this.cultures.set(c.id, { ...c, phonology: { ...c.phonology } });
+    for (const h of state.houses) this.houses.set(h.id, stateToHouse(h));
+    for (const n of state.people) this.people.set(n.id, { ...n });
+    for (const w of state.wars) this.wars.set(w.id, { ...w, taken: w.taken.slice() });
+  }
 
   // ---- setup -------------------------------------------------------------
 
@@ -323,6 +481,8 @@ export class Simulation {
       extinguished: null,
       peakThrones: 0,
       great: false,
+      tendencies: { aggression: 0, restoration: 0 }, // each clamped to [-1, 1]
+      momentum: 0,              // clamped to [-1, 1]; decaying "how well lately" signal
     };
     this.houses.set(id, house);
     this.memory.register('d', id, {
@@ -356,8 +516,15 @@ export class Simulation {
       }
     }
 
+    // The gate probabilities (0.42 / 0.3) stay fixed, so the world-wide rate
+    // of restoration-vs-branch-vs-new-house doesn't drift — only *which*
+    // eligible candidate wins is reweighted by its own learned preference,
+    // via a weighted pick over sim.rng (one next() call, same as the plain
+    // uniform pick it replaces — this stays seeded, not the real-random
+    // exception, since it's the candidate that varies, not whether the
+    // outcome repeats).
     if (restorable.length && this.rng.chance(0.42)) {
-      const house = restorable[this.rng.int(restorable.length)];
+      const house = restorable[this.rng.weighted(restorable.map((h) => this.restoreWeight(h)))];
       this.memory.push({
         t: this.year, type: 'house.restored', mag: 1.1,
         refs: [entityKey('d', house.id)], cell,
@@ -368,12 +535,23 @@ export class Simulation {
       });
       house.deposedAt = null;
       house.prestige += 2;
+      house.tendencies.restoration = this.clampTendency(house.tendencies.restoration + TENDENCY_OWN_NUDGE);
       return house;
     }
     if (branchable.length && this.rng.chance(0.3)) {
-      return branchable[this.rng.int(branchable.length)];
+      const house = branchable[this.rng.weighted(branchable.map((h) => this.restoreWeight(h)))];
+      house.tendencies.restoration = this.clampTendency(house.tendencies.restoration + TENDENCY_OWN_NUDGE);
+      return house;
     }
     return this.newHouse(culture);
+  }
+
+  // A candidate's selection weight when it's up for restoration or a branch —
+  // nudged by its own learned restoration tendency, always inside
+  // [RESTORE_WEIGHT_MIN, RESTORE_WEIGHT_MAX] so no single house's odds ever
+  // run away.
+  restoreWeight(house) {
+    return Math.max(RESTORE_WEIGHT_MIN, Math.min(RESTORE_WEIGHT_MAX, 1 + house.tendencies.restoration));
   }
 
   // Whether the house once ruled a state whose seat was near this cell.
@@ -387,6 +565,7 @@ export class Simulation {
   takeThrone(house, pol) {
     house.thrones.add(pol.id);
     house.prestige += 1;
+    house.momentum = this.clampMomentum(house.momentum + MOMENTUM_THRONE_NUDGE);
     if (house.thrones.size > house.peakThrones) house.peakThrones = house.thrones.size;
     // Holding two crowns at once is the moment a house becomes one of the great
     // ones, and it is worth logging loudly — these are the entities deep time
@@ -412,6 +591,9 @@ export class Simulation {
     // Bounded: the oldest spans fall away rather than accumulating for ever.
     if (house.heldPast.length > MAX_HOUSE_SPANS) house.heldPast.shift();
 
+    house.momentum = this.clampMomentum(house.momentum - MOMENTUM_THRONE_NUDGE);
+    house.tendencies.aggression = this.clampTendency(house.tendencies.aggression - TENDENCY_THRONE_NUDGE);
+
     if (house.thrones.size === 0) {
       house.deposedAt = this.year;
       this.memory.push({
@@ -420,6 +602,60 @@ export class Simulation {
         cell: pol.capital,
         data: { house: house.name, polity: pol.name, rulers: house.rulers },
       });
+    }
+  }
+
+  clampTendency(v) { return Math.max(-TENDENCY_CLAMP, Math.min(TENDENCY_CLAMP, v)); }
+  clampMomentum(v) { return Math.max(-MOMENTUM_CLAMP, Math.min(MOMENTUM_CLAMP, v)); }
+  // Pulls a value toward zero by `step` without crossing it — used to relax an
+  // idle house's tendencies/momentum back toward neutral on the periodic prune.
+  decayToward(value, step) {
+    if (value > 0) return Math.max(0, value - step);
+    if (value < 0) return Math.min(0, value + step);
+    return value;
+  }
+
+  // A house's own outcome is the strongest teacher: winning a war nudges its
+  // aggression up, losing nudges it down. Momentum tracks for every house —
+  // it's the signal a neighbour reads in observeRivals below.
+  learnFromWar(victor, defeated) {
+    const winner = this.houses.get(victor.houseId);
+    const loser = this.houses.get(defeated.houseId);
+    if (winner) {
+      winner.momentum = this.clampMomentum(winner.momentum + MOMENTUM_NUDGE);
+      winner.tendencies.aggression =
+        this.clampTendency(winner.tendencies.aggression + TENDENCY_OWN_NUDGE);
+    }
+    if (loser) {
+      loser.momentum = this.clampMomentum(loser.momentum - MOMENTUM_NUDGE);
+      loser.tendencies.aggression =
+        this.clampTendency(loser.tendencies.aggression - TENDENCY_OWN_NUDGE);
+      this.observeRivals(loser, defeated);
+    }
+  }
+
+  // The "learns from rivals" half: a house licking a defeat takes a small,
+  // cheap look at whichever of its neighbouring houses — through the polity
+  // that just lost, not a scan of the world — is having the better run right
+  // now, and leans one step toward that house's own aggression. Costs
+  // O(LEARN_SAMPLE), reuses the already-maintained pol.neighbors, and makes
+  // no rng calls of its own — pure bookkeeping over already-live state.
+  observeRivals(house, pol) {
+    let sampled = 0;
+    for (const neighborId of pol.neighbors) {
+      if (sampled >= LEARN_SAMPLE) break;
+      const neighborPol = this.polities.get(neighborId);
+      if (!neighborPol || neighborPol.houseId === house.id) continue;
+      const rival = this.houses.get(neighborPol.houseId);
+      if (!rival) continue;
+      sampled++;
+      if (rival.momentum > house.momentum + LEARN_MOMENTUM_GAP) {
+        const dir = Math.sign(rival.tendencies.aggression - house.tendencies.aggression);
+        if (dir !== 0) {
+          house.tendencies.aggression =
+            this.clampTendency(house.tendencies.aggression + dir * TENDENCY_OBSERVE_NUDGE);
+        }
+      }
     }
   }
 
@@ -599,6 +835,12 @@ export class Simulation {
         if (next <= 0) house.feuds.delete(id);
         else house.feuds.set(id, next);
       }
+      // An idle house's learned tendencies relax back toward neutral, same
+      // cadence as feud decay above — a house that stops fighting or
+      // reclaiming thrones gradually forgets why it leaned the way it did.
+      house.tendencies.aggression = this.decayToward(house.tendencies.aggression, TENDENCY_DECAY);
+      house.tendencies.restoration = this.decayToward(house.tendencies.restoration, TENDENCY_DECAY);
+      house.momentum = this.decayToward(house.momentum, MOMENTUM_DECAY);
     }
     this.retireCultures();
     this.retireHouses();
@@ -936,7 +1178,14 @@ export class Simulation {
       }
 
       if (unrestAvg > 0.55 && this.rng.chance(0.004)) this.revolt(pol);
-      if (pol.neighbors.size && this.rng.chance(0.0035)) this.considerWar(pol);
+      if (pol.neighbors.size) {
+        // The one place a house's learning reaches into the world: its
+        // learned aggression nudges the odds a war actually starts, and this
+        // roll — unlike everything else in this file — is real, not seeded.
+        const house = this.houses.get(pol.houseId);
+        const aggr = house ? house.tendencies.aggression : 0;
+        if (realChance(WAR_TRIGGER_BASE + aggr * AGGRESSION_WAR_SWING)) this.considerWar(pol);
+      }
     }
 
     for (const [pol, how, by] of dying) {
@@ -1143,6 +1392,7 @@ export class Simulation {
           // Losing ground is what a grudge is made of, and it is what sends the
           // same two states back to war a century later.
           this.addGrudge(defeated, victor.id, 1 + Math.min(2, Math.abs(netTaken) * 0.2));
+          this.learnFromWar(victor, defeated);
         } else {
           a.exhaustion *= 0.7;
           b.exhaustion *= 0.7;
@@ -1464,6 +1714,17 @@ export class Simulation {
     for (const s of this.settlements.values()) {
       if (this.cellSettlement[s.cell] !== s.id) {
         problems.push(`settlement ${s.id} not indexed at its cell`);
+      }
+    }
+    for (const house of this.houses.values()) {
+      if (Math.abs(house.tendencies.aggression) > TENDENCY_CLAMP + 1e-9) {
+        problems.push(`house ${house.id} aggression out of bounds`);
+      }
+      if (Math.abs(house.tendencies.restoration) > TENDENCY_CLAMP + 1e-9) {
+        problems.push(`house ${house.id} restoration out of bounds`);
+      }
+      if (Math.abs(house.momentum) > MOMENTUM_CLAMP + 1e-9) {
+        problems.push(`house ${house.id} momentum out of bounds`);
       }
     }
     return problems;

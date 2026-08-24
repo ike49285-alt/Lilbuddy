@@ -134,6 +134,37 @@ export class Memory {
     this.compactionCount = 0;
   }
 
+  // ---- full-state snapshot (save/load) ------------------------------------
+  //
+  // Used only by Simulation.saveState()/restoreLiveState() — the archive's
+  // own rng isn't preserved across a save (there's nothing tick-sequence
+  // dependent left to keep in sync once house learning's one real-random
+  // roll already means replay can diverge; a fresh fork is exactly what a
+  // brand-new Memory instance sets up on construction).
+  saveState() {
+    return {
+      events: this.events,
+      entities: [...this.entities.entries()],
+      keyframes: this.keyframes.map((kf) => ({ t: kf.t, runs: Array.from(kf.runs) })),
+      nextEventId: this.nextEventId,
+      droppedCount: this.droppedCount,
+      mergedCount: this.mergedCount,
+      compactionCount: this.compactionCount,
+    };
+  }
+
+  static fromState(state, rng, cellCount) {
+    const m = new Memory(rng, cellCount);
+    m.events = state.events;
+    m.entities = new Map(state.entities);
+    m.keyframes = state.keyframes.map((kf) => ({ t: kf.t, runs: Int32Array.from(kf.runs) }));
+    m.nextEventId = state.nextEventId;
+    m.droppedCount = state.droppedCount;
+    m.mergedCount = state.mergedCount;
+    m.compactionCount = state.compactionCount;
+    return m;
+  }
+
   // ---- writing -----------------------------------------------------------
 
   register(kind, id, record) {

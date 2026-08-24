@@ -61,17 +61,24 @@ let lastEvents = [];
 let showUnrest = false;   // the map overlay toggle; persists across a new world/load
 let replayTimer = null;   // the war replay's auto-play interval, if one is running
 let lastAutoSave = 0;     // performance.now() of the last continue-slot write
+let lastAutoSnapshot = null; // the most recent full-state snapshot the continue slot has captured
 
 // ---------------------------------------------------------------------------
 // saved worlds
 //
-// The save file is a seed and a year — nothing else. That is the whole point
-// of the archive being a pure function of the seed: "load" means "replay from
-// scratch to this year," the same path a shared entity link already takes.
+// A save captures the live world directly — every polity, house, person, and
+// the archive itself — rather than a seed and a year to replay. That used to
+// be the whole trick ("load" = "replay from scratch to this year," the same
+// path a shared entity link still takes), but house learning's one
+// real-random roll (see realChance() in sim.js) means replaying the same
+// seed can no longer be trusted to reproduce the same world. A snapshot is
+// the only way "load" still means "go back to this."
 // ---------------------------------------------------------------------------
 
 const SAVES_KEY = 'chronicle:saves:v1';
-const MAX_SAVES = 30;
+// Sized for a full-world snapshot, not the old {seed,year} entry — a
+// snapshot is orders of magnitude bigger, so the cap is much smaller.
+const MAX_SAVES = 5;
 
 function loadSaveData() {
   try {
@@ -84,21 +91,31 @@ function loadSaveData() {
   }
 }
 
+// Returns whether the write actually landed, so callers can react to a
+// quota failure instead of silently losing the save.
 function writeSaveData(data) {
-  try { localStorage.setItem(SAVES_KEY, JSON.stringify(data)); } catch { /* see above */ }
+  try { localStorage.setItem(SAVES_KEY, JSON.stringify(data)); return true; } catch { return false; }
 }
 
-function saveCurrentWorld(label) {
-  if (!latest) return null;
+async function saveCurrentWorld(label) {
+  if (!latest || !worker) return null;
+  const { state } = await ask({ type: 'saveWorld' }, 'savedWorld');
   const data = loadSaveData();
   const entry = {
     id: (crypto.randomUUID && crypto.randomUUID()) || `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-    seed: currentSeed, year: latest.year, label: label || defaultSaveLabel(),
+    label: label || defaultSaveLabel(),
     savedAt: Date.now(), epoch: latest.epoch, politiesTotal: latest.politiesTotal,
+    state,
   };
   data.saves.unshift(entry);
   if (data.saves.length > MAX_SAVES) data.saves.length = MAX_SAVES;
-  writeSaveData(data);
+  // A snapshot can be big enough to blow the quota even at MAX_SAVES. Drop
+  // the oldest surviving save and retry once before giving up quietly, same
+  // "never throw the app over it" spirit as loadSaveData above.
+  if (!writeSaveData(data) && data.saves.length > 1) {
+    data.saves.pop();
+    writeSaveData(data);
+  }
   return entry;
 }
 
@@ -111,7 +128,7 @@ function deleteSave(id) {
 function loadSave(entry) {
   sheetStack.length = 0;
   hideSheet();
-  start(entry.seed, null, entry.year);
+  startFromState(entry.state);
 }
 
 function defaultSaveLabel() {
@@ -121,20 +138,28 @@ function defaultSaveLabel() {
 // Updated while watching live play, throttled so it isn't a write on every
 // frame. Never written while scrubbing a past year — the continue slot is a
 // bookmark of where you left off, not of wherever the scrubber happens to be.
-function maybeAutoSave(snapshot) {
-  if (viewYear !== null || !currentSeed) return;
+function maybeAutoSave() {
+  if (viewYear !== null || !currentSeed || !worker) return;
   const now = performance.now();
   if (now - lastAutoSave < 10000) return;
   lastAutoSave = now;
-  const data = loadSaveData();
-  data.continueSlot = { seed: currentSeed, year: snapshot.year, savedAt: Date.now() };
-  writeSaveData(data);
+  ask({ type: 'saveWorld' }, 'savedWorld').then(({ state }) => {
+    lastAutoSnapshot = state;
+    const data = loadSaveData();
+    data.continueSlot = { state, savedAt: Date.now() };
+    writeSaveData(data);
+  });
 }
 
+// Fires on pagehide/visibilitychange, which must complete synchronously —
+// there's no time left to wait on a fresh worker roundtrip. Writes whatever
+// maybeAutoSave last captured (at most ~10s stale) instead of requesting a
+// new one, which is the only way this can be reliable at all once a save
+// means "the live world," not "a seed and a year read straight off latest."
 function flushAutoSave() {
-  if (!latest || viewYear !== null || !currentSeed) return;
+  if (!lastAutoSnapshot || viewYear !== null || !currentSeed) return;
   const data = loadSaveData();
-  data.continueSlot = { seed: currentSeed, year: latest.year, savedAt: Date.now() };
+  data.continueSlot = { state: lastAutoSnapshot, savedAt: Date.now() };
   writeSaveData(data);
 }
 
@@ -147,7 +172,13 @@ document.addEventListener('visibilitychange', () => {
 // worker plumbing
 // ---------------------------------------------------------------------------
 
-function start(seed, openKey = null, openYear = null) {
+// Tears down whatever world is live and spins up a fresh worker, ready for
+// the caller to hand it either an 'init' (a seed) or a 'loadWorld' (a
+// captured snapshot) message — the two ways a world can start. Shared so
+// there's exactly one `new Worker(...)` call site: the artifact bundler
+// rewrites that construction to run in-thread, and a second copy would
+// silently miss the rewrite.
+function resetWorker() {
   if (worker) worker.terminate();
   latest = null;
   viewYear = null;
@@ -163,16 +194,36 @@ function start(seed, openKey = null, openYear = null) {
   sheetStack.length = 0;
   hideSheet();
   setWinterActive(false);
+  worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
+  worker.addEventListener('message', onMessage);
+}
+
+function start(seed, openKey = null, openYear = null) {
+  resetWorker();
   currentSeed = seed;
   pendingKey = openKey;
   pendingYear = openYear;
-  worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
-  worker.addEventListener('message', onMessage);
   worker.postMessage({ type: 'init', seed });
   // The overlay toggle is a page-level preference that outlives any one
   // world — a fresh worker doesn't know it was on until told.
   if (showUnrest) worker.postMessage({ type: 'overlay', unrest: true });
   const want = hashFor(seed, openKey, openYear);
+  if (location.hash !== want) safeHistoryCall(() => history.replaceState(null, '', want));
+}
+
+// Loading a save or the continue slot: same teardown/reset as start(), but
+// the fresh worker is handed a captured snapshot instead of a seed to seed a
+// new world from — worker.js's 'loadWorld' still ends by announcing a
+// 'world' message, so onMessage's existing case 'world' handles the rest
+// (renderer, climate strip, run loop) exactly as it does for a fresh seed.
+function startFromState(state) {
+  resetWorker();
+  currentSeed = state.seed;
+  pendingKey = null;
+  pendingYear = null;
+  worker.postMessage({ type: 'loadWorld', state });
+  if (showUnrest) worker.postMessage({ type: 'overlay', unrest: true });
+  const want = hashFor(state.seed, null, state.year);
   if (location.hash !== want) safeHistoryCall(() => history.replaceState(null, '', want));
 }
 
@@ -211,7 +262,7 @@ function onMessage(event) {
         setWinterActive(msg.snapshot.winterYears > 0);
       }
       applySnapshot(msg.snapshot);
-      maybeAutoSave(msg.snapshot);
+      maybeAutoSave();
       // Epoch/cataclysm markers change rarely; a throttled poll is plenty and
       // beats re-scanning the whole event log every frame for no reason.
       if (performance.now() - lastMarkersFetch > 5000) {
@@ -947,15 +998,18 @@ function openEntity(key) {
   worker.postMessage({ type: 'entity', key });
 }
 
-// Every deep link — an entity link, a loaded save, the continue slot — lands
-// here. Nothing is stored between visits beyond the seed and a year: the
-// world is re-derived by ticking from scratch, which is what makes deleting
-// deep history safe in the first place. `thenKey` is optional; give it to
+// A shared entity link or a bare #seed/year URL lands here — the only two
+// things left that carry no live state of their own, just a seed and a year
+// to tick forward to. Save/load and the continue slot no longer take this
+// path; they carry a captured snapshot instead (see startFromState above)
+// exactly because this replay can no longer be trusted to land on the same
+// world twice — house learning's one real-random roll (realChance() in
+// sim.js) means the same seed can diverge. `thenKey` is optional; give it to
 // land on an entity's page afterward, omit it to just land on the map.
 function replayTo(year, thenKey = null) {
   dom.mapnote.hidden = false;
   dom.mapnote.textContent =
-    `Nothing is stored between visits. Re-running this world from its seed to year ${formatYear(year)}…`;
+    `Replaying this seed forward to year ${formatYear(year)} — the path may differ from before…`;
   pendingKey = thenKey;
   worker.postMessage({ type: 'pause' });
   worker.postMessage({ type: 'runTo', year });
@@ -1121,7 +1175,9 @@ function renderCultureTree(tree) {
 // house.ascend, house.deposed, house.extinct), just without this section.
 function renderHouseLineage(lineage) {
   const parts = [];
-  if (!lineage.thrones.length && !lineage.heldPast.length && !lineage.feuds.length) return parts;
+  const t = lineage.tendencies;
+  const hasTemperament = t && (Math.abs(t.aggression) > 1e-9 || Math.abs(t.restoration) > 1e-9 || Math.abs(t.momentum) > 1e-9);
+  if (!lineage.thrones.length && !lineage.heldPast.length && !lineage.feuds.length && !hasTemperament) return parts;
 
   parts.push(heading('Lineage'));
 
@@ -1170,7 +1226,40 @@ function renderHouseLineage(lineage) {
     parts.push(heading('Feuds'), rivalryList(lineage.feuds, 8)); // feud()'s own cap in sim.js
   }
 
+  // What this house has learned from its own wins and losses, and from
+  // watching whichever neighbour is thriving right now — see the tendencies
+  // fields in sim.js. Shown for every house, even one that's still exactly
+  // even-tempered: a house that hasn't leaned yet is itself informative.
+  if (lineage.tendencies) {
+    const list = document.createElement('ul');
+    list.className = 'temperament';
+    list.append(
+      temperamentRow('Aggression', lineage.tendencies.aggression, 'cautious', 'aggressive'),
+      temperamentRow('Old claims', lineage.tendencies.restoration, 'builds anew', 'reclaims thrones'),
+    );
+    parts.push(heading('Temperament'), list);
+  }
+
   return parts;
+}
+
+// One learned axis as a word plus a magnitude bar — the underlying [-1, 1]
+// scalar (TENDENCY_CLAMP in sim.js) isn't meaningful to a reader on its own.
+function temperamentRow(label, value, negLabel, posLabel) {
+  const li = document.createElement('li');
+  li.className = 'temperament-row';
+  const row = document.createElement('span');
+  row.className = 'row';
+  const word = Math.abs(value) < 0.15 ? 'even-tempered' : (value > 0 ? posLabel : negLabel);
+  row.textContent = `${label}: ${word}`;
+  const meter = document.createElement('span');
+  meter.className = 'meter';
+  const fill = document.createElement('span');
+  fill.className = 'fill';
+  fill.style.width = `${Math.min(100, Math.abs(value) * 100)}%`;
+  meter.append(fill);
+  li.append(row, meter);
+  return li;
 }
 
 function renderCell(msg) {
@@ -1316,10 +1405,14 @@ function renderSaveSection() {
   saveBtn.className = 'primary';
   saveBtn.textContent = latest ? 'Save' : 'Nothing to save yet';
   saveBtn.disabled = !latest;
-  saveBtn.addEventListener('click', () => {
-    saveCurrentWorld(labelInput.value.trim());
+  saveBtn.addEventListener('click', async () => {
+    // A snapshot is a worker roundtrip now, not an instant read of `latest`
+    // — worth a visible "in progress" state rather than looking unresponsive.
+    saveBtn.disabled = true;
+    saveBtn.textContent = 'Saving…';
+    await saveCurrentWorld(labelInput.value.trim());
     saveBtn.textContent = 'Saved ✓';
-    setTimeout(() => { saveBtn.textContent = 'Save'; }, 1200);
+    setTimeout(() => { saveBtn.textContent = 'Save'; saveBtn.disabled = !latest; }, 1200);
     labelInput.value = defaultSaveLabel();
     renderSavedList();
   });
@@ -1355,8 +1448,7 @@ function fillSavedList(list) {
 
   if (data.continueSlot) {
     rows.push(saveRow({
-      id: null, label: 'Continue', seed: data.continueSlot.seed,
-      year: data.continueSlot.year, continueRow: true,
+      id: null, label: 'Continue', state: data.continueSlot.state, continueRow: true,
     }));
   }
   for (const entry of data.saves) rows.push(saveRow(entry));
@@ -1383,7 +1475,7 @@ function saveRow(entry) {
   label.textContent = entry.label;
   const meta = document.createElement('span');
   meta.className = 'meta';
-  meta.textContent = `${entry.seed} · year ${formatYear(entry.year)}`;
+  meta.textContent = `${entry.state.seed} · year ${formatYear(entry.state.year)}`;
   load.append(label, meta);
   load.addEventListener('click', () => loadSave(entry));
 
@@ -1700,6 +1792,9 @@ window.Chronicle = {
   // whatever a UI-navigation path happens to still hold onto in the archive.
   debugOpenEntity: (key) => openEntity(key),
   debugOpenAnalysis: (eventId) => openAnalysis(eventId),
+  // Test-only: every live house's learned state, for verifying house
+  // learning is actually doing something over a run.
+  debugHouses: () => ask({ type: 'debugHouses' }, 'debugHouses'),
 };
 
 const route = readHash();

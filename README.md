@@ -49,6 +49,12 @@ really happened in deep time is to **replay the world from its seed** — which
 works, because the world is a pure function of that seed and the simulation
 never reads the archive back. That constraint is why forgetting is safe.
 
+One deliberate exception: whether a great house's own war-trigger roll fires
+draws on real, not seeded, randomness (see "Houses learn" below), so replay
+can diverge from the run that actually happened once that roll first fires.
+Save/load compensates by capturing the live world directly rather than
+replaying it — see "Links carry a year" below.
+
 ## Running it
 
 No dependencies and no build step, but it does need to be served — it uses ES
@@ -97,10 +103,20 @@ The wide layout is the secondary case.
 
 A link into the record looks like `#kel-vast-317/p/482/48200` — seed, entity,
 and **the year you were looking at**. That last part isn't decoration. Nothing
-is stored between visits; a world is re-derived from its seed every time the
+is stored for a shared link; a world is re-derived from its seed every time the
 page loads, so a link to a state is only meaningful together with a point in
-time at which that state existed. Open one and it replays the world to that year
-before showing you the page. Seed plus tick count is the entire save file.
+time at which that state existed. Open one and it replays the world to that
+year before showing you the page — a *plausible* landing at that year, not
+necessarily the exact one whoever shared the link saw (see the house-learning
+exception above).
+
+**Save/load is different: it captures the live world, not just a seed and a
+year.** Once replay can diverge from what actually happened, "seed plus tick
+count is the entire save file" stops being reliable, so a save persists
+enough of the live simulation (every state, house, person, and the archive
+itself — not the terrain, which is still a pure function of the seed) to
+restore exactly, without replaying anything. The "continue" slot works the
+same way. It costs more to store, so the save list is small.
 
 ## Wars and great houses
 
@@ -124,6 +140,21 @@ Houses are also the clearest case of the salience rule: a long-lived house keeps
 its own founding alive in the archive for tens of thousands of years, simply by
 still existing.
 
+### Houses learn
+
+A house's own wins and losses shift its temperament: winning a war nudges it
+more aggressive, losing nudges it more cautious, and a throne successfully
+reclaimed makes it lean toward reclaiming the next one too. It also watches
+its neighbours — a house licking a defeat takes a small, bounded look at
+whichever house next door is doing better right now, and leans one step
+toward that house's own aggression. Every house tracks this from the moment
+it's founded, not just the great ones. The learned lean shows up on a house's
+own page, and feeds back into the world: it nudges the odds its own polities
+go to war, and which house wins a contested throne or restoration.
+
+This is the one place in the simulation that draws on real randomness instead
+of the seed — see "The truth is really gone" above for what that costs.
+
 ## Design constraints
 
 Two rules that everything else hangs off:
@@ -133,6 +164,12 @@ Two rules that everything else hangs off:
 2. **Cost per tick is flat.** Tick one million costs what tick one hundred
    thousand cost. Anything that grows with elapsed time lives in the archive,
    under budget, never in the hot loop.
+
+Both still hold everywhere, with one scoped, deliberate exception: house
+learning's one real-random roll (see "Houses learn" above) means the
+simulation is no longer a *pure* function of its seed alone — but nothing
+about *that* exception grows with elapsed time or reads the archive back, so
+neither rule is actually broken, just narrowed at one call site.
 
 The second one is measured, not assumed — see the boundedness and flat-cost
 checks below. Early ticks are genuinely cheaper than late ones (an empty world
@@ -144,7 +181,7 @@ has nothing in it); what matters is that the cost plateaus and then stays there.
 | --- | --- |
 | `index.html` | Page shell |
 | `style.css` | Styling, light/dark aware |
-| `src/rng.js` | Seeded PRNG and value noise — the only source of randomness |
+| `src/rng.js` | Seeded PRNG and value noise — every source of randomness except one house-learning roll (see "Houses learn") |
 | `src/names.js` | Per-culture phonology; names within a culture sound related |
 | `src/world.js` | Voronoi-as-raster substrate, terrain, climate, biomes |
 | `src/sim.js` | The tick loop — population, expansion, war, collapse, epochs |

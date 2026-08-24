@@ -29,8 +29,13 @@ let sendUnrest = false;  // whether the live frame should carry the unrest overl
 const FRAME_MS = 50;       // cap UI updates at 20/sec; the sim is not slowed by this
 const BUDGET_MS = 12;      // per-slice tick budget, leaves the worker responsive
 
-function init(seed) {
-  sim = new Simulation(seed);
+// `restoreState` (from a save/load or the continue slot) skips seeding a
+// fresh world and repopulates live state instead — see Simulation's
+// constructor. Either way this ends the same way: announce the world (the
+// same 'world' message a normal seed-init sends), which is what gets app.js
+// to build a renderer/climate strip and start the run loop.
+function init(seed, restoreState = null) {
+  sim = new Simulation(seed, restoreState);
   const w = sim.world;
   const palette = biomePalette(w);
   // Copies, because these are transferred and the sim still needs its own.
@@ -251,7 +256,10 @@ function houseLineage(key) {
     })
     .filter(Boolean);
 
-  return { thrones, heldPast, feuds };
+  return {
+    thrones, heldPast, feuds,
+    tendencies: { ...house.tendencies, momentum: house.momentum },
+  };
 }
 
 // Everything the archive still holds about what an event belonged to. For a
@@ -608,6 +616,32 @@ self.addEventListener('message', (event) => {
 
       case 'selftest':
         self.postMessage({ type: 'selftest', problems: sim.selftest(), year: sim.year });
+        break;
+
+      // Test-only: every live house's learned state, for verifying house
+      // learning is actually doing something. Mirrors the selftest/digest
+      // pattern — a narrow, explicit seam rather than driving the UI.
+      case 'debugHouses':
+        self.postMessage({
+          type: 'debugHouses',
+          houses: [...sim.houses.values()].map((h) => ({
+            id: h.id, name: h.name, great: h.great, thrones: h.thrones.size,
+            tendencies: { ...h.tendencies }, momentum: h.momentum,
+          })),
+        });
+        break;
+
+      // Save/load and the continue slot capture the live world directly —
+      // see the note on realChance() in sim.js for why replaying the seed
+      // can no longer be trusted to reproduce it.
+      case 'saveWorld':
+        self.postMessage({ type: 'savedWorld', state: sim.saveState() });
+        break;
+
+      case 'loadWorld':
+        running = false;
+        if (timer) { clearTimeout(timer); timer = null; }
+        init(msg.state.seed, msg.state);
         break;
 
       default:

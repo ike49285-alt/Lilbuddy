@@ -497,6 +497,11 @@ main { display: flex; flex-direction: column; gap: 18px; padding-bottom: 40px; }
 .linkrow.rivalries .meter { height: 4px; background: var(--sunk); border-radius: 2px; overflow: hidden; }
 .linkrow.rivalries .fill { display: block; height: 100%; background: var(--accent); }
 
+.temperament { display: flex; flex-direction: column; gap: 10px; margin: 0; padding: 0; list-style: none; }
+.temperament-row { font-size: 14px; }
+.temperament-row .meter { height: 4px; background: var(--sunk); border-radius: 2px; overflow: hidden; margin-top: 6px; }
+.temperament-row .fill { display: block; height: 100%; background: var(--accent); }
+
 .attest {
   margin-top: 22px; padding: 12px;
   border-radius: 12px; border: 1px dashed var(--rule);
