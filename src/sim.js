@@ -104,6 +104,26 @@ const AGGRESSION_WAR_SWING = 0.0025; // max +/- a house's own aggression can mov
 const RESTORE_WEIGHT_MIN = 0.2;      // floor on a restoration/branch candidate's selection weight
 const RESTORE_WEIGHT_MAX = 2;        // ceiling on the same
 
+// Alliances. A house/polity's positive counterpart to feuds/grudges — both
+// levels form together from one roll (see formAlliance()), then diverge
+// exactly like feuds/grudges already do: a polity's allies die with it, a
+// house's survive a throne changing hands.
+const MAX_ALLIES = 4;                    // per house/polity — rarer than feuds, tighter cap
+const ALLIANCE_MAX = 8;                  // per-entry weight cap, mirrors feud()'s own cap
+const ALLIANCE_DECAY = 0.18;             // per prune (250 yr) — between GRUDGE_DECAY and FEUD_DECAY
+const ALLIANCE_STRONG = 4;               // weight at/above which mutual defense actually fires
+const ALLIANCE_FORM_WEIGHT = 1;          // starting weight of a freshly formed (weak) alliance
+const ALLIANCE_SIMILARITY_BONUS = 3.5;   // extra starting weight at max temperament similarity —
+                                          // alone enough to land in "strong" territory
+const ALLIANCE_FORM_BASE = 0.0012;       // baseline per-tick chance to propose a pact — below
+                                          // WAR_TRIGGER_BASE; alliances should be rarer than wars
+const ALLIANCE_SIMILARITY_SWING = 0.0018; // extra chance at max similarity, mirrors AGGRESSION_WAR_SWING
+const ALLIANCE_AVOID_SCALE = 0.5;        // war-avoidance multiplier per point of alliance weight
+const ALLIANCE_AVOID_CAP = 0.9;          // "far less likely," never impossible
+const ALLIANCE_PULL_MAX = 2;             // at most this many strong allies pulled in per declaration
+const ALLIANCE_PULL_CHANCE = 0.35;       // a qualifying strong ally doesn't always answer the call
+const ALLIANCE_VICTORY_BUMP = 1.5;       // weight added when a pulled-in ally's war ends in their favor
+
 // Why states go to war. Written down at the declaration so the archive has a
 // true answer to lose when it later swaps in a stock one.
 const WAR_CAUSES = {
@@ -113,6 +133,7 @@ const WAR_CAUSES = {
   revanche: 'ground lost in an earlier war',
   dynastic: 'a feud between ruling houses',
   culture: 'kin under foreign rule',
+  alliance: 'a call to arms from an ally',
 };
 
 // The one deliberate exception to this file's own rule (see the header
@@ -133,6 +154,7 @@ function polityToState(pol) {
     id: pol.id, name: pol.name, form: pol.form, cultureId: pol.cultureId,
     houseId: pol.houseId, rulerId: pol.rulerId, houseSince: pol.houseSince,
     grudges: [...pol.grudges.entries()],
+    allies: [...pol.allies.entries()],
     capital: pol.capital, seat: pol.seat, born: pol.born, died: pol.died,
     cells: pol.cells, pop: pol.pop, stability: pol.stability,
     neighbors: [...pol.neighbors], borderCells: pol.borderCells.slice(),
@@ -148,6 +170,7 @@ function stateToPolity(s) {
     id: s.id, name: s.name, form: s.form, cultureId: s.cultureId,
     houseId: s.houseId, rulerId: s.rulerId, houseSince: s.houseSince,
     grudges: new Map(s.grudges),
+    allies: new Map(s.allies),
     capital: s.capital, seat: s.seat, born: s.born, died: s.died,
     cells: s.cells, pop: s.pop, stability: s.stability,
     neighbors: new Set(s.neighbors), borderCells: s.borderCells.slice(), cellList: [],
@@ -162,6 +185,7 @@ function houseToState(house) {
     thrones: [...house.thrones], heldPast: house.heldPast.map((h) => ({ ...h })),
     rulers: house.rulers, prestige: house.prestige,
     feuds: [...house.feuds.entries()],
+    allies: [...house.allies.entries()],
     deposedAt: house.deposedAt, extinguished: house.extinguished,
     peakThrones: house.peakThrones, great: house.great,
     tendencies: { ...house.tendencies }, momentum: house.momentum,
@@ -174,6 +198,7 @@ function stateToHouse(s) {
     thrones: new Set(s.thrones), heldPast: s.heldPast.map((h) => ({ ...h })),
     rulers: s.rulers, prestige: s.prestige,
     feuds: new Map(s.feuds),
+    allies: new Map(s.allies),
     deposedAt: s.deposedAt, extinguished: s.extinguished,
     peakThrones: s.peakThrones, great: s.great,
     tendencies: { ...s.tendencies }, momentum: s.momentum,
@@ -477,6 +502,7 @@ export class Simulation {
       rulers: 0,
       prestige: 1,
       feuds: new Map(),        // houseId -> weight, capped
+      allies: new Map(),       // houseId -> weight, capped — mirrors feuds
       deposedAt: null,
       extinguished: null,
       peakThrones: 0,
@@ -675,6 +701,103 @@ export class Simulation {
     }
   }
 
+  // 1 when two houses share an aggression temperament, 0 when maximally
+  // opposed — aggression is the axis that already drives every other
+  // war/peace decision in this file, so it's the one alliance formation
+  // leans on too.
+  temperamentSimilarity(houseA, houseB) {
+    return 1 - Math.abs(houseA.tendencies.aggression - houseB.tendencies.aggression) / (2 * TENDENCY_CLAMP);
+  }
+
+  // Shared writer for both pol.allies and house.allies — same cap-and-trim
+  // shape as feud()'s own writer, parameterised over which map on which
+  // owner it's touching so the two otherwise-unrelated Maps don't need two
+  // near-identical bodies.
+  setAlliance(owner, field, id, delta) {
+    const map = owner[field];
+    map.set(id, Math.min(ALLIANCE_MAX, (map.get(id) || 0) + delta));
+    if (map.size > MAX_ALLIES) {
+      const worst = [...map.entries()].sort((p, q) => q[1] - p[1]).slice(0, MAX_ALLIES);
+      owner[field] = new Map(worst);
+    }
+  }
+
+  // Both levels form together: a state-to-state pact naturally also binds
+  // the two ruling houses, unlike a grudge (purely the wronged state's
+  // ledger) or a feud (purely the two houses' blood debt), which genuinely
+  // do arise from separate events elsewhere in this file.
+  formAlliance(pol, partner, similarity) {
+    const weight = ALLIANCE_FORM_WEIGHT + similarity * ALLIANCE_SIMILARITY_BONUS;
+    this.setAlliance(pol, 'allies', partner.id, weight);
+    this.setAlliance(partner, 'allies', pol.id, weight);
+
+    const houseA = this.houses.get(pol.houseId);
+    const houseB = this.houses.get(partner.houseId);
+    if (houseA && houseB && houseA !== houseB) {
+      this.setAlliance(houseA, 'allies', houseB.id, weight);
+      this.setAlliance(houseB, 'allies', houseA.id, weight);
+    }
+
+    this.memory.push({
+      t: this.year, type: 'alliance.formed', mag: 0.3 + Math.min(0.5, similarity),
+      refs: [entityKey('p', pol.id), entityKey('p', partner.id)],
+      cell: pol.capital,
+      data: { a: pol.name, b: partner.name, strong: weight >= ALLIANCE_STRONG },
+    });
+  }
+
+  // War between allies voids the pact outright — unlike an unreinforced
+  // alliance's quiet decay to zero on the periodic prune, a betrayal this
+  // blunt is worth its own record.
+  breakAlliance(pol, foe) {
+    pol.allies.delete(foe.id);
+    foe.allies.delete(pol.id);
+    const houseA = this.houses.get(pol.houseId);
+    const houseB = this.houses.get(foe.houseId);
+    if (houseA) houseA.allies.delete(foe.houseId);
+    if (houseB) houseB.allies.delete(pol.houseId);
+    this.memory.push({
+      t: this.year, type: 'alliance.broken', mag: 0.5,
+      refs: [entityKey('p', pol.id), entityKey('p', foe.id)],
+      cell: pol.capital,
+      data: { a: pol.name, b: foe.name },
+    });
+  }
+
+  // Only reinforces a pact that already exists. No event is pushed here,
+  // matching feud()'s own precedent — the war this grew out of already
+  // told the story.
+  strengthenAlliance(a, b, bump) {
+    if (!a.allies.has(b.id)) return;
+    this.setAlliance(a, 'allies', b.id, bump);
+    this.setAlliance(b, 'allies', a.id, bump);
+    const houseA = this.houses.get(a.houseId);
+    const houseB = this.houses.get(b.houseId);
+    if (houseA && houseB && houseA !== houseB) {
+      this.setAlliance(houseA, 'allies', houseB.id, bump);
+      this.setAlliance(houseB, 'allies', houseA.id, bump);
+    }
+  }
+
+  // Strong allies get one bounded, one-shot chance to be pulled into a
+  // fresh, ordinary two-sided war against the same foe — never a chained
+  // recursion, since the wars this spawns never themselves call this. Only
+  // the declarer's own allies are checked, not the defender's: a coalition
+  // rallies around whoever picked the fight, one direction, easy to reason
+  // about.
+  pullInAllies(pol, foe) {
+    let pulled = 0;
+    for (const [allyId, weight] of pol.allies) {
+      if (pulled >= ALLIANCE_PULL_MAX) break;
+      if (weight < ALLIANCE_STRONG) continue;
+      const ally = this.polities.get(allyId);
+      if (!ally || ally.id === foe.id || this.warWith(ally, foe.id)) continue;
+      if (!this.rng.chance(ALLIANCE_PULL_CHANCE)) continue;
+      this.declareWar(ally, foe, 'alliance', pol.id);
+      pulled++;
+    }
+  }
+
   // Houses are bounded the same way cultures are: a hard cap, and the least
   // consequential go first. A house with a living throne is never retired.
   retireHouses() {
@@ -703,7 +826,10 @@ export class Simulation {
       this.memory.updateEntity(entityKey('d', house.id), {
         died: this.year, rulers: house.rulers, great: house.great,
       });
-      for (const other of this.houses.values()) other.feuds.delete(house.id);
+      for (const other of this.houses.values()) {
+        other.feuds.delete(house.id);
+        other.allies.delete(house.id);
+      }
       this.houses.delete(house.id);
       excess--;
     }
@@ -754,6 +880,7 @@ export class Simulation {
       form, cultureId: culture.id, houseId: house.id, rulerId: ruler.id,
       houseSince: this.year,
       grudges: new Map(),
+      allies: new Map(),
       capital: cell, seat: seat.id,
       born: this.year, died: null,
       cells: 1, pop: this.pop[cell], stability: 0.55,
@@ -825,6 +952,11 @@ export class Simulation {
         if (next <= 0 || !this.polities.has(id)) pol.grudges.delete(id);
         else pol.grudges.set(id, next);
       }
+      for (const [id, weight] of pol.allies) {
+        const next = weight - ALLIANCE_DECAY;
+        if (next <= 0 || !this.polities.has(id)) pol.allies.delete(id);
+        else pol.allies.set(id, next);
+      }
     }
     for (const id of this.people.keys()) {
       if (!livePeople.has(id)) this.people.delete(id);
@@ -834,6 +966,11 @@ export class Simulation {
         const next = weight - FEUD_DECAY;
         if (next <= 0) house.feuds.delete(id);
         else house.feuds.set(id, next);
+      }
+      for (const [id, weight] of house.allies) {
+        const next = weight - ALLIANCE_DECAY;
+        if (next <= 0 || !this.houses.has(id)) house.allies.delete(id);
+        else house.allies.set(id, next);
       }
       // An idle house's learned tendencies relax back toward neutral, same
       // cadence as feud decay above — a house that stops fighting or
@@ -937,9 +1074,13 @@ export class Simulation {
           if (s) {
             s.tier = 3;
             s.pop = this.pop[c];
+            // Rare branch — one Map lookup per settlement ever, to credit
+            // this passive growth to whoever reigns over it right now.
+            const owner = this.owner[c] >= 0 ? this.polities.get(this.owner[c]) : null;
             this.memory.push({
               t: this.year, type: 'settle.city', mag: 0.4,
-              refs: [entityKey('s', s.id)], cell: c,
+              refs: [entityKey('s', s.id), ...(owner ? [entityKey('n', owner.rulerId)] : [])],
+              cell: c,
               data: { name: s.name, population: Math.round(s.pop * 100000) },
             });
           }
@@ -1072,6 +1213,7 @@ export class Simulation {
                 entityKey('p', pol.id),
                 entityKey('p', foe.id),
                 entityKey('s', s.id),
+                entityKey('n', pol.rulerId),
               ],
               cell: nb,
               data: {
@@ -1185,6 +1327,35 @@ export class Simulation {
         const house = this.houses.get(pol.houseId);
         const aggr = house ? house.tendencies.aggression : 0;
         if (realChance(WAR_TRIGGER_BASE + aggr * AGGRESSION_WAR_SWING)) this.considerWar(pol);
+
+        // Alliance formation: one more seeded roll per polity per tick, same
+        // loop, no new scan. Iterates the neighbour Set directly rather than
+        // spreading it into an array — unlike considerWar's own spread,
+        // this check runs unconditionally, not just when a rare roll
+        // already fired, so a fresh allocation here would be a real
+        // per-tick cost, not an occasional one.
+        const partnerIdx = this.rng.int(pol.neighbors.size);
+        let partnerId = -1;
+        let ni = 0;
+        for (const nb of pol.neighbors) {
+          if (ni === partnerIdx) { partnerId = nb; break; }
+          ni++;
+        }
+        // Skip a candidate already allied, already at war, or the target of
+        // a live grudge — the same "significant grudge" threshold warCause
+        // itself uses. You don't propose a pact to someone you're still
+        // angry at.
+        if (!pol.allies.has(partnerId) && !this.warWith(pol, partnerId)
+            && (pol.grudges.get(partnerId) || 0) < 1.5) {
+          const partner = this.polities.get(partnerId);
+          if (partner) {
+            const houseB = this.houses.get(partner.houseId);
+            const similarity = (house && houseB) ? this.temperamentSimilarity(house, houseB) : 0;
+            if (this.rng.chance(ALLIANCE_FORM_BASE + similarity * ALLIANCE_SIMILARITY_SWING)) {
+              this.formAlliance(pol, partner, similarity);
+            }
+          }
+        }
       }
     }
 
@@ -1302,8 +1473,26 @@ export class Simulation {
     const foe = this.polities.get(targetId);
     if (!foe || this.warWith(pol, targetId)) return;
 
-    const id = this.nextId.war++;
+    // A weak alliance makes war between these two markedly less likely, not
+    // impossible. A war that goes ahead anyway between allies breaks the
+    // pact outright rather than quietly outliving it.
+    const allyWeight = pol.allies.get(targetId) || 0;
+    if (allyWeight > 0) {
+      const avoid = Math.min(ALLIANCE_AVOID_CAP, allyWeight * ALLIANCE_AVOID_SCALE);
+      if (this.rng.chance(avoid)) return;       // the alliance holds — no war this tick
+      this.breakAlliance(pol, foe);             // it didn't — the pact is void as of this war
+    }
+
     const cause = this.warCause(pol, foe);
+    this.declareWar(pol, foe, cause);
+    this.pullInAllies(pol, foe);
+  }
+
+  // Shared by an ordinary declaration and a strong ally answering a call to
+  // arms (`calledById` set) — the two paths otherwise behave identically,
+  // right down to the war object's shape.
+  declareWar(pol, foe, cause, calledById = null) {
+    const id = this.nextId.war++;
     const war = {
       id, a: pol.id, b: foe.id, began: this.year,
       name: `the war of ${this.year}`,
@@ -1311,6 +1500,10 @@ export class Simulation {
       aName: pol.name, bName: foe.name,
       aHouse: pol.houseId, bHouse: foe.houseId,
       dead: 0, sacks: 0, repulsed: 0, taken: [0, 0],
+      // Sim-only bookkeeping — never enters an archived refs array (wars
+      // stay strictly two-sided there); just tells resolveWars which
+      // alliance a shared win should reinforce.
+      calledBy: calledById,
     };
     this.wars.set(id, war);
     pol.wars.add(id);
@@ -1321,10 +1514,14 @@ export class Simulation {
     this.memory.register('w', id, {
       name: war.name, began: this.year, cause,
       attacker: pol.name, defender: foe.name,
+      calledBy: calledById ? (this.polities.get(calledById) || {}).name || null : null,
     });
     this.memory.push({
       t: this.year, type: 'war.begin', mag: 0.4,
-      refs: [entityKey('w', id), entityKey('p', pol.id), entityKey('p', foe.id)],
+      refs: [
+        entityKey('w', id), entityKey('p', pol.id), entityKey('p', foe.id),
+        entityKey('n', pol.rulerId),
+      ],
       cell: pol.capital,
       // A couple of per cent of the population under arms. The archive will
       // inflate this every time the event is merged, so the figure it starts
@@ -1335,6 +1532,7 @@ export class Simulation {
         cause: WAR_CAUSES[cause],
       },
     });
+    return war;
   }
 
   resolveWars(ep) {
@@ -1377,6 +1575,7 @@ export class Simulation {
             entityKey('w', war.id),
             entityKey('p', (victor || a).id),
             entityKey('p', (defeated || b).id),
+            entityKey('n', (victor || a).rulerId),
           ],
           cell: (victor || a).capital,
           data: {
@@ -1393,6 +1592,13 @@ export class Simulation {
           // same two states back to war a century later.
           this.addGrudge(defeated, victor.id, 1 + Math.min(2, Math.abs(netTaken) * 0.2));
           this.learnFromWar(victor, defeated);
+          // A war spawned by mutual defense that the ally then wins
+          // reinforces the alliance that pulled them in — shared victory is
+          // literally what strong alliances in this design are grown from.
+          if (war.calledBy && victor.id === war.a) {
+            const caller = this.polities.get(war.calledBy);
+            if (caller) this.strengthenAlliance(a, caller, ALLIANCE_VICTORY_BUMP);
+          }
         } else {
           a.exhaustion *= 0.7;
           b.exhaustion *= 0.7;
@@ -1419,7 +1625,7 @@ export class Simulation {
     pol.stability -= 0.15;
     this.memory.push({
       t: this.year, type: 'revolt', mag: 0.5,
-      refs: [entityKey('p', rebel.id), entityKey('p', pol.id)],
+      refs: [entityKey('p', rebel.id), entityKey('p', pol.id), entityKey('n', pol.rulerId)],
       cell: seed,
       data: { rebel: rebel.name, against: pol.name },
     });
@@ -1463,7 +1669,10 @@ export class Simulation {
 
     this.memory.push({
       t: this.year, type: 'polity.collapse', mag: 0.5 + Math.min(1, held.length / 60),
-      refs: [entityKey('p', pol.id), ...successors.slice(0, 3).map((s) => entityKey('p', s.id))],
+      refs: [
+        entityKey('p', pol.id), entityKey('n', pol.rulerId),
+        ...successors.slice(0, 3).map((s) => entityKey('p', s.id)),
+      ],
       cell: pol.capital,
       data: {
         name: pol.name, parts: successors.length,
@@ -1479,7 +1688,10 @@ export class Simulation {
         t: this.year,
         type: how === 'conquered' ? 'polity.conquered' : 'polity.collapse',
         mag: 0.35 + Math.min(0.8, pol.peakCells / 60),
-        refs: [entityKey('p', pol.id), ...(by ? [entityKey('p', by.id)] : [])],
+        refs: [
+          entityKey('p', pol.id), entityKey('n', pol.rulerId),
+          ...(by ? [entityKey('p', by.id)] : []),
+        ],
         cell: pol.capital,
         data: {
           name: pol.name, by: by ? by.name : null,
@@ -1558,7 +1770,7 @@ export class Simulation {
       pol.stability -= severity * 0.3;
       this.memory.push({
         t: this.year, type: 'plague', mag: 0.3 + severity,
-        refs: [entityKey('p', pol.id)], cell: pol.capital,
+        refs: [entityKey('p', pol.id), entityKey('n', pol.rulerId)], cell: pol.capital,
         data: { polity: pol.name, dead: Math.round(dead * 100000) },
       });
     }
@@ -1726,6 +1938,10 @@ export class Simulation {
       if (Math.abs(house.momentum) > MOMENTUM_CLAMP + 1e-9) {
         problems.push(`house ${house.id} momentum out of bounds`);
       }
+      if (house.allies.size > MAX_ALLIES) problems.push(`house ${house.id} allies exceed cap`);
+    }
+    for (const pol of this.polities.values()) {
+      if (pol.allies.size > MAX_ALLIES) problems.push(`polity ${pol.id} allies exceed cap`);
     }
     return problems;
   }

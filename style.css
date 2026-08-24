@@ -488,14 +488,14 @@ main { display: flex; flex-direction: column; gap: 18px; padding-bottom: 40px; }
   margin-right: 7px;
 }
 
-.linkrow.rivalries { flex-direction: column; gap: 6px; }
-.linkrow.rivalries button {
+.linkrow.rivalries, .linkrow.alliances { flex-direction: column; gap: 6px; }
+.linkrow.rivalries button, .linkrow.alliances button {
   display: flex; flex-direction: column; align-items: stretch;
   width: 100%; gap: 6px; text-align: left; border-radius: 10px;
 }
-.linkrow.rivalries .row { font-size: 14px; }
-.linkrow.rivalries .meter { height: 4px; background: var(--sunk); border-radius: 2px; overflow: hidden; }
-.linkrow.rivalries .fill { display: block; height: 100%; background: var(--accent); }
+.linkrow.rivalries .row, .linkrow.alliances .row { font-size: 14px; }
+.linkrow.rivalries .meter, .linkrow.alliances .meter { height: 4px; background: var(--sunk); border-radius: 2px; overflow: hidden; }
+.linkrow.rivalries .fill, .linkrow.alliances .fill { display: block; height: 100%; background: var(--accent); }
 
 .temperament { display: flex; flex-direction: column; gap: 10px; margin: 0; padding: 0; list-style: none; }
 .temperament-row { font-size: 14px; }

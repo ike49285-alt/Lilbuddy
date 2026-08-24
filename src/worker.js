@@ -13,6 +13,10 @@ import { hashNumbers, cyrb128, makeRng } from './rng.js';
 import { placeName, personName } from './names.js';
 
 const hashString = (s) => cyrb128(s)[0] | 0;
+// Mirrors sim.js's ALLIANCE_STRONG (duplicated, not imported — worker.js
+// speaks to the UI in finished shapes, same reasoning as WAR_CAUSE_LABELS
+// below).
+const ALLIANCE_STRONG = 4;
 
 let sim = null;
 let running = false;
@@ -28,14 +32,9 @@ let sendUnrest = false;  // whether the live frame should carry the unrest overl
 
 const FRAME_MS = 50;       // cap UI updates at 20/sec; the sim is not slowed by this
 const BUDGET_MS = 12;      // per-slice tick budget, leaves the worker responsive
+const CATCHUP_BUDGET_MS = 20000; // wall-clock cap on how long idle catch-up is allowed to take
 
-// `restoreState` (from a save/load or the continue slot) skips seeding a
-// fresh world and repopulates live state instead — see Simulation's
-// constructor. Either way this ends the same way: announce the world (the
-// same 'world' message a normal seed-init sends), which is what gets app.js
-// to build a renderer/climate strip and start the run loop.
-function init(seed, restoreState = null) {
-  sim = new Simulation(seed, restoreState);
+function announceWorld() {
   const w = sim.world;
   const palette = biomePalette(w);
   // Copies, because these are transferred and the sim still needs its own.
@@ -53,6 +52,39 @@ function init(seed, restoreState = null) {
     snapshot: sim.snapshot(),
     tiers: TIERS.map((t) => ({ key: t.key, label: t.label, maxAge: t.maxAge, budget: t.budget })),
   }, [raster.buffer, palette.buffer, sx.buffer, sy.buffer]);
+}
+
+// Idle-game catch-up: fast-forwards a freshly restored sim by the real time
+// that passed while its tab was closed, one bounded slice at a time (the
+// same BUDGET_MS the live loop() below already ticks in) so the worker
+// stays responsive and the page can show live progress. Capped by
+// wall-clock time, not by years — a short absence catches up exactly and
+// near-instantly; a very long one catches up as much as fits in
+// CATCHUP_BUDGET_MS and lands there, rather than blocking for minutes.
+function catchUp(target, deadline, onDone) {
+  const sliceStart = now();
+  while (sim.year < target && now() - sliceStart < BUDGET_MS) sim.tick();
+  self.postMessage({ type: 'catchingUp', year: sim.year, target });
+  if (sim.year >= target || now() >= deadline) { onDone(); return; }
+  setTimeout(() => catchUp(target, deadline, onDone), 0);
+}
+
+// `restoreState` (from a save/load or the continue slot) skips seeding a
+// fresh world and repopulates live state instead — see Simulation's
+// constructor. `catchUpYears`, when positive, fast-forwards that restored
+// world by the real time that passed while its tab was closed (see
+// catchUp() above) before announcing it — see the note on realChance() in
+// sim.js for why this is safe: catch-up is just running the same tick()
+// loop more times, nothing new. Either way this ends the same: announce the
+// world (the same 'world' message a normal seed-init sends), which is what
+// gets app.js to build a renderer/climate strip and start the run loop.
+function init(seed, restoreState = null, catchUpYears = 0) {
+  sim = new Simulation(seed, restoreState);
+  if (catchUpYears > 0) {
+    catchUp(sim.year + catchUpYears, now() + CATCHUP_BUDGET_MS, announceWorld);
+  } else {
+    announceWorld();
+  }
 }
 
 function loop() {
@@ -175,6 +207,23 @@ function grudgesFor(key) {
     .filter(Boolean); // a grudge against a state the archive has forgotten isn't worth showing
 }
 
+// Live alliances for a still-standing state — the positive counterpart to
+// grudgesFor above, same shape, same reasoning: a fallen state carries none.
+function alliesFor(key) {
+  const [kind, raw] = key.split(':');
+  if (kind !== 'p') return [];
+  const pol = sim.polities.get(Number(raw));
+  if (!pol || !pol.allies.size) return [];
+  return [...pol.allies.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([id, weight]) => {
+      const rec = sim.memory.entity(entityKey('p', id));
+      return rec ? { key: entityKey('p', id), name: rec.name, weight, strong: weight >= ALLIANCE_STRONG } : null;
+    })
+    .filter(Boolean);
+}
+
 // A culture's family tree, read straight off the archive: every culture's
 // entity record already carries the id of the one it split from, so the
 // ancestor chain is a walk up `.parent`, no live sim state needed and no
@@ -256,8 +305,18 @@ function houseLineage(key) {
     })
     .filter(Boolean);
 
+  const allies = [...house.allies.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([id, weight]) => {
+      const other = sim.houses.get(id);
+      const name = other ? other.name : (sim.memory.entity(entityKey('d', id)) || {}).name;
+      return name ? { key: entityKey('d', id), name, weight, strong: weight >= ALLIANCE_STRONG } : null;
+    })
+    .filter(Boolean);
+
   return {
-    thrones, heldPast, feuds,
+    thrones, heldPast, feuds, allies,
     tendencies: { ...house.tendencies, momentum: house.momentum },
   };
 }
@@ -363,6 +422,7 @@ const WAR_CAUSE_LABELS = {
   revanche: 'ground lost in an earlier war',
   dynastic: 'a feud between ruling houses',
   culture: 'kin under foreign rule',
+  alliance: 'a call to arms from an ally',
 };
 
 // Whether the thing still exists in the world, as opposed to only in the
@@ -589,6 +649,7 @@ self.addEventListener('message', (event) => {
           type: 'entity', key: msg.key, record, events, related,
           alive: isAlive(msg.key), now: sim.year, cell: locationOf(msg.key),
           grudges: grudgesFor(msg.key),
+          alliances: alliesFor(msg.key),
           tree: record && record.kind === 'c' ? cultureTree(msg.key, record) : null,
           lineage: houseLineage(msg.key),
         });
@@ -638,10 +699,21 @@ self.addEventListener('message', (event) => {
         self.postMessage({ type: 'savedWorld', state: sim.saveState() });
         break;
 
+      // Test-only: every live polity's and house's alliance weights, for
+      // verifying formation/strengthening/decay over a long run. Mirrors
+      // the selftest/digest/debugHouses pattern — a narrow, explicit seam.
+      case 'debugAlliances':
+        self.postMessage({
+          type: 'debugAlliances',
+          polities: [...sim.polities.values()].map((p) => ({ id: p.id, allies: [...p.allies.entries()] })),
+          houses: [...sim.houses.values()].map((h) => ({ id: h.id, allies: [...h.allies.entries()] })),
+        });
+        break;
+
       case 'loadWorld':
         running = false;
         if (timer) { clearTimeout(timer); timer = null; }
-        init(msg.state.seed, msg.state);
+        init(msg.state.seed, msg.state, msg.catchUpYears || 0);
         break;
 
       default:

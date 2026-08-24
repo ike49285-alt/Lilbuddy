@@ -38,6 +38,8 @@ const STRUCTURAL = {
   'war.end':           1.6,
   'war.stalemate':     1.1,
   'war.sack':          1.5,
+  'alliance.formed':   1.5,  // comparable to war.begin/revolt — the seed of a relationship
+  'alliance.broken':   1.8,  // a betrayal outlasts the pact it broke, close to culture.split
   'house.found':       0.8,
   'house.ascend':      3.4,
   'house.deposed':     2.2,

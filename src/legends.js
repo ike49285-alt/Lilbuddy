@@ -10,11 +10,23 @@
 const NUM = new Intl.NumberFormat('en-US');
 const n = (v) => (typeof v === 'number' ? NUM.format(Math.round(v)) : v);
 
+// A value can be one function (unchanged, most types) or an array of them —
+// for the handful of types a reader sees over and over, so the record
+// doesn't read as one chronicler's fixed phrasebook. describe() below picks
+// among an array deterministically per event (ev.id % length), never at
+// random: the same event always reads the same way if you revisit it, and
+// this file never touches sim.rng/realChance() — it only ever formats
+// already-decided event data.
 const TEMPLATES = {
   'world.begin': () => 'The world takes shape.',
 
-  'polity.found': (d) => `${d.name} is founded${d.ruler ? `, under ${d.ruler}` : ''}`
-    + `${d.house ? ` of the house of ${d.house}` : ''}.`,
+  'polity.found': [
+    (d) => `${d.name} is founded${d.ruler ? `, under ${d.ruler}` : ''}`
+      + `${d.house ? ` of the house of ${d.house}` : ''}.`,
+    (d) => `${d.ruler ? `${d.ruler} founds` : `${d.name} is founded as`} ${d.name}`
+      + `${d.house ? `, the house of ${d.house} at its head` : ''}.`,
+    (d) => `A new state rises: ${d.name}${d.ruler ? `, under ${d.ruler}` : ''}.`,
+  ],
   'polity.collapse': (d) => (d.parts
     ? `${d.name} breaks apart after ${n(d.years)} years, into ${d.parts} successor states.`
     : `${d.name} comes to an end after ${n(d.years)} years.`),
@@ -23,21 +35,51 @@ const TEMPLATES = {
   'settle.found': (d) => `${d.name} is founded.`,
   'settle.city': (d) => `${d.name} grows into a city of ${n(d.population)}.`,
 
-  'war.begin': (d) => `${d.attacker} marches on ${d.defender}`
-    + `${d.strength ? `, ${n(d.strength)} under arms` : ''}`
-    + `${d.cause ? `, over ${d.cause}` : ''}.`,
-  'war.end': (d) => `${d.victor} prevails over ${d.defeated} after ${n(d.years)} years`
-    + `${d.taken ? `, taking ${n(d.taken)} regions` : ''}`
-    + `${d.dead ? `; ${n(d.dead)} dead` : ''}.`,
+  'war.begin': [
+    (d) => `${d.attacker} marches on ${d.defender}`
+      + `${d.strength ? `, ${n(d.strength)} under arms` : ''}`
+      + `${d.cause ? `, over ${d.cause}` : ''}.`,
+    (d) => `War: ${d.attacker} against ${d.defender}`
+      + `${d.cause ? `, the cause ${d.cause}` : ''}${d.strength ? `; ${n(d.strength)} take up arms` : ''}.`,
+    (d) => `${d.defender} finds itself at war with ${d.attacker}`
+      + `${d.cause ? `, over ${d.cause}` : ''}.`,
+  ],
+  'war.end': [
+    (d) => `${d.victor} prevails over ${d.defeated} after ${n(d.years)} years`
+      + `${d.taken ? `, taking ${n(d.taken)} regions` : ''}`
+      + `${d.dead ? `; ${n(d.dead)} dead` : ''}.`,
+    (d) => `After ${n(d.years)} years, ${d.defeated} yields to ${d.victor}`
+      + `${d.taken ? `, ${n(d.taken)} regions changing hands` : ''}.`,
+    (d) => `${d.victor} carries the war against ${d.defeated}`
+      + `${d.dead ? `, at a cost of ${n(d.dead)} dead` : ''}.`,
+  ],
   'war.stalemate': (d) => `The war between ${d.a} and ${d.b} burns out after `
     + `${n(d.years)} years with the border unmoved`
     + `${d.dead ? `; ${n(d.dead)} dead` : ''}.`,
   'war.sack': (d) => `${d.by} sacks ${d.place}${d.dead ? `, ${n(d.dead)} put to the sword` : ''}.`,
 
-  'ruler.crown': (d) => `${d.name} of the house of ${d.house} is crowned in ${d.polity}.`,
-  'ruler.die': (d) => `${d.name} dies after ${n(d.years)} years on the throne of ${d.polity}.`,
+  'ruler.crown': [
+    (d) => `${d.name} of the house of ${d.house} is crowned in ${d.polity}.`,
+    (d) => `${d.polity} crowns ${d.name}, of the house of ${d.house}.`,
+    (d) => `The house of ${d.house} places ${d.name} on the throne of ${d.polity}.`,
+  ],
+  'ruler.die': [
+    (d) => `${d.name} dies after ${n(d.years)} years on the throne of ${d.polity}.`,
+    (d) => `Death comes for ${d.name}, ${n(d.years)} years upon the throne of ${d.polity}.`,
+    (d) => `${d.name}'s reign over ${d.polity} ends after ${n(d.years)} years.`,
+  ],
   'ruler.slain': (d) => `${d.name} of ${d.polity} is slain after ${n(d.years)} years.`,
   'succession.crisis': (d) => `The succession in ${d.polity} is disputed; the house of ${d.house} takes the throne.`,
+
+  'alliance.formed': [
+    (d) => `${d.a} and ${d.b} swear an alliance${d.strong ? ', bound by more than words' : ''}.`,
+    (d) => `${d.a} and ${d.b} pledge mutual defense${d.strong ? ', a bond both sides mean to keep' : ''}.`,
+    (d) => `An alliance is struck between ${d.a} and ${d.b}.`,
+  ],
+  'alliance.broken': [
+    (d) => `${d.a} and ${d.b} go to war despite their old alliance; the pact is void.`,
+    (d) => `The alliance between ${d.a} and ${d.b} is broken; they go to war regardless.`,
+  ],
 
   'revolt': (d) => `${d.rebel} rises against ${d.against}.`,
 
@@ -64,7 +106,12 @@ const TEMPLATES = {
 };
 
 export function describe(ev) {
-  const template = TEMPLATES[ev.type];
+  let template = TEMPLATES[ev.type];
+  // A deterministic pick, not a random one: the same event id always
+  // resolves to the same phrasing, so revisiting a page never shows the
+  // record changing its story on you — only different events of the same
+  // type read differently from each other.
+  if (Array.isArray(template)) template = template[ev.id % template.length];
   let text = template ? template(ev.data || {}) : ev.type;
 
   // A record that has been merged and re-merged is no longer a report, it is a

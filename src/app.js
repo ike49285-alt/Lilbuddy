@@ -62,6 +62,7 @@ let showUnrest = false;   // the map overlay toggle; persists across a new world
 let replayTimer = null;   // the war replay's auto-play interval, if one is running
 let lastAutoSave = 0;     // performance.now() of the last continue-slot write
 let lastAutoSnapshot = null; // the most recent full-state snapshot the continue slot has captured
+let pendingHashSeed = null;  // set by startFromState; resolved to a real hash once catch-up lands
 
 // ---------------------------------------------------------------------------
 // saved worlds
@@ -128,7 +129,7 @@ function deleteSave(id) {
 function loadSave(entry) {
   sheetStack.length = 0;
   hideSheet();
-  startFromState(entry.state);
+  startFromState(entry.state, entry.savedAt);
 }
 
 function defaultSaveLabel() {
@@ -216,21 +217,50 @@ function start(seed, openKey = null, openYear = null) {
 // new world from — worker.js's 'loadWorld' still ends by announcing a
 // 'world' message, so onMessage's existing case 'world' handles the rest
 // (renderer, climate strip, run loop) exactly as it does for a fresh seed.
-function startFromState(state) {
+//
+// `savedAt` — the wall-clock time this snapshot was captured — is what
+// makes this an idle game rather than a save file: real time that passed
+// since then is fast-forwarded before the world goes live (worker.js's
+// catchUp(), one real second away mapping to one sim year, the same 1:1
+// the live rate already uses). Omit it (entity deep-links never have one)
+// to load with no catch-up, unchanged from before this existed.
+function startFromState(state, savedAt = null) {
   resetWorker();
   currentSeed = state.seed;
   pendingKey = null;
   pendingYear = null;
-  worker.postMessage({ type: 'loadWorld', state });
+  const catchUpYears = savedAt ? Math.max(0, Math.floor((Date.now() - savedAt) / 1000)) : 0;
+  if (catchUpYears > 0) {
+    dom.mapnote.hidden = false;
+    dom.mapnote.textContent = `Welcome back — catching up on ${formatYear(catchUpYears)} years while you were away…`;
+  }
+  worker.postMessage({ type: 'loadWorld', state, catchUpYears });
   if (showUnrest) worker.postMessage({ type: 'overlay', unrest: true });
-  const want = hashFor(state.seed, null, state.year);
-  if (location.hash !== want) safeHistoryCall(() => history.replaceState(null, '', want));
+  // The hash can't be set to state.year here and be done with it: catch-up
+  // may land later than that, and by an amount that isn't known until the
+  // worker actually finishes (it's capped by wall-clock budget, not fixed).
+  // case 'world' below sets it once the real landing year is in.
+  pendingHashSeed = state.seed;
 }
 
 function onMessage(event) {
   const msg = event.data;
   switch (msg.type) {
+    case 'catchingUp':
+      // Arrives in slices while worker.js's catchUp() fast-forwards a
+      // reloaded world — updates the "Welcome back" note live rather than
+      // leaving it stuck at the original estimate for the whole stretch.
+      dom.mapnote.hidden = false;
+      dom.mapnote.textContent = `Welcome back — at year ${formatYear(msg.year)}, catching up to now…`;
+      break;
+
     case 'world': {
+      dom.mapnote.hidden = true;
+      if (pendingHashSeed) {
+        const want = hashFor(pendingHashSeed, null, msg.snapshot.year);
+        pendingHashSeed = null;
+        if (location.hash !== want) safeHistoryCall(() => history.replaceState(null, '', want));
+      }
       tiers = msg.tiers;
       renderer = new MapRenderer(dom.map, msg.world);
       renderer.resize();
@@ -1068,6 +1098,10 @@ function renderEntity(msg) {
     parts.push(heading('Rivalries'), rivalryList(msg.grudges));
   }
 
+  if (msg.alliances && msg.alliances.length) {
+    parts.push(heading('Alliances'), rivalryList(msg.alliances, 8, 'alliances')); // setAlliance()'s own cap in sim.js
+  }
+
   if (msg.tree) parts.push(...renderCultureTree(msg.tree));
 
   if (msg.lineage) parts.push(...renderHouseLineage(msg.lineage));
@@ -1077,12 +1111,14 @@ function renderEntity(msg) {
   dom.sheetBody.replaceChildren(...parts);
 }
 
-// Live grudges, hottest first — a bar under each name rather than a bare
-// number, since the weight's own scale (capped at 6, decaying yearly) isn't
-// meaningful to a reader on its own.
-function rivalryList(grudges, max = 6) {
+// Live grudges (or alliances — same shape, semantically inverted), hottest
+// first — a bar under each name rather than a bare number, since the
+// weight's own scale isn't meaningful to a reader on its own. `variant`
+// only picks the CSS class, so an alliance bar doesn't literally read as
+// ".rivalries" in the DOM.
+function rivalryList(grudges, max = 6, variant = 'rivalries') {
   const ul = document.createElement('ul');
-  ul.className = 'linkrow rivalries';
+  ul.className = `linkrow ${variant}`;
   for (const g of grudges) {
     const li = document.createElement('li');
     const btn = document.createElement('button');
@@ -1177,7 +1213,8 @@ function renderHouseLineage(lineage) {
   const parts = [];
   const t = lineage.tendencies;
   const hasTemperament = t && (Math.abs(t.aggression) > 1e-9 || Math.abs(t.restoration) > 1e-9 || Math.abs(t.momentum) > 1e-9);
-  if (!lineage.thrones.length && !lineage.heldPast.length && !lineage.feuds.length && !hasTemperament) return parts;
+  if (!lineage.thrones.length && !lineage.heldPast.length && !lineage.feuds.length
+      && !lineage.allies.length && !hasTemperament) return parts;
 
   parts.push(heading('Lineage'));
 
@@ -1224,6 +1261,10 @@ function renderHouseLineage(lineage) {
 
   if (lineage.feuds.length) {
     parts.push(heading('Feuds'), rivalryList(lineage.feuds, 8)); // feud()'s own cap in sim.js
+  }
+
+  if (lineage.allies.length) {
+    parts.push(heading('Alliances'), rivalryList(lineage.allies, 8, 'alliances')); // setAlliance()'s own cap
   }
 
   // What this house has learned from its own wins and losses, and from
@@ -1795,7 +1836,28 @@ window.Chronicle = {
   // Test-only: every live house's learned state, for verifying house
   // learning is actually doing something over a run.
   debugHouses: () => ask({ type: 'debugHouses' }, 'debugHouses'),
+  // Test-only: every live polity's and house's alliance weights, for
+  // verifying alliance formation/strengthening/decay over a run.
+  debugAlliances: () => ask({ type: 'debugAlliances' }, 'debugAlliances'),
+  // Test-only: the same 'events' query the record feed uses, exposed
+  // directly — for scanning a wide year range for a specific event type
+  // (e.g. an alliance-spawned war) rather than only whatever the live feed
+  // happens to be showing right now.
+  debugEvents: (from, to, limit) => ask({ type: 'events', from, to, limit }, 'events'),
 };
 
+// A bare visit (no seed in the URL — the common case, someone just opening
+// the app) resumes the world you left rather than rolling a new one, same
+// as any idle game reopening to where it was: closing the tab doesn't lose
+// the world, and startFromState's catch-up (see above) accounts for the
+// real time that passed while it was closed. An explicit #seed URL — a
+// shared link, or one typed into the box — is unaffected: that's still a
+// request to start that specific world, not "pick up where I left off."
 const route = readHash();
-start(route.seed || randomSeed(), route.key, route.year);
+if (route.seed) {
+  start(route.seed, route.key, route.year);
+} else {
+  const continueSlot = loadSaveData().continueSlot;
+  if (continueSlot && continueSlot.state) startFromState(continueSlot.state, continueSlot.savedAt);
+  else start(randomSeed(), null, null);
+}
