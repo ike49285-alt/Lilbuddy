@@ -162,7 +162,7 @@ function start(seed, openKey = null, openYear = null) {
   // world — a fresh worker doesn't know it was on until told.
   if (showUnrest) worker.postMessage({ type: 'overlay', unrest: true });
   const want = hashFor(seed, openKey, openYear);
-  if (location.hash !== want) history.replaceState(null, '', want);
+  if (location.hash !== want) safeHistoryCall(() => history.replaceState(null, '', want));
 }
 
 function onMessage(event) {
@@ -503,11 +503,28 @@ function backToNow() {
 
 const sheetStack = [];
 
+// Some hosting contexts (an Artifact's iframe, notably — a <base href> that
+// points to a different effective origin than the document's own) make the
+// History API throw a SecurityError on pushState/replaceState. That must
+// never take the rest of a click handler down with it: this flips off after
+// the first failure so we stop retrying an API that isn't going to work,
+// and every caller degrades to "just show the content" instead of crashing
+// mid-open. history.back() itself is safe either way — it navigates within
+// whatever's already on the stack rather than constructing a new URL — but
+// it must never be called when nothing of ours actually got pushed there,
+// or it would navigate the visitor out of the page entirely.
+let historyUsable = true;
+function safeHistoryCall(fn) {
+  if (!historyUsable) return false;
+  try { fn(); return true; } catch { historyUsable = false; return false; }
+}
+
 function showSheet(entry, push = true) {
   if (push) {
     sheetStack.push(entry);
     const url = entry.hash || location.href;
-    history.pushState({ sheetDepth: sheetStack.length }, '', url);
+    const pushed = safeHistoryCall(() => history.pushState({ sheetDepth: sheetStack.length }, '', url));
+    if (!pushed) sheetStack.pop(); // couldn't actually record it — don't pretend we did
   }
   renderSheet(entry);
   dom.sheet.hidden = false;
@@ -538,7 +555,7 @@ function hideSheet() {
 // them — tapping from a war to one of its belligerents and back should land
 // on the war, not on the map.
 function closeSheet() {
-  if (sheetStack.length) history.back();
+  if (historyUsable && sheetStack.length) history.back();
   else hideSheet();
 }
 
