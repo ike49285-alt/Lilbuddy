@@ -1844,6 +1844,9 @@ window.Chronicle = {
   // (e.g. an alliance-spawned war) rather than only whatever the live feed
   // happens to be showing right now.
   debugEvents: (from, to, limit) => ask({ type: 'events', from, to, limit }, 'events'),
+  // Test-only: every live polity's stability/exhaustion/activeWork and its
+  // ruler's works count, for verifying notable works' mechanical effects.
+  debugPolities: () => ask({ type: 'debugPolities' }, 'debugPolities'),
 };
 
 // A bare visit (no seed in the URL — the common case, someone just opening

@@ -10,6 +10,16 @@
 const NUM = new Intl.NumberFormat('en-US');
 const n = (v) => (typeof v === 'number' ? NUM.format(Math.round(v)) : v);
 
+// A notable work's four kinds, each carrying a real effect in sim.js — see
+// NOTABLE_WORK_MIN_REIGN and neighbors there. Three read as positive legacy;
+// tyranny is the deliberate darker variant.
+const NOTABLE_PHRASES = {
+  wonder: (d) => `${d.name} raises a great work at ${d.place}, still spoken of generations on.`,
+  golden: (d) => `Under ${d.name}, ${d.polity} enters an age of plenty.`,
+  scholar: (d) => `${d.name} gathers scholars to ${d.place}; learning flourishes.`,
+  tyranny: (d) => `${d.name} is remembered for a harsh hand over ${d.polity}.`,
+};
+
 // A value can be one function (unchanged, most types) or an array of them —
 // for the handful of types a reader sees over and over, so the record
 // doesn't read as one chronicler's fixed phrasebook. describe() below picks
@@ -70,6 +80,11 @@ const TEMPLATES = {
   ],
   'ruler.slain': (d) => `${d.name} of ${d.polity} is slain after ${n(d.years)} years.`,
   'succession.crisis': (d) => `The succession in ${d.polity} is disputed; the house of ${d.house} takes the throne.`,
+
+  // The variety here comes from which kind of deed it was, not several
+  // wordings of one fixed idea — richer than the array-of-phrasings pattern
+  // above would give it.
+  'ruler.notable': (d) => (NOTABLE_PHRASES[d.kind] || (() => `${d.name} is remembered.`))(d),
 
   'alliance.formed': [
     (d) => `${d.a} and ${d.b} swear an alliance${d.strong ? ', bound by more than words' : ''}.`,

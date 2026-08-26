@@ -124,6 +124,26 @@ const ALLIANCE_PULL_MAX = 2;             // at most this many strong allies pull
 const ALLIANCE_PULL_CHANCE = 0.35;       // a qualifying strong ally doesn't always answer the call
 const ALLIANCE_VICTORY_BUMP = 1.5;       // weight added when a pulled-in ally's war ends in their favor
 
+// Notable works. A long, settled reign can do something worth remembering
+// beyond crowning, warring and dying — each kind carries a real, bounded
+// mechanical effect (see notableWork()), not just a line in the record.
+const NOTABLE_WORK_MIN_REIGN = 20;        // years on the throne before eligible
+const NOTABLE_WORK_CHANCE = 0.0018;       // per-tick chance once eligible — rarer than a war trigger
+const NOTABLE_WORK_STABILITY_MIN = 0.15;  // needs a reasonably settled realm, not a crisis
+const MAX_WORKS_PER_RULER = 2;            // keeps it feeling earned, not spammy
+const NOTABLE_WORK_PRESTIGE = 1;          // small house.prestige bump — same scale as taking a throne
+const GOLDEN_AGE_DURATION = 80;           // years the golden-age bonus lasts
+const GOLDEN_STABILITY_BONUS = 0.006;     // added to the existing +0.0055 baseline regen — roughly doubles it
+const GOLDEN_EXHAUSTION_RELIEF = 0.006;   // extra exhaustion recovery per tick while active
+const TYRANNY_DURATION = 60;              // years the tyranny trade-off lasts
+const TYRANNY_WAR_SWING = 0.002;          // added war-trigger chance while active — comparable in scale
+                                           // to AGGRESSION_WAR_SWING's own max
+const TYRANNY_STABILITY_PENALTY = 0.004;  // subtracted from stability regen while active
+const WONDER_SETTLEMENT_POP_BONUS = 0.15; // one-time fractional bump to the seat's population figure
+const SCHOLAR_KNOWLEDGE_BONUS = 40;       // one-time bump to the epoch ratchet's knowledge stock —
+                                           // meaningful (~10% of the smallest EPOCH_THRESHOLDS gap)
+                                           // without alone jumping an era
+
 // Why states go to war. Written down at the declaration so the archive has a
 // true answer to lose when it later swaps in a stock one.
 const WAR_CAUSES = {
@@ -135,6 +155,11 @@ const WAR_CAUSES = {
   culture: 'kin under foreign rule',
   alliance: 'a call to arms from an ally',
 };
+
+// Three read as positive legacy; tyranny is a deliberate darker variant with
+// a genuine trade-off (see notableWork()) — real chronicles remember rulers
+// for cruelty as often as for grandeur.
+const WORK_KINDS = ['wonder', 'golden', 'scholar', 'tyranny'];
 
 // The one deliberate exception to this file's own rule (see the header
 // comment, and rng.js): whether a war actually triggers, once a house's
@@ -160,6 +185,7 @@ function polityToState(pol) {
     neighbors: [...pol.neighbors], borderCells: pol.borderCells.slice(),
     wars: [...pol.wars], exhaustion: pol.exhaustion,
     peakCells: pol.peakCells, peakYear: pol.peakYear,
+    activeWork: pol.activeWork ? { ...pol.activeWork } : null,
   };
 }
 
@@ -176,6 +202,7 @@ function stateToPolity(s) {
     neighbors: new Set(s.neighbors), borderCells: s.borderCells.slice(), cellList: [],
     wars: new Set(s.wars), exhaustion: s.exhaustion,
     peakCells: s.peakCells, peakYear: s.peakYear,
+    activeWork: s.activeWork ? { ...s.activeWork } : null,
   };
 }
 
@@ -472,6 +499,7 @@ export class Simulation {
       died: null,
       lifespan: Math.max(24, Math.round(this.rng.normal(58, 13))),
       crowned: null,
+      works: 0,   // count of notable-work events this ruler has had, capped low
     };
     this.people.set(id, person);
     this.memory.register('n', id, {
@@ -798,6 +826,39 @@ export class Simulation {
     }
   }
 
+  // A ruler's own reign doing something worth remembering, beyond ruling.
+  // Each kind carries a real, bounded mechanical effect, not just a line in
+  // the record: wonder and scholar apply once, immediately; golden and
+  // tyranny set a temporary activeWork slot that politiesPass reads every
+  // tick until it expires on its own.
+  notableWork(pol, ruler) {
+    const house = this.houses.get(pol.houseId);
+    const kind = pol.stability > 0.4 ? this.rng.pick(['wonder', 'golden', 'scholar'])
+      : pol.stability < 0.1 ? this.rng.pick(['wonder', 'scholar', 'tyranny'])
+      : this.rng.pick(WORK_KINDS);
+    ruler.works++;
+    if (house) house.prestige += NOTABLE_WORK_PRESTIGE;
+    const seat = this.settlements.get(pol.seat);
+
+    if (kind === 'golden') pol.activeWork = { kind, until: this.year + GOLDEN_AGE_DURATION };
+    else if (kind === 'tyranny') pol.activeWork = { kind, until: this.year + TYRANNY_DURATION };
+    else if (kind === 'wonder' && seat) seat.pop *= 1 + WONDER_SETTLEMENT_POP_BONUS;
+    else if (kind === 'scholar') this.knowledge += SCHOLAR_KNOWLEDGE_BONUS;
+    // epochPass's own clamp to [0, ceiling] runs on its normal 50-year
+    // cadence and reconciles this the same way it reconciles any other
+    // knowledge delta — no special-casing needed here.
+
+    this.memory.push({
+      t: this.year, type: 'ruler.notable', mag: 0.6,
+      refs: [
+        entityKey('n', ruler.id), entityKey('p', pol.id),
+        ...(house ? [entityKey('d', house.id)] : []),
+      ],
+      cell: pol.capital,
+      data: { name: ruler.name, polity: pol.name, kind, place: seat ? seat.name : pol.name },
+    });
+  }
+
   // Houses are bounded the same way cultures are: a hard cap, and the least
   // consequential go first. A house with a living throne is never retired.
   retireHouses() {
@@ -887,6 +948,7 @@ export class Simulation {
       neighbors: new Set(), borderCells: [], cellList: [],
       wars: new Set(), exhaustion: 0,
       peakCells: 1, peakYear: this.year,
+      activeWork: null,  // { kind, until } | null — one bounded active-effect slot
     };
     this.polities.set(id, pol);
     this.takeThrone(house, pol);
@@ -1290,6 +1352,12 @@ export class Simulation {
         this.succeed(pol, ruler);
       }
 
+      // A notable work's ongoing effect (golden age or tyranny) expires on
+      // its own — see notableWork() below for where it's set.
+      if (pol.activeWork && this.year >= pol.activeWork.until) pol.activeWork = null;
+      const goldenActive = !!pol.activeWork && pol.activeWork.kind === 'golden';
+      const tyrannyActive = !!pol.activeWork && pol.activeWork.kind === 'tyranny';
+
       // Holding more than the era can administer is the main brake on runaway
       // empires; without it one polity eats the map and stays there. Expressed
       // as a fraction of what the era can hold, so the same coefficient works
@@ -1303,10 +1371,12 @@ export class Simulation {
       }
       const unrestAvg = sample ? unrestSum / sample : 0;
 
-      pol.exhaustion = Math.max(0, pol.exhaustion - 0.012);
+      pol.exhaustion = Math.max(0, pol.exhaustion - 0.012 - (goldenActive ? GOLDEN_EXHAUSTION_RELIEF : 0));
       pol.stability = Math.max(-1, Math.min(1,
         pol.stability
         + 0.0055
+        + (goldenActive ? GOLDEN_STABILITY_BONUS : 0)
+        - (tyrannyActive ? TYRANNY_STABILITY_PENALTY : 0)
         - over * 0.012
         - pol.exhaustion * 0.02
         - unrestAvg * 0.012
@@ -1320,13 +1390,29 @@ export class Simulation {
       }
 
       if (unrestAvg > 0.55 && this.rng.chance(0.004)) this.revolt(pol);
+
+      // Notable works: a long, settled reign occasionally does something
+      // worth remembering beyond ruling. Has nothing to do with neighbours,
+      // so it sits outside the neighbor-gated block below. Re-fetches the
+      // ruler rather than reusing the `ruler` local above — that local can
+      // point at someone succeed() just replaced earlier this same tick.
+      const currentRuler = this.people.get(pol.rulerId);
+      if (currentRuler && currentRuler.works < MAX_WORKS_PER_RULER && !pol.activeWork
+          && this.year - currentRuler.crowned >= NOTABLE_WORK_MIN_REIGN
+          && pol.stability > NOTABLE_WORK_STABILITY_MIN
+          && this.rng.chance(NOTABLE_WORK_CHANCE)) {
+        this.notableWork(pol, currentRuler);
+      }
+
       if (pol.neighbors.size) {
         // The one place a house's learning reaches into the world: its
         // learned aggression nudges the odds a war actually starts, and this
         // roll — unlike everything else in this file — is real, not seeded.
+        // A tyranny in effect adds its own swing to that same real roll.
         const house = this.houses.get(pol.houseId);
         const aggr = house ? house.tendencies.aggression : 0;
-        if (realChance(WAR_TRIGGER_BASE + aggr * AGGRESSION_WAR_SWING)) this.considerWar(pol);
+        const tyrannySwing = tyrannyActive ? TYRANNY_WAR_SWING : 0;
+        if (realChance(WAR_TRIGGER_BASE + aggr * AGGRESSION_WAR_SWING + tyrannySwing)) this.considerWar(pol);
 
         // Alliance formation: one more seeded roll per polity per tick, same
         // loop, no new scan. Iterates the neighbour Set directly rather than
@@ -1942,6 +2028,9 @@ export class Simulation {
     }
     for (const pol of this.polities.values()) {
       if (pol.allies.size > MAX_ALLIES) problems.push(`polity ${pol.id} allies exceed cap`);
+    }
+    for (const p of this.people.values()) {
+      if (p.works > MAX_WORKS_PER_RULER) problems.push(`person ${p.id} works exceed cap`);
     }
     return problems;
   }

@@ -48,6 +48,7 @@ const STRUCTURAL = {
   'ruler.crown':       0.7,
   'ruler.die':         0.6,
   'ruler.slain':       1.3,
+  'ruler.notable':      1.6,  // memorable and personal, not world-historical — near war.begin
   'succession.crisis': 1.4,
   'revolt':            1.5,
   'culture.split':     1.7,

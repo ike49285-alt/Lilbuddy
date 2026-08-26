@@ -710,6 +710,21 @@ self.addEventListener('message', (event) => {
         });
         break;
 
+      // Test-only: every live polity's stability/exhaustion/activeWork and
+      // ruler works count, for verifying notable works' mechanical effects
+      // (not just that the event was logged). Mirrors the
+      // selftest/debugHouses/debugAlliances pattern.
+      case 'debugPolities':
+        self.postMessage({
+          type: 'debugPolities',
+          polities: [...sim.polities.values()].map((p) => ({
+            id: p.id, stability: p.stability, exhaustion: p.exhaustion,
+            activeWork: p.activeWork ? { ...p.activeWork } : null,
+            rulerWorks: (sim.people.get(p.rulerId) || {}).works ?? null,
+          })),
+        });
+        break;
+
       case 'loadWorld':
         running = false;
         if (timer) { clearTimeout(timer); timer = null; }
