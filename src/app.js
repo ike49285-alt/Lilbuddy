@@ -43,12 +43,14 @@ function onMessage(e) {
   }
 }
 
-function formatTime(years) {
-  if (years < 1e6) return `${Math.round(years / 1000)} kyr`;
-  return `${(years / 1e6).toFixed(2)} Myr`;
-}
 const n0 = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
 const n1 = new Intl.NumberFormat('en-US', { maximumFractionDigits: 1 });
+
+function formatTime(years) {
+  if (years < 10000) return `${n0.format(years)} yr`;
+  if (years < 1e6) return `${(years / 1000).toFixed(1)} kyr`;
+  return `${(years / 1e6).toFixed(3)} Myr`;
+}
 
 function draw(f) {
   renderer.draw(f);
@@ -75,8 +77,8 @@ function draw(f) {
   drawSpark($('sp-q'), Array.from(f.history.mouthQ, (q) => q / 3.156e7), { color: water, fill: soft, grid });
   $('sp-sea-v').textContent = `${n0.format(f.seaLevel)} m`;
   $('sp-q-v').textContent = `${n0.format(st.mouthQ / 3.156e7)} m³/s`;
-  const span = f.history.sea.length * 5;
-  $('sp-from').textContent = span >= 1000 ? `−${n1.format(span / 1000)} Myr` : `−${span} kyr`;
+  const span = (f.history.sea.length * f.history.everyYears) / 1000;
+  $('sp-from').textContent = span >= 1000 ? `−${n1.format(span / 1000)} Myr` : `−${n0.format(span)} kyr`;
 
   // 10 km = 20 cells.
   $('scale-bar').style.width = `${(20 / f.W) * $('map').clientWidth}px`;

@@ -1,7 +1,7 @@
 // landscape.js — the river. A landscape-evolution model: fill the
 // depressions, route the water, cut the channels, move the sediment.
 //
-// Each step is one thousand years. Erosion uses the stream-power law
+// Each step is one century. Erosion uses the stream-power law
 // E = K · Q^m · S solved implicitly down the drainage tree (Braun & Willett,
 // 2013) with m = 0.5, so it stays stable however large the step. Sediment is carried
 // downstream and dropped where the river loses the power to carry it: on
@@ -10,7 +10,7 @@
 
 import { CELL_M } from './terrain.js';
 
-export const STEP_YEARS = 1000;
+export const STEP_YEARS = 100;
 
 const K_FLUVIAL = 1.2e-5;       // erodibility, per year, with Q in m³/yr
 const CHANNEL_Q = 2.5e6;        // m³/yr: below this, water runs off as sheetwash and doesn't cut a channel
@@ -18,12 +18,12 @@ const SQRT_CHANNEL_Q = Math.sqrt(CHANNEL_Q);
 const ICE_EROSION = 2.4;        // multiplier under ice
 const TRANSPORT = 25;           // transport capacity as a multiple of detachment
 const DEPOSIT_RATE = 0.35;      // fraction of over-capacity load dropped per cell
-const MAX_DEPOSIT_M = 3;        // per cell per step
+const MAX_DEPOSIT_M = 0.3;      // per cell per step
 const LAKE_TRAP = 0.92;         // fraction of a river's load a lake keeps
-const HILL_DIFF = 0.003;        // per-step hillslope smoothing on land
+const HILL_DIFF = 0.0003;       // per-step hillslope smoothing on land
 const SLIDE_SLOPE = 0.5;        // beyond this gradient a slope fails and slides
-const SLIDE_RATE = 0.18;
-const MARINE_DIFF = 0.12;       // per-step smoothing on the sea floor
+const SLIDE_RATE = 0.05;
+const MARINE_DIFF = 0.012;      // per-step smoothing on the sea floor
 const FILL_EPS = 1e-3;          // metres of gradient imposed across filled lakes
 const LAKE_MIN_DEPTH = 0.75;    // metres of standing water before a cell counts as lake
 const SHELF_SPILL_HOPS = 48;
@@ -81,7 +81,7 @@ export class Landscape {
     this.measure(climate);
   }
 
-  // One thousand years.
+  // One century.
   step(climate) {
     const { N, z, uplift } = this;
     const dt = STEP_YEARS;
@@ -255,7 +255,7 @@ export class Landscape {
         eroded[i] -= dep / area;
         qs[i] -= dep;
       }
-      fert[i] = fert[i] * 0.97 + Math.max(0, -eroded[i]) * 0.03;
+      fert[i] = fert[i] * 0.997 + Math.max(0, -eroded[i]) * 0.03;
       if (r !== i) qs[r] += qs[i];
     }
     // Sediment arriving at the sea: fill the shallows at the mouth up to just

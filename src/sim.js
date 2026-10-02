@@ -8,7 +8,7 @@ import { Landscape, STEP_YEARS } from './landscape.js';
 export { STEP_YEARS };
 
 export const HISTORY_LEN = 240;     // samples kept for the sparklines
-export const HISTORY_EVERY = 5;     // steps between samples (240 × 5 kyr = 1.2 Myr)
+export const HISTORY_EVERY = 50;    // steps between samples (240 × 5 kyr = 1.2 Myr)
 
 export class Simulation {
   constructor(seed) {
@@ -79,7 +79,7 @@ export class Simulation {
         precip: climate.precip,
       },
       stats: { ...land.stats },
-      history: { sea: this.series('sea'), mouthQ: this.series('mouthQ') },
+      history: { sea: this.series('sea'), mouthQ: this.series('mouthQ'), everyYears: HISTORY_EVERY * STEP_YEARS },
     };
   }
 }
