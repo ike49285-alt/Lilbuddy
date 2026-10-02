@@ -185,13 +185,13 @@ export class Simulation {
       W: land.W,
       H: land.H,
       years: this.years,
-      z: Float32Array.from(land.z),
+      z: new Float32Array(land.z),
       Q: land.Q.slice(),
       rec: land.rec.slice(),
       ocean: land.ocean.slice(),
       lake: land.lake.slice(),
       ice: land.ice.slice(),
-      snow: Uint8Array.from(land.snow, (m) => Math.min(255, Math.round(m * 510))),
+      snow: snowBytes(land.snow),
       seaLevel: climate.seaLevel,
       climate: {
         label: climate.label(),
@@ -211,6 +211,16 @@ export class Simulation {
       history: { sea: this.series('sea'), mouthQ: this.series('mouthQ'), everyYears: HISTORY_EVERY },
     };
   }
+}
+
+// Snow depth as bytes for drawing: 2 mm of water per step, capped.
+function snowBytes(snow) {
+  const out = new Uint8Array(snow.length);
+  for (let i = 0; i < snow.length; i++) {
+    const v = Math.round(snow[i] * 510);
+    out[i] = v > 255 ? 255 : v;
+  }
+  return out;
 }
 
 export function stateTransferList(state) {
