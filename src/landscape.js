@@ -1,7 +1,8 @@
 // landscape.js — the river. A landscape-evolution model: fill the
 // depressions, route the water, cut the channels, move the sediment.
 //
-// Each step is one century. Erosion uses the stream-power law
+// A step can be anything from a day to MAX_STEP_YEARS; every rate below is
+// per year and scaled by the step. Erosion uses the stream-power law
 // E = K · Q^m · S solved implicitly down the drainage tree (Braun & Willett,
 // 2013) with m = 0.5, so it stays stable however large the step. Sediment is carried
 // downstream and dropped where the river loses the power to carry it: on
@@ -10,7 +11,7 @@
 
 import { CELL_M } from './terrain.js';
 
-export const STEP_YEARS = 100;
+export const MAX_STEP_YEARS = 1000;   // the step the model was tuned at; the host never asks for more
 
 const K_FLUVIAL = 1.2e-5;       // erodibility, per year, with Q in m³/yr
 const CHANNEL_Q = 2.5e6;        // m³/yr: below this, water runs off as sheetwash and doesn't cut a channel
@@ -18,12 +19,14 @@ const SQRT_CHANNEL_Q = Math.sqrt(CHANNEL_Q);
 const ICE_EROSION = 2.4;        // multiplier under ice
 const TRANSPORT = 25;           // transport capacity as a multiple of detachment
 const DEPOSIT_RATE = 0.35;      // fraction of over-capacity load dropped per cell
-const MAX_DEPOSIT_M = 0.3;      // per cell per step
+const MAX_DEPOSIT_PER_YR = 0.003; // metres per cell
 const LAKE_TRAP = 0.92;         // fraction of a river's load a lake keeps
-const HILL_DIFF = 0.0003;       // per-step hillslope smoothing on land
+const HILL_DIFF_PER_YR = 3e-6;  // hillslope smoothing on land
 const SLIDE_SLOPE = 0.5;        // beyond this gradient a slope fails and slides
-const SLIDE_RATE = 0.05;
-const MARINE_DIFF = 0.012;      // per-step smoothing on the sea floor
+const SLIDE_PER_YR = 5e-4;
+const MARINE_DIFF_PER_YR = 1.2e-4; // smoothing on the sea floor
+const MAX_SMOOTH = 0.2;         // keeps the explicit smoothing stable at any step
+const FERT_MEMORY_YR = 33000;   // how long a floodplain stays rich after the river stops feeding it
 const FILL_EPS = 1e-3;          // metres of gradient imposed across filled lakes
 const LAKE_MIN_DEPTH = 0.75;    // metres of standing water before a cell counts as lake
 const SHELF_SPILL_HOPS = 48;
@@ -82,9 +85,8 @@ export class Landscape {
   }
 
   // One century.
-  step(climate) {
+  step(climate, dt) {
     const { N, z, uplift } = this;
-    const dt = STEP_YEARS;
     for (let i = 0; i < N; i++) {
       const u = uplift[i];
       z[i] += u > 0 ? u * dt * Math.max(0, 1 - z[i] / MAX_UPLIFT_Z) : u * dt;
@@ -93,9 +95,9 @@ export class Landscape {
     this.markOcean(climate.seaLevel);
     this.priorityFlood(climate.seaLevel);
     this.accumulate(climate);
-    this.erode(climate);
-    this.transport(climate.seaLevel);
-    this.diffuse();
+    this.erode(climate, dt);
+    this.transport(climate.seaLevel, dt);
+    this.diffuse(dt);
     this.measure(climate);
   }
 
@@ -204,9 +206,8 @@ export class Landscape {
 
   // Implicit stream-power incision, downstream first so every receiver is
   // already at its new height when its donors are solved.
-  erode(climate) {
+  erode(climate, dt) {
     const { W, N, z, filled, rec, stack, Q, kfac, ice, ocean, eroded } = this;
-    const dt = STEP_YEARS;
     const sea = climate.seaLevel;
     eroded.fill(0);
     for (let s = 0; s < N; s++) {
@@ -229,11 +230,12 @@ export class Landscape {
 
   // Carry the eroded rock downstream, upstream first. Drop what the river
   // can't carry; lakes trap nearly everything; the sea takes the rest.
-  transport(sea) {
+  transport(sea, dt) {
     const { W, N, z, filled, rec, stack, Q, qs, eroded, ocean, fert, kfac } = this;
     const area = CELL_M * CELL_M;
-    const dt = STEP_YEARS;
     qs.fill(0);
+    const keep = Math.exp(-dt / FERT_MEMORY_YR);
+    const perCentury = 100 / dt;
     for (let s = N - 1; s >= 0; s--) {
       const i = stack[s];
       qs[i] += eroded[i] * area;
@@ -248,14 +250,15 @@ export class Landscape {
         const zr = ocean[r] ? sea : z[r];
         const slope = Math.max(0, z[i] - zr) / dist;
         const cap = TRANSPORT * K_FLUVIAL * kfac[i] * Math.sqrt(Q[i]) * slope * dt * area;
-        if (qs[i] > cap) dep = Math.min((qs[i] - cap) * DEPOSIT_RATE, MAX_DEPOSIT_M * area);
+        if (qs[i] > cap) dep = Math.min((qs[i] - cap) * DEPOSIT_RATE, MAX_DEPOSIT_PER_YR * dt * area);
       }
       if (dep > 0) {
         z[i] += dep / area;
         eroded[i] -= dep / area;
         qs[i] -= dep;
       }
-      fert[i] = fert[i] * 0.997 + Math.max(0, -eroded[i]) * 0.03;
+      // Fertility tracks recent deposition, in metres per century.
+      fert[i] = fert[i] * keep + (1 - keep) * 10 * Math.max(0, -eroded[i]) * perCentury;
       if (r !== i) qs[r] += qs[i];
     }
     // Sediment arriving at the sea: fill the shallows at the mouth up to just
@@ -293,8 +296,11 @@ export class Landscape {
 
   // Hillslopes creep, over-steep slopes slide, and the sea floor smooths out
   // the delta front.
-  diffuse() {
+  diffuse(dt) {
     const { W, H, z, ocean, tmp } = this;
+    const kHill = Math.min(MAX_SMOOTH, HILL_DIFF_PER_YR * dt);
+    const kSea = Math.min(MAX_SMOOTH, MARINE_DIFF_PER_YR * dt);
+    const kSlide = Math.min(MAX_SMOOTH, SLIDE_PER_YR * dt);
     for (let y = 0; y < H; y++) {
       for (let x = 0; x < W; x++) {
         const i = y * W + x;
@@ -303,14 +309,14 @@ export class Landscape {
         if (x < W - 1) { sum += z[i + 1]; n++; }
         if (y > 0) { sum += z[i - W]; n++; }
         if (y < H - 1) { sum += z[i + W]; n++; }
-        let k = ocean[i] ? MARINE_DIFF : HILL_DIFF;
+        let k = ocean[i] ? kSea : kHill;
         if (!ocean[i]) {
           let steep = 0;
           if (x > 0) steep = Math.max(steep, Math.abs(z[i] - z[i - 1]));
           if (x < W - 1) steep = Math.max(steep, Math.abs(z[i] - z[i + 1]));
           if (y > 0) steep = Math.max(steep, Math.abs(z[i] - z[i - W]));
           if (y < H - 1) steep = Math.max(steep, Math.abs(z[i] - z[i + W]));
-          if (steep > SLIDE_SLOPE * CELL_M) k = SLIDE_RATE;
+          if (steep > SLIDE_SLOPE * CELL_M) k = Math.max(k, kSlide);
         }
         tmp[i] = z[i] + k * (sum / n - z[i]);
       }

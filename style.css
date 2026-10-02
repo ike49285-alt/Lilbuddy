@@ -10,6 +10,8 @@
   --water-soft: rgba(42, 108, 156, 0.14);
   --ice: #8aa3b4;
   --chip: #dde5e1;
+  --warn: #b5482f;
+  --bar: rgba(247, 248, 245, 0.94);
 
   --font-display: 'Barlow Condensed', 'Arial Narrow', 'Roboto Condensed', sans-serif;
   --font-body: 'Barlow', system-ui, -apple-system, 'Segoe UI', sans-serif;
@@ -27,6 +29,8 @@
     --water-soft: rgba(111, 177, 223, 0.16);
     --ice: #a9bfcc;
     --chip: #233032;
+    --warn: #ef8a6f;
+    --bar: rgba(24, 33, 34, 0.94);
     color-scheme: dark;
   }
 }
@@ -40,6 +44,8 @@
   --water-soft: rgba(111, 177, 223, 0.16);
   --ice: #a9bfcc;
   --chip: #233032;
+  --warn: #ef8a6f;
+  --bar: rgba(24, 33, 34, 0.94);
   color-scheme: dark;
 }
 
@@ -57,7 +63,7 @@ body {
   max-width: 1180px;
   margin: 0 auto;
   padding-inline: 16px;
-  padding-block: 12px 24px;
+  padding-block: 12px calc(var(--bar-h, 120px) + 16px);
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -78,13 +84,7 @@ h1 {
   text-transform: uppercase;
 }
 .sub { margin: 4px 0 0; color: var(--muted); font-size: 14px; }
-.clock { display: flex; align-items: center; gap: 8px; }
-.time {
-  font: 500 22px/1 var(--font-data);
-  font-variant-numeric: tabular-nums;
-  min-width: 6.5ch;
-  text-align: right;
-}
+
 .chip {
   font: 500 12px/1 var(--font-display);
   letter-spacing: 0.08em;
@@ -136,31 +136,6 @@ h1 {
 }
 
 .panel { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
-
-.speed {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  overflow: hidden;
-  background: var(--panel);
-}
-.speed button {
-  min-height: 44px;
-  border: 0;
-  border-left: 1px solid var(--line);
-  background: transparent;
-  color: var(--ink);
-  font: 500 15px/1 var(--font-display);
-  letter-spacing: 0.04em;
-  cursor: pointer;
-}
-.speed button:first-child { border-left: 0; }
-.speed button.on { background: var(--water); color: var(--paper); }
-.speed button:focus-visible, .seed button:focus-visible, .seed input:focus-visible {
-  outline: 2px solid var(--water);
-  outline-offset: 2px;
-}
 
 .stats {
   margin: 0;
@@ -256,4 +231,109 @@ h1 {
 @media (min-width: 860px) {
   .layout { grid-template-columns: auto minmax(320px, 420px); justify-content: center; gap: 28px; }
   .map { width: min(100%, calc((100vh - 120px) * 128 / 224)); margin: 0; }
+}
+
+/* Time bar — fixed to the bottom, after Universe Sandbox's: play/pause, a
+   log-scale rate slider between − and +, a rate list, and a note when the
+   sim can't keep up. */
+.timebar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 10;
+  box-sizing: border-box;
+  padding: 8px 16px calc(8px + env(safe-area-inset-bottom, 0px));
+  background: var(--bar);
+  border-top: 1px solid var(--line);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 6px;
+}
+.tb-main, .tb-slide { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.time {
+  flex: 1 1 auto;
+  min-width: 0;
+  font: 500 20px/1 var(--font-data);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.timebar button, .timebar select {
+  min-height: 44px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--ink);
+  cursor: pointer;
+}
+.timebar button:focus-visible, .timebar select:focus-visible, .timebar input:focus-visible {
+  outline: 2px solid var(--water);
+  outline-offset: 2px;
+}
+.play {
+  width: 52px;
+  display: grid;
+  place-items: center;
+  background: var(--water) !important;
+  border-color: var(--water) !important;
+  color: var(--paper) !important;
+}
+.play svg { width: 18px; height: 18px; fill: currentColor; }
+.play .i-play { display: none; }
+.play[aria-pressed="true"] .i-play { display: block; }
+.play[aria-pressed="true"] .i-pause { display: none; }
+.timebar select {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 48%;
+  padding: 0 8px;
+  font: 500 15px/1 var(--font-data);
+}
+.step {
+  width: 44px;
+  flex: none;
+  font: 500 22px/1 var(--font-data);
+}
+#rate-slider {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 44px;
+  margin: 0;
+  accent-color: var(--water);
+}
+.tb-status {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font: 400 12px/1.2 var(--font-data);
+  color: var(--muted);
+}
+.lag { color: var(--warn); }
+.lag.neutral { color: var(--muted); }
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+@media (min-width: 860px) {
+  .timebar {
+    grid-template-columns: auto minmax(240px, 520px) auto;
+    justify-content: center;
+    align-items: center;
+    column-gap: 16px;
+  }
+  .tb-main { order: 0; }
+  .time { flex: none; min-width: 11ch; text-align: right; }
+  .tb-slide { order: 1; }
+  .tb-status { order: 2; flex-direction: column; justify-content: center; min-width: 16ch; }
+  .timebar select { max-width: none; }
+  .map { width: min(100%, calc((100vh - 140px) * 128 / 224)); }
 }

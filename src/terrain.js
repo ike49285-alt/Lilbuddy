@@ -37,8 +37,10 @@ export function generateTerrain(rng) {
         const t = 1 - v / SHORE_ROW;
         base = 4 + 900 * Math.pow(t, 1.35);
       } else if (v < SHELF_EDGE) {
+        // Starts level with the land and steepens gently, so there's no kink
+        // at the coast for the hillshade to pick out.
         const t = (v - SHORE_ROW) / (SHELF_EDGE - SHORE_ROW);
-        base = -4 - 136 * t;
+        base = 4 - 144 * Math.pow(t, 1.5);
       } else {
         // Past the shelf break the floor drops into a deep basin, so the delta
         // can build for millions of years without filling the sea.
@@ -49,11 +51,12 @@ export function generateTerrain(rng) {
       const axis = axis0 + axisWobble * Math.sin(v * 5.1 + axis0 * 9);
       const across = Math.abs(u - axis);
       const trough = v < SHORE_ROW
-        ? (40 + 220 * (1 - v / SHORE_ROW)) * Math.pow(Math.min(1, across * 2.2), 1.3)
+        ? 260 * (1 - v / SHORE_ROW) * Math.pow(Math.min(1, across * 2.2), 1.3)
         : 0;
       // Low-amplitude roughness: enough to break up the ramp into many
       // competing trickles, not enough to pre-draw any valleys.
-      const r = fbm(rough, u * 7, v * 12, 5) * 18 * (v < SHORE_ROW ? 1 : 0.3);
+      const seaward = smooth((v - SHORE_ROW + 0.03) / 0.06);
+      const r = fbm(rough, u * 7, v * 12, 5) * 18 * (1 - 0.7 * seaward);
       // A ragged summit line rather than a ruler edge.
       const rr = v < 0.18 ? fbm(ridge, u * 5, 0.5, 3) * 60 * (1 - v / 0.18) : 0;
       z[i] = base + trough + r + rr;
@@ -62,10 +65,15 @@ export function generateTerrain(rng) {
       // with slight subsidence under the coast so the delta has room to build.
       // Flanking hills keep rising too, so the valley is held in place by
       // the tectonics rather than relying on the starting shape.
-      const off = (v - SHORE_ROW) / (1 - SHORE_ROW);
+      // Land uplift and coastal subsidence blend across a band at the shore,
+      // so no fault scarp grows along the old coastline.
+      const off = Math.max(0, (v - SHORE_ROW) / (1 - SHORE_ROW));
       const range = v < 0.5 ? 0.0011 * Math.pow(1 - v / 0.5, 1.2) : 0;
-      const flank = v < SHORE_ROW ? 0.00016 * Math.pow(Math.min(1, across * 2.2), 2) * (1 - 0.6 * v / SHORE_ROW) : 0;
-      uplift[i] = v > SHORE_ROW ? -0.00008 * (1 + 2 * off) : Math.max(range, flank);
+      const flankTaper = 1 - smooth((v - SHORE_ROW + 0.12) / 0.12);
+      const flank = 0.00016 * Math.pow(Math.min(1, across * 2.2), 2) * (1 - 0.6 * Math.min(1, v / SHORE_ROW)) * flankTaper;
+      const sink = -0.00008 * (1 + 2 * off);
+      const toSea = smooth((v - SHORE_ROW + 0.02) / 0.06);
+      uplift[i] = Math.max(range, flank) * (1 - toSea) + sink * toSea;
 
       // Patches of harder and softer rock: gorges where the river meets the
       // hard stuff, wider reaches through the soft.

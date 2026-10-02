@@ -3,12 +3,12 @@
 import { makeRng } from './rng.js';
 import { generateTerrain } from './terrain.js';
 import { Climate } from './climate.js';
-import { Landscape, STEP_YEARS } from './landscape.js';
+import { Landscape, MAX_STEP_YEARS } from './landscape.js';
 
-export { STEP_YEARS };
+export { MAX_STEP_YEARS };
 
-export const HISTORY_LEN = 240;     // samples kept for the sparklines
-export const HISTORY_EVERY = 50;    // steps between samples (240 × 5 kyr = 1.2 Myr)
+export const HISTORY_LEN = 240;       // samples kept for the sparklines
+export const HISTORY_EVERY = 5000;    // years between samples (240 × 5 kyr = 1.2 Myr)
 
 export class Simulation {
   constructor(seed) {
@@ -17,7 +17,9 @@ export class Simulation {
     const terrain = generateTerrain(this.rng);
     this.climate = new Climate(this.rng);
     this.land = new Landscape(terrain);
+    this.years = 0;
     this.steps = 0;
+    this.nextSample = 0;
     this.history = {
       sea: new Float32Array(HISTORY_LEN),
       mouthQ: new Float32Array(HISTORY_LEN),
@@ -26,26 +28,26 @@ export class Simulation {
     };
     this.climate.set(0);
     this.land.prime(this.climate);
-    this.record();
+    this.sample();
   }
 
-  get years() {
-    return this.steps * STEP_YEARS;
-  }
-
-  step() {
+  // Advances the world by dt years (at most MAX_STEP_YEARS).
+  step(dt) {
+    const d = Math.min(MAX_STEP_YEARS, dt);
+    this.years += d;
     this.steps++;
     this.climate.set(this.years);
-    this.land.step(this.climate);
-    if (this.steps % HISTORY_EVERY === 0) this.record();
+    this.land.step(this.climate, d);
+    if (this.years >= this.nextSample) this.sample();
   }
 
-  record() {
+  sample() {
     const h = this.history;
     h.sea[h.head] = this.climate.seaLevel;
     h.mouthQ[h.head] = this.land.stats.mouthQ;
     h.head = (h.head + 1) % HISTORY_LEN;
     h.count = Math.min(HISTORY_LEN, h.count + 1);
+    this.nextSample = (Math.floor(this.years / HISTORY_EVERY) + 1) * HISTORY_EVERY;
   }
 
   // Oldest-first copy of a history series.
@@ -79,7 +81,7 @@ export class Simulation {
         precip: climate.precip,
       },
       stats: { ...land.stats },
-      history: { sea: this.series('sea'), mouthQ: this.series('mouthQ'), everyYears: HISTORY_EVERY * STEP_YEARS },
+      history: { sea: this.series('sea'), mouthQ: this.series('mouthQ'), everyYears: HISTORY_EVERY },
     };
   }
 }

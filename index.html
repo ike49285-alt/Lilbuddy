@@ -16,12 +16,9 @@
   <header class="top">
     <div class="brand">
       <h1>Headwaters</h1>
-      <p class="sub">A river cuts its valley, a century at a time.</p>
+      <p class="sub">A river cuts its valley through deep time.</p>
     </div>
-    <div class="clock">
-      <span id="time" class="time">0 kyr</span>
-      <span id="phase" class="chip">interglacial</span>
-    </div>
+    <span id="phase" class="chip">interglacial</span>
   </header>
 
   <main class="layout">
@@ -32,13 +29,6 @@
     </figure>
 
     <section class="panel" aria-label="Controls and measurements">
-      <div class="speed" role="group" aria-label="Speed">
-        <button type="button" id="speed-pause" data-speed="pause">Pause</button>
-        <button type="button" id="speed-10" data-speed="10" class="on">1 kyr/s</button>
-        <button type="button" id="speed-50" data-speed="50">5 kyr/s</button>
-        <button type="button" id="speed-max" data-speed="max">Max</button>
-      </div>
-
       <dl class="stats">
         <div><dt>Main river</dt><dd id="s-len">—</dd></div>
         <div><dt>Flow at the mouth</dt><dd id="s-q">—</dd></div>
@@ -74,9 +64,27 @@
         <button type="button" id="seed-random">Random</button>
       </form>
 
-      <p class="note">Each step is 100 years. The rains begin light on a young mountain front still being pushed upward, so the first water is a trickle. Over millions of years it finds its way, cuts gorges, captures neighbouring streams and builds a delta, while ice ages pull the sea back across the shelf and let it return.</p>
+      <p class="note">Time runs at the rate set in the bar below, from a day to a hundred thousand years per second. The rains begin light on a young mountain front still being pushed upward, so the first water is a trickle. Over millions of years it finds its way, cuts gorges, captures neighbouring streams and builds a delta, while ice ages pull the sea back across the shelf and let it return.</p>
     </section>
   </main>
+
+  <div class="timebar" id="timebar" role="region" aria-label="Time">
+    <div class="tb-main">
+      <span id="time" class="time" aria-live="off">0 yr</span>
+      <button type="button" id="play" class="play" aria-label="Pause" title="Pause (Space)">
+        <svg class="i-pause" viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1"/><rect x="9.5" y="2" width="3.5" height="12" rx="1"/></svg>
+        <svg class="i-play" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.2v11.6c0 .6.7 1 1.2.6l8.4-5.8a.75.75 0 0 0 0-1.2L5.2 1.6C4.7 1.2 4 1.6 4 2.2z"/></svg>
+      </button>
+      <label class="visually-hidden" for="rate-select">Time rate</label>
+      <select id="rate-select"></select>
+    </div>
+    <div class="tb-slide">
+      <button type="button" id="slower" class="step" aria-label="Slower" title="Slower (−)">−</button>
+      <input id="rate-slider" type="range" min="0" max="1000" step="1" value="0" aria-label="Time rate" />
+      <button type="button" id="faster" class="step" aria-label="Faster" title="Faster (+)">+</button>
+    </div>
+    <div class="tb-status"><span id="tick">tick 100 yr</span><span id="lag" class="lag"></span></div>
+  </div>
 </div>
 <!-- app:end -->
 <script type="module" src="src/app.js"></script>

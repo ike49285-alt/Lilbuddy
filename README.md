@@ -3,7 +3,7 @@
 A river starts as a trickle on a young mountain front and carves its valley to
 the sea over millions of years, while ice ages come and go.
 
-Each step is 100 years. The landscape is a standard landscape-evolution
+Time runs at a chosen rate, from a day to 100,000 years per second; each tick adapts from a day up to 1,000 years. The landscape is a standard landscape-evolution
 model: depressions are filled into lakes (priority-flood), water is routed
 downhill (D8), channels cut by the stream-power law solved implicitly
 (Braun & Willett 2013), sediment is carried downstream and dropped on fans,

@@ -51,6 +51,21 @@ export class MapRenderer {
     return { w, h };
   }
 
+  // Fixed, per-cell offsets for river points, so channels don't sit on the
+  // grid. The same cell always gets the same offset.
+  points(W, H) {
+    if (this.px && this.px.length === W * H) return;
+    this.px = new Float32Array(W * H);
+    this.py = new Float32Array(W * H);
+    this.mainDonor = new Int32Array(W * H);
+    for (let i = 0; i < W * H; i++) {
+      const h = Math.imul(i + 1, 2654435761) >>> 0;
+      const h2 = Math.imul(h ^ (h >>> 15), 2246822519) >>> 0;
+      this.px[i] = (i % W) + 0.5 + ((h & 0xffff) / 65535 - 0.5) * 0.6;
+      this.py[i] = ((i / W) | 0) + 0.5 + ((h2 & 0xffff) / 65535 - 0.5) * 0.6;
+    }
+  }
+
   draw(f) {
     const { W, H, z, ocean, lake, ice, Q, rec, seaLevel } = f;
     if (!this.image || this.image.width !== W || this.image.height !== H) {
@@ -59,10 +74,13 @@ export class MapRenderer {
       this.image = this.tctx.createImageData(W, H);
     }
     const px = this.image.data;
-    // Light from the north-west, slopes exaggerated so relief reads at this scale.
+    // Light from the north-west; slopes exaggerated so relief reads at this
+    // scale. A 3×3 Sobel gradient keeps the shading from combing along the
+    // grid's diagonals.
     const EXAG = 7;
     const L = Math.hypot(1, 1, 1.4);
     const flat = 1.4 / L;
+    const Z = (x, y) => z[Math.min(H - 1, Math.max(0, y)) * W + Math.min(W - 1, Math.max(0, x))];
     for (let y = 0; y < H; y++) {
       for (let x = 0; x < W; x++) {
         const i = y * W + x;
@@ -73,10 +91,10 @@ export class MapRenderer {
           const c = ramp(SEA, -e);
           r = c[1]; g = c[2]; b = c[3];
         } else {
-          const zl = z[x > 0 ? i - 1 : i], zr = z[x < W - 1 ? i + 1 : i];
-          const zu = z[y > 0 ? i - W : i], zd = z[y < H - 1 ? i + W : i];
-          const gx = ((zr - zl) / (2 * CELL_M)) * EXAG;
-          const gy = ((zd - zu) / (2 * CELL_M)) * EXAG;
+          const gx = ((Z(x + 1, y - 1) + 2 * Z(x + 1, y) + Z(x + 1, y + 1))
+            - (Z(x - 1, y - 1) + 2 * Z(x - 1, y) + Z(x - 1, y + 1))) / (8 * CELL_M) * EXAG;
+          const gy = ((Z(x - 1, y + 1) + 2 * Z(x, y + 1) + Z(x + 1, y + 1))
+            - (Z(x - 1, y - 1) + 2 * Z(x, y - 1) + Z(x + 1, y - 1))) / (8 * CELL_M) * EXAG;
           const dot = (gx + gy + 1.4) / (Math.hypot(gx, gy, 1) * L);
           const shade = Math.max(0.45, Math.min(1.35, dot / flat));
           if (ice[i]) {
@@ -98,27 +116,48 @@ export class MapRenderer {
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
     ctx.drawImage(this.terrain, 0, 0, w, h);
+    this.drawRivers(f, w, h);
+  }
 
-    // Rivers: one path per width class, thinnest first.
+  // Each river cell draws one curve: from halfway along the reach coming in
+  // from its main tributary, bending through its own point, to halfway along
+  // the reach going out. Joined end to end these make smooth channels; a
+  // tributary finishes with a short line into the point it joins.
+  drawRivers(f, w, h) {
+    const { W, H, ocean, lake, Q, rec } = f;
+    const N = W * H;
+    this.points(W, H);
+    const { px: X, py: Y, mainDonor } = this;
+    const MIN_Q = 3e6;
+    mainDonor.fill(-1);
+    for (let i = 0; i < N; i++) {
+      if (Q[i] < MIN_Q) continue;
+      const r = rec[i];
+      if (r === i) continue;
+      const d = mainDonor[r];
+      if (d < 0 || Q[i] > Q[d]) mainDonor[r] = i;
+    }
     const sx = w / W, sy = h / H;
     const cell = Math.min(sx, sy);
     const CLASSES = 10;
     const paths = Array.from({ length: CLASSES }, () => new Path2D());
     const used = new Uint8Array(CLASSES);
-    for (let i = 0; i < W * H; i++) {
-      if (ocean[i] || lake[i]) continue;
-      const q = Q[i];
-      if (q < 3e6) continue;
+    for (let i = 0; i < N; i++) {
+      if (ocean[i] || lake[i] || Q[i] < MIN_Q) continue;
       const r = rec[i];
       if (r === i) continue;
-      const lq = Math.log10(q);
-      const k = Math.max(0, Math.min(CLASSES - 1, Math.floor((lq - 6.48) / 0.34)));
-      const x0 = ((i % W) + 0.5) * sx, y0 = (((i / W) | 0) + 0.5) * sy;
-      const x1 = ((r % W) + 0.5) * sx, y1 = (((r / W) | 0) + 0.5) * sy;
-      paths[k].moveTo(x0, y0);
-      paths[k].lineTo(x1, y1);
+      const k = Math.max(0, Math.min(CLASSES - 1, Math.floor((Math.log10(Q[i]) - 6.48) / 0.34)));
+      const p = paths[k];
+      const xi = X[i] * sx, yi = Y[i] * sy;
+      const xr = X[r] * sx, yr = Y[r] * sy;
+      const d = mainDonor[i];
+      if (d >= 0) p.moveTo((X[d] * sx + xi) / 2, (Y[d] * sy + yi) / 2);
+      else p.moveTo(xi, yi);
+      p.quadraticCurveTo(xi, yi, (xi + xr) / 2, (yi + yr) / 2);
+      if (mainDonor[r] !== i || ocean[r] || lake[r]) p.lineTo(xr, yr);
       used[k] = 1;
     }
+    const ctx = this.ctx;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
     for (let k = 0; k < CLASSES; k++) {

@@ -1,38 +1,65 @@
 // host.js — runs a Simulation against a clock and answers the page's
 // messages. The worker wraps this; nothing here touches the DOM.
+//
+// The page asks for a rate in sim-years per real second. Each tick's length
+// adapts to it: about ten ticks a second, never shorter than a day and never
+// longer than the model's maximum step. When ticks can't be computed fast
+// enough the actual rate falls behind the target, and the page says so.
 
-import { Simulation, transferList } from './sim.js';
+import { Simulation, transferList, MAX_STEP_YEARS } from './sim.js';
 
+const DAY = 1 / 365.25;
+const TICKS_PER_SECOND = 10;
 const BUDGET_MS = 12;       // longest a single slice may run before yielding
 const FRAME_MS = 66;        // ~15 frames a second to the page
-const TICK_MS = 16;
+const LOOP_MS = 16;
+
+export function tickFor(rate) {
+  if (!Number.isFinite(rate)) return MAX_STEP_YEARS;
+  return Math.max(DAY, Math.min(MAX_STEP_YEARS, rate / TICKS_PER_SECOND));
+}
 
 export function createHost(post) {
   let sim = null;
-  let speed = 10;           // steps per second; Infinity = as fast as possible
+  let rate = 1000;          // target sim-years per second; Infinity = as fast as possible
   let paused = false;
-  let debt = 0;
+  let debt = 0;             // sim-years owed
   let last = 0;
   let lastFrame = 0;
   let timer = null;
-  let stepMs = 0;           // smoothed cost of one step, reported for the page
+  let stepMs = 0;
+  let tickYears = tickFor(rate);
+  // Rolling measure of the actual rate: [real ms, sim years] samples.
+  const recent = [];
+
+  function actualRate() {
+    if (recent.length < 2) return 0;
+    const a = recent[0], b = recent[recent.length - 1];
+    const ms = b[0] - a[0];
+    return ms > 0 ? ((b[1] - a[1]) * 1000) / ms : 0;
+  }
 
   function sendFrame() {
     const f = sim.frame();
     f.stepMs = stepMs;
     f.paused = paused;
+    f.targetRate = rate;
+    f.actualRate = paused ? 0 : actualRate();
+    f.tickYears = tickYears;
     post({ type: 'frame', frame: f }, transferList(f));
     lastFrame = performance.now();
   }
 
-  function runSteps(n) {
+  // Runs ticks until the owed time is paid or the slice budget is spent.
+  function runFor(years) {
     const start = performance.now();
     let done = 0;
-    while (done < n && performance.now() - start < BUDGET_MS) {
+    while (done < years - 1e-9 && performance.now() - start < BUDGET_MS) {
       const t0 = performance.now();
-      sim.step();
+      const d = Math.min(tickYears, years - done);
+      sim.step(d);
       stepMs = stepMs * 0.9 + (performance.now() - t0) * 0.1;
-      done++;
+      done += d;
     }
     return done;
   }
@@ -44,17 +71,23 @@ export function createHost(post) {
     const dt = Math.min(250, now - last);
     last = now;
     if (!paused) {
-      if (speed === Infinity) {
-        runSteps(1e9);
+      if (rate === Infinity) {
+        runFor(Infinity);
         debt = 0;
       } else {
-        debt = Math.min(debt + (speed * dt) / 1000, speed * 0.5 + 1);
-        const want = Math.floor(debt);
-        if (want > 0) debt -= runSteps(want);
+        // Owed time accrues continuously but only whole ticks are run, so a
+        // one-day tick at 1 day/s runs once a second, not as fractions.
+        debt = Math.min(debt + (rate * dt) / 1000, rate * 0.5 + tickYears);
+        if (debt >= tickYears - 1e-12) {
+          const whole = Math.floor(debt / tickYears + 1e-9) * tickYears;
+          debt -= runFor(whole);
+        }
       }
     }
+    recent.push([now, sim.years]);
+    while (recent.length > 2 && now - recent[0][0] > 1000) recent.shift();
     if (now - lastFrame >= FRAME_MS) sendFrame();
-    timer = setTimeout(loop, TICK_MS);
+    timer = setTimeout(loop, LOOP_MS);
   }
 
   function start() {
@@ -67,24 +100,38 @@ export function createHost(post) {
       case 'init':
         sim = new Simulation(msg.seed);
         debt = 0;
+        recent.length = 0;
         sendFrame();
         start();
         break;
-      case 'speed':
-        speed = msg.speed === 'max' ? Infinity : Number(msg.speed);
-        paused = false;
+      case 'rate':
+        rate = msg.rate === 'max' ? Infinity : Math.max(DAY, Number(msg.rate));
+        tickYears = tickFor(rate);
         debt = 0;
+        recent.length = 0;
+        sendFrame();
         break;
       case 'pause':
         paused = true;
+        recent.length = 0;
         sendFrame();
         break;
-      // Test hook: advance synchronously to a step count, then report.
-      case 'runTo':
-        while (sim.steps < msg.steps) sim.step();
+      case 'play':
+        paused = false;
+        debt = 0;
+        recent.length = 0;
+        last = performance.now();
         sendFrame();
-        post({ type: 'ranTo', steps: sim.steps });
         break;
+      // Test hook: advance synchronously to a year using the given tick.
+      case 'runTo': {
+        const tick = msg.tick || 100;
+        while (sim.years < msg.years - 1e-9) sim.step(Math.min(tick, msg.years - sim.years));
+        recent.length = 0;
+        sendFrame();
+        post({ type: 'ranTo', years: sim.years });
+        break;
+      }
     }
   };
 }
