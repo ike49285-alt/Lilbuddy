@@ -50,6 +50,12 @@ export class Simulation {
     this.life.step(this.land, this.climate, d, this.years);
     this.syncCover();
     const st = this.life.stats;
+    const back = this.life.returned;
+    if (back.length) {
+      const names = back.slice(0, 3).map((sp) => sp.name).join(', ') + (back.length > 3 ? '…' : '');
+      const at = back[0].N.findIndex((n) => n > 0);
+      this.disasters.milestone(this, `${back.length === 1 ? 'A species returns' : `${back.length} species return`} from the sea: ${names}`, Math.max(0, at));
+    }
     if (ashore === null && st.firstLandAnimal !== null) {
       this.disasters.milestone(this, `The first animal walks out of the water: ${st.firstLandAnimalName}`, st.firstLandAnimalAt);
     }

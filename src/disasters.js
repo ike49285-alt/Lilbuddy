@@ -146,10 +146,19 @@ export class Disasters {
     if (size === 2 && (kind === 'volcano' || kind === 'meteor')) this.winter(sim, kind, ev);
     if (ev.hurt) {
       const lost = sim.life.settle(sim.years);
-      ev.lost = (ev.lost || 0) + lost;
-      if (ev.winter) ev.label += `; ${ev.winter}: ${lost ? `${lost} species lost` : 'every species hangs on'}`;
+      const away = ev.sheltered ? sim.life.shelter(ev.sheltered, ev.returnAt) : 0;
+      ev.lost = (ev.lost || 0) + lost - away;
+      ev.fled = away;
+      if (ev.winter) {
+        const gone = lost - away;
+        const parts = [gone ? `${gone} species lost` : away ? 'none lost for good' : 'every species hangs on'];
+        if (away) parts.push(`${away} sheltering at sea`);
+        ev.label += `; ${ev.winter}: ${parts.join(', ')}`;
+      }
       sim.syncCover();
     }
+    delete ev.sheltered;
+    delete ev.returnAt;
     delete ev.hurt;
     delete ev.terrain;
     this.events.push(ev);
@@ -355,6 +364,16 @@ export class Disasters {
       doomed.shift();
     }
     for (const sp of doomed) sp.N.fill(0);
+    // The sea buffers the cold. Established species able to get away, and
+    // hardy enough to ride it out, shelter offshore and along the coast and
+    // come back when the winter is over; the rest are lost for good.
+    ev.sheltered = [];
+    for (const sp of doomed) {
+      const established = sim.years - sp.born >= 20000 && sp.peakRange >= 25;
+      const p = established ? Math.pow(sp.traits.tempTol, 1.2) * (0.4 + 0.6 * sp.traits.dispersal) : 0;
+      if (rng.next() < p) ev.sheltered.push(sp.id);
+    }
+    ev.returnAt = this.shock.start + this.shock.years;
     ev.winter = name;
     ev.catastrophic = true;
     ev.hurt = true;

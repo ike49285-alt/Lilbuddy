@@ -115,6 +115,8 @@ export class Life {
     this.comp = new Int32Array(NL);
 
     this.species = [];      // living, in id order
+    this.refuge = [];       // { id, at }: wiped out here by a winter, sheltering at sea until year `at`
+    this.returned = [];     // species that came back from the sea this step
     this.registry = new Map();
     this.nextId = 1;
     this.light = 0.8;
@@ -321,6 +323,8 @@ export class Life {
     this.sense(land, climate);
     this.seedFreshwater(climate, years);
     if (!this.fishSeeded) { this.meanSeaT = climate.meanSeaT; this.seedFish(years); }
+    this.returned = [];
+    if (this.refuge.length) this.comeBack(years);
     this.tally();
     for (const a of [...this.kmFresh, ...this.kmSea, ...this.kmLand, this.kmAFresh, this.kmASea, this.kmALand]) a.fill(0);
     for (const sp of this.species) this.capacity(sp);
@@ -650,7 +654,8 @@ export class Life {
     while (this.species.filter(isKind).length > cap) {
       const byRealm = new Map();
       for (const sp of this.species) {
-        if (sp.born >= years || !isKind(sp)) continue;
+        // Newcomers and species just back from the sea get a chance to settle.
+        if (sp.born >= years || !isKind(sp) || years - (sp.returnedAt ?? -Infinity) < 20000) continue;
         const k = realmOf(sp.traits);
         if (!byRealm.has(k)) byRealm.set(k, []);
         byRealm.get(k).push(sp);
@@ -742,7 +747,8 @@ export class Life {
   // recently extinct.
   prune() {
     const keep = new Set();
-    for (const sp of this.species) {
+    const sheltering = this.refuge.map((r) => this.registry.get(r.id)).filter(Boolean);
+    for (const sp of [...this.species, ...sheltering]) {
       let a = sp;
       while (a && !keep.has(a.id)) {
         keep.add(a.id);
@@ -752,6 +758,67 @@ export class Life {
     const extinct = [...this.registry.values()].filter((s) => s.died !== null && !keep.has(s.id));
     extinct.sort((a, b) => b.died - a.died);
     for (const s of extinct.slice(KEEP_EXTINCT)) this.registry.delete(s.id);
+  }
+
+  // Species wiped out by a winter that rode it out at sea. They're out of
+  // the valley until year `at`. Returns how many.
+  shelter(ids, at) {
+    let n = 0;
+    for (const id of ids) {
+      const sp = this.registry.get(id);
+      if (!sp || sp.died === null) continue;
+      sp.sheltered = true;
+      this.refuge.push({ id, at });
+      n++;
+    }
+    return n;
+  }
+
+  // When the winter is over, sheltering species come back in from the sea:
+  // sea life onto the shelf, freshwater life at the river mouths, land life
+  // on the coastal strip. From there they spread back inland on their own.
+  comeBack(years) {
+    const { NL, LW, LH, sea, fresh, landF } = this;
+    const nearSea = (c) => {
+      const x = c % LW, y = (c / LW) | 0;
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const nx = x + dx, ny = y + dy;
+          if (nx >= 0 && nx < LW && ny >= 0 && ny < LH && sea[ny * LW + nx] > 0.5) return true;
+        }
+      }
+      return false;
+    };
+    const waiting = [];
+    for (const r of this.refuge) {
+      const sp = this.registry.get(r.id);
+      if (!sp || sp.died === null) continue;
+      if (years < r.at) { waiting.push(r); continue; }
+      const where = realmOf(sp.traits);
+      const N = new Float32Array(NL);
+      let cells = 0;
+      for (let c = 0; c < NL; c++) {
+        const here = where === 'sea' ? sea[c] > 0.5 && this.coastal(c)
+          : where === 'fresh' ? fresh[c] > 0.1 && (sea[c] > 0 || this.coastal(c))
+            : landF[c] > 0.5 && nearSea(c);
+        if (here) { N[c] = 0.03; cells++; }
+      }
+      sp.sheltered = false;
+      if (!cells) continue;     // nowhere to land: lost after all
+      sp.died = null;
+      sp.N = N;
+      sp.K = new Float32Array(NL);
+      sp.x0 = 0; sp.x1 = LW - 1; sp.y0 = 0; sp.y1 = LH - 1;
+      sp.isolated = false;
+      sp.returnedAt = years;
+      this.species.push(sp);
+      this.returned.push(sp);
+    }
+    this.refuge = waiting;
+    if (this.returned.length) {
+      this.species.sort((a, b) => a.id - b.id);
+      this.updateStats(years);
+    }
   }
 
   // How much of a species lives out of the water: in each cell, the share of
@@ -871,13 +938,15 @@ export class Life {
       N: sp.N ? sp.N.slice() : null,
       x0: sp.x0, x1: sp.x1, y0: sp.y0, y1: sp.y1, isolated: sp.isolated,
       total: sp.total, range: sp.range, peakRange: sp.peakRange, lastRange: sp.lastRange, trend: sp.trend,
-      nextSplit: sp.nextSplit, nextTrend: sp.nextTrend,
+      nextSplit: sp.nextSplit, nextTrend: sp.nextTrend, sheltered: !!sp.sheltered,
+      returnedAt: sp.returnedAt ?? null,
     });
     return {
       rng: this.rng.getState(),
       nextId: this.nextId,
       freshSeeded: !!this.freshSeeded,
       fishSeeded: !!this.fishSeeded,
+      refuge: this.refuge.map((r) => ({ ...r })),
       lastDt: this.lastDt || 1,
       stats: { ...this.stats },
       // Registry order matters for pruning ties, so keep it.
@@ -890,6 +959,7 @@ export class Life {
     this.nextId = s.nextId;
     this.freshSeeded = s.freshSeeded;
     this.fishSeeded = !!s.fishSeeded;
+    this.refuge = (s.refuge || []).map((r) => ({ ...r }));
     this.lastDt = s.lastDt;
     this.stats = { ...this.stats, ...s.stats };
     this.registry = new Map();
@@ -975,6 +1045,7 @@ export class Life {
     for (const sp of this.registry.values()) {
       out.push({
         id: sp.id, parent: sp.parent, name: sp.name, form: formOf(sp.traits), hue: sp.traits.hue, animal: !!sp.traits.animal,
+        sheltered: !!sp.sheltered,
         born: sp.born, died: sp.died, range: sp.range, peakRange: sp.peakRange, trend: sp.trend,
         traits: { ...sp.traits, tempOptC: tempOptC(sp.traits.tempOpt), tempWidthC: tempWidthC(sp.traits.tempTol) },
       });

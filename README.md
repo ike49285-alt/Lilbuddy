@@ -69,6 +69,10 @@ them at once: a cone across a valley dams a lake. Floods lay silt on the
 floodplain, and fires burn the plants but leave the soil richer. The biggest
 eruptions and impacts bring a volcanic or impact winter a few degrees colder
 for a few years, and the species least able to take the cold die out.
+The sea buffers the cold, though: established species hardy and mobile
+enough to get away shelter offshore and along the coast, and when the
+winter is over the same species come back from the sea and spread inland
+again.
 
 ## The map
 

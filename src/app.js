@@ -523,7 +523,7 @@ function renderCard(card, sp, byId) {
 }
 
 function renderTree(all) {
-  const sig = all.map((s) => `${s.id}:${s.died === null ? 1 : 0}`).join(',');
+  const sig = all.map((s) => `${s.id}:${s.died === null ? 1 : s.sheltered ? 2 : 0}`).join(',');
   if (sig === treeSig) return;
   treeSig = sig;
   const ids = new Set(all.map((s) => s.id));
@@ -539,7 +539,7 @@ function renderTree(all) {
     const li = el('li');
     const node = el('div', `node ${s.died === null ? 'alive' : 'dead'}`);
     node.append(swatch(s.hue), el('span', 'sp-name', s.name), el('span', 'sp-form', s.form),
-      el('span', 'when', s.died === null ? `${when(s.born)} –` : `${when(s.born)} – ${when(s.died)}`));
+      el('span', 'when', s.died === null ? `${when(s.born)} –` : s.sheltered ? `${when(s.born)} – at sea` : `${when(s.born)} – ${when(s.died)}`));
     li.append(node);
     const ch = kids.get(s.id);
     if (ch) {
