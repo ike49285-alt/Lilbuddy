@@ -3,11 +3,16 @@
 
 const CELL_M = 500;
 
-// Elevation tints (metres) — lowland green through tan and brown to snow.
+// Bare ground by elevation (metres): sand and ochre low down, rust-brown and
+// grey rock higher, pale scree near the top. Nothing is green until plants
+// make it so.
 const LAND = [
-  [0, 112, 146, 96], [150, 140, 166, 106], [400, 184, 182, 126], [800, 194, 160, 112],
-  [1300, 164, 126, 94], [1900, 140, 120, 112], [2400, 196, 192, 190], [2900, 238, 238, 236],
+  [0, 178, 158, 124], [200, 170, 148, 116], [500, 162, 136, 106], [900, 150, 122, 98],
+  [1400, 134, 118, 110], [1900, 152, 146, 142], [2400, 200, 196, 194], [2900, 238, 238, 236],
 ];
+const MOSS = [150, 162, 88];
+const FOREST = [44, 92, 50];
+const BLOOM = [52, 138, 104];
 // Sea depth (metres below sea level).
 const SEA = [
   [0, 98, 156, 178], [40, 66, 124, 158], [140, 42, 94, 132], [600, 24, 60, 96], [1800, 14, 36, 64],
@@ -25,6 +30,30 @@ function ramp(stops, v) {
   return stops[stops.length - 1];
 }
 
+// Life runs on a grid half as fine as the landscape; sample it bilinearly so
+// the living layer reads as smooth country rather than 1 km blocks.
+function makeSampler(LW, LH) {
+  const w = new Float32Array(4);
+  const idx = new Int32Array(4);
+  return {
+    at(x, y) {
+      const fx = Math.min(LW - 1, Math.max(0, (x + 0.5) / 2 - 0.5));
+      const fy = Math.min(LH - 1, Math.max(0, (y + 0.5) / 2 - 0.5));
+      const x0 = Math.floor(fx), y0 = Math.floor(fy);
+      const x1 = Math.min(LW - 1, x0 + 1), y1 = Math.min(LH - 1, y0 + 1);
+      const tx = fx - x0, ty = fy - y0;
+      idx[0] = y0 * LW + x0; idx[1] = y0 * LW + x1; idx[2] = y1 * LW + x0; idx[3] = y1 * LW + x1;
+      w[0] = (1 - tx) * (1 - ty); w[1] = tx * (1 - ty); w[2] = (1 - tx) * ty; w[3] = tx * ty;
+    },
+    get(arr) {
+      return arr[idx[0]] * w[0] + arr[idx[1]] * w[1] + arr[idx[2]] * w[2] + arr[idx[3]] * w[3];
+    },
+    get3(arr, k) {
+      return arr[idx[0] * 3 + k] * w[0] + arr[idx[1] * 3 + k] * w[1] + arr[idx[2] * 3 + k] * w[2] + arr[idx[3] * 3 + k] * w[3];
+    },
+  };
+}
+
 export function elevationColor(m) {
   const c = ramp(LAND, m);
   return `rgb(${c[1] | 0}, ${c[2] | 0}, ${c[3] | 0})`;
@@ -37,6 +66,8 @@ export class MapRenderer {
     this.terrain = document.createElement('canvas');
     this.tctx = this.terrain.getContext('2d');
     this.image = null;
+    this.mode = 'landscape';
+    this.selectedRgb = [255, 210, 90];
   }
 
   // Keeps the backing store matched to the element's size on screen.
@@ -69,6 +100,12 @@ export class MapRenderer {
   draw(f) {
     const { W, H, z, ocean, lake, ice, snow, seaLevel } = f;
     const seaT = f.climate.seaT;
+    const lf = f.life;
+    const LW = lf.LW;
+    const speciesMode = this.mode === 'species';
+    const sel = lf.selected;
+    const S = makeSampler(LW, lf.LH);
+    const selRgb = this.selectedRgb;
     if (!this.image || this.image.width !== W || this.image.height !== H) {
       this.terrain.width = W;
       this.terrain.height = H;
@@ -88,9 +125,13 @@ export class MapRenderer {
         const o = i * 4;
         const e = z[i] - seaLevel;
         let r, g, b;
+        S.at(x, y);
+        const bloom = S.get(lf.aqua) / 255;
         if (ocean[i]) {
           const c = ramp(SEA, -e);
           r = c[1]; g = c[2]; b = c[3];
+          const a = Math.min(0.5, bloom * 0.5) * (e > -150 ? 1 : 0.5);
+          r += (BLOOM[0] - r) * a; g += (BLOOM[1] - g) * a; b += (BLOOM[2] - b) * a;
         } else {
           const gx = ((Z(x + 1, y - 1) + 2 * Z(x + 1, y) + Z(x + 1, y + 1))
             - (Z(x - 1, y - 1) + 2 * Z(x - 1, y) + Z(x - 1, y + 1))) / (8 * CELL_M) * EXAG;
@@ -103,10 +144,28 @@ export class MapRenderer {
           } else if (lake[i]) {
             // A lake freezes over when it's well below zero up there.
             const frozen = f.climate.seasonal && seaT - 0.0065 * Math.max(0, e) < -2;
-            if (frozen) { r = 200; g = 216; b = 228; } else { r = 84; g = 138; b = 174; }
+            if (frozen) { r = 200; g = 216; b = 228; } else {
+              r = 84; g = 138; b = 174;
+              const a = Math.min(0.55, bloom * 0.55);
+              r += (BLOOM[0] - r) * a; g += (BLOOM[1] - g) * a; b += (BLOOM[2] - b) * a;
+            }
           } else {
             const c = ramp(LAND, e);
             r = c[1] * shade; g = c[2] * shade; b = c[3] * shade;
+            // Plants: moss-green when simple, deep forest green when complex;
+            // in winter the colour fades with dormancy.
+            const cover = S.get(lf.veg) / 255;
+            if (cover > 0.01) {
+              const cc = S.get(lf.vegC) / 255;
+              const t = Math.max(0, Math.min(1, (cc - 0.3) / 0.6));
+              const gr = MOSS[0] + (FOREST[0] - MOSS[0]) * t;
+              const gg = MOSS[1] + (FOREST[1] - MOSS[1]) * t;
+              const gb = MOSS[2] + (FOREST[2] - MOSS[2]) * t;
+              let leaf = 1;
+              if (f.climate.seasonal) leaf = Math.max(0.35, Math.min(1, (seaT - 0.0065 * Math.max(0, e) - 2) / 10));
+              const a = Math.min(0.9, cover) * (0.55 + 0.45 * leaf);
+              r += (gr * shade - r) * a; g += (gg * shade - g) * a; b += (gb * shade - b) * a;
+            }
             // Seasonal snow: a dusting shows; ten centimetres covers.
             const depth = snow[i] / 510;
             if (depth > 0.005) {
@@ -114,6 +173,15 @@ export class MapRenderer {
               r += (238 * shade - r) * a; g += (242 * shade - g) * a; b += (247 * shade - b) * a;
             }
           }
+        }
+        if (speciesMode) {
+          const lr = S.get3(lf.rgb, 0), lg = S.get3(lf.rgb, 1), lb = S.get3(lf.rgb, 2);
+          const a = Math.min(1, (lr + lg + lb) / 200) * 0.85;
+          r = r * 0.55 + (lr - r * 0.55) * a; g = g * 0.55 + (lg - g * 0.55) * a; b = b * 0.55 + (lb - b * 0.55) * a;
+        }
+        if (sel) {
+          const a = Math.min(1, S.get(sel) / 120) * 0.85;
+          r = r * 0.6 + (selRgb[0] - r * 0.6) * a; g = g * 0.6 + (selRgb[1] - g * 0.6) * a; b = b * 0.6 + (selRgb[2] - b * 0.6) * a;
         }
         px[o] = r; px[o + 1] = g; px[o + 2] = b; px[o + 3] = 255;
       }

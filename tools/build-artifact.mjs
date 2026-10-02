@@ -2,9 +2,8 @@
 //
 //   node tools/build-artifact.mjs [out.html]
 //
-// The modules are concatenated rather than bundled: every import must be a
-// single line at the top of its file, and no two modules may declare the same
-// top-level name (checked below). The worker's modules become a string that
+// The modules are concatenated rather than bundled: imports are stripped, and
+// no two modules may declare the same top-level name (checked below). The worker's modules become a string that
 // runs from a blob: URL; the page's modules become one inline script.
 
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -14,8 +13,8 @@ import { fileURLToPath } from 'node:url';
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const out = process.argv[2] || join(root, 'dist', 'headwaters.html');
 
-const WORKER_MODULES = ['rng', 'terrain', 'climate', 'landscape', 'sim', 'host', 'worker'];
-const PAGE_MODULES = ['render', 'app'];
+const WORKER_MODULES = ['rng', 'terrain', 'climate', 'landscape', 'species', 'life', 'sim', 'host', 'worker'];
+const PAGE_MODULES = ['render', 'save', 'app'];
 const WORKER_CALL = "new Worker(new URL('./worker.js', import.meta.url), { type: 'module' })";
 
 function load(name) {
@@ -24,8 +23,8 @@ function load(name) {
 
 function strip(name, src) {
   return src
+    .replace(/^import\s[\s\S]*?from\s+['"][^'"]+['"];?[ \t]*$/gm, '')
     .split('\n')
-    .filter((line) => !/^import\s.*from\s+['"].*['"];?\s*$/.test(line))
     .filter((line) => !/^export\s*\{.*\}\s*(from\s+['"].*['"])?;?\s*$/.test(line))
     .map((line) => line.replace(/^export\s+(?=(const|let|function|class|async)\b)/, ''))
     .join('\n');

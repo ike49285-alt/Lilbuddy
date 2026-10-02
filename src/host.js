@@ -6,7 +6,7 @@
 // longer than the model's maximum step. When ticks can't be computed fast
 // enough the actual rate falls behind the target, and the page says so.
 
-import { Simulation, transferList, MAX_STEP_YEARS } from './sim.js';
+import { Simulation, transferList, stateTransferList, MAX_STEP_YEARS } from './sim.js';
 
 const DAY = 1 / 365.25;
 const TICKS_PER_SECOND = 10;
@@ -29,6 +29,7 @@ export function createHost(post) {
   let timer = null;
   let stepMs = 0;
   let tickYears = tickFor(rate);
+  let selectedId = null;
   // Rolling measure of the actual rate: [real ms, sim years] samples.
   const recent = [];
 
@@ -40,7 +41,7 @@ export function createHost(post) {
   }
 
   function sendFrame() {
-    const f = sim.frame();
+    const f = sim.frame(selectedId);
     f.stepMs = stepMs;
     f.paused = paused;
     f.targetRate = rate;
@@ -99,6 +100,7 @@ export function createHost(post) {
     switch (msg.type) {
       case 'init':
         sim = new Simulation(msg.seed);
+        selectedId = null;
         debt = 0;
         recent.length = 0;
         sendFrame();
@@ -110,6 +112,26 @@ export function createHost(post) {
         debt = 0;
         recent.length = 0;
         sendFrame();
+        break;
+      case 'save': {
+        const state = sim.saveState();
+        post({ type: 'state', state, reason: msg.reason }, stateTransferList(state));
+        break;
+      }
+      case 'restore':
+        sim = Simulation.fromState(msg.state);
+        selectedId = null;
+        debt = 0;
+        recent.length = 0;
+        sendFrame();
+        start();
+        break;
+      case 'select':
+        selectedId = msg.id || null;
+        sendFrame();
+        break;
+      case 'inspect':
+        post({ type: 'inspected', info: sim.inspect(msg.i) });
         break;
       case 'pause':
         paused = true;

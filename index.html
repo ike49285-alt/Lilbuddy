@@ -13,22 +13,34 @@
 <body>
 <!-- app:start -->
 <div class="app">
-  <header class="top">
-    <div class="brand">
-      <h1>Headwaters</h1>
-      <p class="sub">A river cuts its valley through deep time.</p>
-    </div>
-    <span id="phase" class="chip">interglacial</span>
-  </header>
-
   <main class="layout">
     <figure class="map" id="map">
-      <canvas id="map-canvas" role="img" aria-label="Relief map of the valley, mountains at the top and the sea at the bottom"></canvas>
+      <canvas id="map-canvas" role="img" aria-label="Relief map of the valley, mountains at the top and the sea at the bottom. Tap a spot to see what lives there."></canvas>
+      <span id="phase" class="chip on-map">interglacial</span>
       <div class="north" aria-hidden="true">N<span>↑</span></div>
+      <div class="map-mode" role="group" aria-label="Map shows">
+        <button type="button" id="mode-landscape" aria-pressed="true">Landscape</button>
+        <button type="button" id="mode-species" aria-pressed="false">Species</button>
+      </div>
       <div class="scale" aria-hidden="true"><span id="scale-bar" class="bar"></span><span>10 km</span></div>
+      <div class="inspect" id="inspect" hidden>
+        <div class="inspect-head">
+          <span id="inspect-title">Here</span>
+          <button type="button" id="inspect-close" class="close" aria-label="Close">×</button>
+        </div>
+        <dl id="inspect-facts" class="facts"></dl>
+        <ul id="inspect-life" class="here-life"></ul>
+      </div>
     </figure>
 
-    <section class="panel" aria-label="Controls and measurements">
+    <section class="panel" aria-label="Readings">
+      <div class="tabs" role="tablist" aria-label="Readings">
+        <button type="button" role="tab" id="tab-river" aria-controls="pane-river" aria-selected="true">River</button>
+        <button type="button" role="tab" id="tab-life" aria-controls="pane-life" aria-selected="false">Life</button>
+        <button type="button" role="tab" id="tab-tree" aria-controls="pane-tree" aria-selected="false">Tree</button>
+      </div>
+
+      <div class="pane" id="pane-river" role="tabpanel" aria-labelledby="tab-river">
       <dl class="stats">
         <div><dt>Main river</dt><dd id="s-len">—</dd></div>
         <div><dt>Flow at the mouth</dt><dd id="s-q">—</dd></div>
@@ -63,8 +75,27 @@
         <button type="submit" id="seed-go">Start</button>
         <button type="button" id="seed-random">Random</button>
       </form>
+      <p class="save-status" id="save-status" aria-live="polite"></p>
 
       <p class="note">Time runs at the rate set in the bar below, from a day to a hundred thousand years per second. At a year per second or slower the seasons show: snow piles up on the peaks in winter and the river swells with the spring melt. The rains begin light on a young mountain front still being pushed upward, so the first water is a trickle. Over millions of years it finds its way, cuts gorges, captures neighbouring streams and builds a delta, while ice ages pull the sea back across the shelf and let it return.</p>
+      </div>
+
+      <div class="pane" id="pane-life" role="tabpanel" aria-labelledby="tab-life" hidden>
+        <dl class="stats">
+          <div><dt>Species alive</dt><dd id="l-alive">—</dd></div>
+          <div><dt>Plants on land</dt><dd id="l-land">—</dd></div>
+          <div><dt>Green ground</dt><dd id="l-veg">—</dd></div>
+          <div><dt>Ever lived</dt><dd id="l-ever">—</dd></div>
+        </dl>
+        <div class="species-card" id="species-card" hidden></div>
+        <ul class="species" id="species-list" aria-label="Living species"></ul>
+        <p class="note">Life begins in the sea: plankton, seaweed and microbial mats. Freshwater algae arrive once the river reaches the coast. Species split when the river, ice or the coast cut a population in two, and new forms appear by mutation. Plants need more complexity before they can live out of water; once they do, they green the land and hold the soil, so vegetated slopes erode more slowly. Tap a species to see where it lives.</p>
+      </div>
+
+      <div class="pane" id="pane-tree" role="tabpanel" aria-labelledby="tab-tree" hidden>
+        <p class="tree-key"><span class="alive">Living</span> <span class="dead">Extinct</span></p>
+        <ul class="tree" id="tree" aria-label="Family tree"></ul>
+      </div>
     </section>
   </main>
 

@@ -14,7 +14,7 @@ import { CELL_M } from './terrain.js';
 export const MAX_STEP_YEARS = 1000;   // the step the model was tuned at; the host never asks for more
 
 const K_FLUVIAL = 1.2e-5;       // erodibility, per year, with Q in m³/yr
-const CHANNEL_Q = 2.5e6;        // m³/yr: below this, water runs off as sheetwash and doesn't cut a channel
+export const CHANNEL_Q = 2.5e6; // m³/yr: below this, water runs off as sheetwash and doesn't cut a channel
 const SQRT_CHANNEL_Q = Math.sqrt(CHANNEL_Q);
 const ICE_EROSION = 2.4;        // multiplier under ice
 const TRANSPORT = 25;           // transport capacity as a multiple of detachment
@@ -27,6 +27,7 @@ const HILL_DIFF_PER_YR = 1.5e-5; // hillslope smoothing on land
 const SLIDE_SLOPE = 0.5;        // beyond this gradient a slope fails and slides
 const SLIDE_PER_YR = 5e-4;
 const MARINE_DIFF_PER_YR = 1.2e-4; // smoothing on the sea floor
+const VEG_HOLD = 0.5;            // how much full plant cover slows erosion and creep
 const MAX_SMOOTH = 0.2;         // keeps the explicit smoothing stable at any step
 const FERT_MEMORY_YR = 33000;   // how long a floodplain stays rich after the river stops feeding it
 const FILL_EPS = 1e-3;          // metres of gradient imposed across filled lakes
@@ -60,6 +61,7 @@ export class Landscape {
     this.ocean = new Uint8Array(N);
     this.ice = new Uint8Array(N);
     this.snow = new Float32Array(N);      // seasonal snowpack, metres of water
+    this.cover = new Float32Array(N);     // plant cover 0..1, set by life — plants hold the soil
     this.lake = new Uint8Array(N);
     this.maxDonor = new Int32Array(N);
     this.share = new Float64Array(8);
@@ -272,7 +274,7 @@ export class Landscape {
       const dist = (dx && dy ? Math.SQRT2 : 1) * CELL_M;
       const zr = ocean[r] ? sea : this.lake[r] ? filled[r] : z[r];
       if (z[i] <= zr) continue;
-      const K = K_FLUVIAL * kfac[i] * (ice[i] ? ICE_EROSION : 1);
+      const K = K_FLUVIAL * kfac[i] * (ice[i] ? ICE_EROSION : 1) * (1 - VEG_HOLD * this.cover[i]);
       const power = ice[i] ? Math.sqrt(Q[i]) : Math.sqrt(Q[i]) - SQRT_CHANNEL_Q;
       if (power <= 0) continue;
       const F = K * power * dt / dist;
@@ -363,14 +365,15 @@ export class Landscape {
         if (x < W - 1) { sum += z[i + 1]; n++; }
         if (y > 0) { sum += z[i - W]; n++; }
         if (y < H - 1) { sum += z[i + W]; n++; }
-        let k = ocean[i] ? kSea : kHill;
+        const held = 1 - VEG_HOLD * this.cover[i];
+        let k = ocean[i] ? kSea : kHill * held;
         if (!ocean[i]) {
           let steep = 0;
           if (x > 0) steep = Math.max(steep, Math.abs(z[i] - z[i - 1]));
           if (x < W - 1) steep = Math.max(steep, Math.abs(z[i] - z[i + 1]));
           if (y > 0) steep = Math.max(steep, Math.abs(z[i] - z[i - W]));
           if (y < H - 1) steep = Math.max(steep, Math.abs(z[i] - z[i + W]));
-          if (steep > SLIDE_SLOPE * CELL_M) k = Math.max(k, kSlide);
+          if (steep > SLIDE_SLOPE * (1 + 0.6 * this.cover[i]) * CELL_M) k = Math.max(k, kSlide);
         }
         tmp[i] = z[i] + k * (sum / n - z[i]);
       }
