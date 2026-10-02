@@ -8,10 +8,19 @@
 //   complexity  0 microbial … 1 large, slow-growing and competitive
 //   dispersal   how fast it spreads, and how easily it crosses a big river
 //   hue         a neutral marker that drifts — its colour on the map
+//
+// Animals carry three more:
+//   diet        0 filters the tiny stuff (plankton, microbes) … 1 grazes the
+//               larger plants (seaweed, waterweed, and on land, everything)
+//   limbs       0 fins … 1 legs that carry the body on land
+//   lungs       0 gills only … 1 breathes air
 
 export const TRAITS = ['habitat', 'salinity', 'tempOpt', 'tempTol', 'complexity', 'dispersal', 'hue'];
 
+export const ANIMAL_TRAITS = ['diet', 'limbs', 'lungs'];
+
 export const LAND_COMPLEXITY = 0.3;      // roots and a waxy skin: nothing below this lives out of water
+export const WALK = 0.6;                 // limbs and lungs both about here: an animal can live out of water
 
 export const tempOptC = (t) => -10 + 45 * t;
 export const tempWidthC = (t) => 5 + 13 * t;
@@ -29,7 +38,10 @@ const reflect01 = (v) => {
 
 // How much of a species' life is spent in fresh water, the sea, and on land.
 export function realms(t) {
-  const gate = clamp01((t.complexity - (LAND_COMPLEXITY - 0.04)) / 0.08);
+  // Plants need the complexity for roots; animals need legs and lungs both.
+  const gate = t.animal
+    ? clamp01((Math.min(t.limbs, t.lungs) - (WALK - 0.08)) / 0.16)
+    : clamp01((t.complexity - (LAND_COMPLEXITY - 0.04)) / 0.08);
   return {
     fresh: (1 - t.habitat) * (1 - t.salinity),
     sea: (1 - t.habitat) * t.salinity,
@@ -44,6 +56,23 @@ export function mutate(rng, traits, sd, innovate) {
     t[k] = reflect01(t[k] + rng.normal(0, sd));
   }
   t.hue = (traits.hue + rng.normal(0, sd * 1.5) + 1) % 1;
+  if (traits.animal) {
+    for (const k of ANIMAL_TRAITS) t[k] = reflect01(t[k] + rng.normal(0, sd));
+    if (innovate) {
+      // A key innovation for an animal: toward the shore, between fresh and
+      // salt water, a bigger, more complex body, a change of food, or a
+      // step toward legs or lungs.
+      const which = rng.int(6);
+      if (which === 0) t.habitat = clamp01(t.habitat + rng.range(0.1, 0.3));
+      else if (which === 1) t.salinity = clamp01(t.salinity + rng.range(-0.5, 0.5));
+      else if (which === 2) t.complexity = clamp01(t.complexity + rng.range(0.05, 0.15));
+      else if (which === 3) t.diet = clamp01(t.diet + rng.range(-0.4, 0.4));
+      else if (which === 4) t.limbs = clamp01(t.limbs + rng.range(0.1, 0.25));
+      else t.lungs = clamp01(t.lungs + rng.range(0.1, 0.25));
+      t.hue = (t.hue + rng.range(0.12, 0.3)) % 1;
+    }
+    return t;
+  }
   if (innovate) {
     // A key innovation: one big step that opens a new way of life — toward
     // land, between fresh and salt water, or toward a more complex body.
@@ -57,8 +86,10 @@ export function mutate(rng, traits, sd, innovate) {
 }
 
 export function traitDistance(a, b) {
-  return Math.hypot(a.habitat - b.habitat, a.salinity - b.salinity,
+  const base = Math.hypot(a.habitat - b.habitat, a.salinity - b.salinity,
     a.tempOpt - b.tempOpt, a.complexity - b.complexity);
+  if (!a.animal || !b.animal) return base;
+  return Math.hypot(base, a.diet - b.diet, a.limbs - b.limbs, a.lungs - b.lungs);
 }
 
 // --- names -----------------------------------------------------------------
@@ -90,6 +121,13 @@ export function epithet(rng) {
 export function formOf(t) {
   const c = t.complexity;
   const r = realms(t);
+  if (t.animal) {
+    const onLand = r.land / (r.fresh + r.sea + r.land || 1);
+    if (onLand > 0.5) return 'early tetrapods';
+    if (onLand > 0.05) return 'fishapods';
+    if (t.limbs > 0.3) return 'lobe-finned fish';
+    return c < 0.3 ? 'jawless fish' : c < 0.45 ? 'armored fish' : 'ray-finned fish';
+  }
   if (r.land > 0.05 && t.habitat < 0.6) return 'marsh plants';
   if (r.land > 0.05) return c < 0.42 ? 'mosses' : c < 0.55 ? 'ferns' : c < 0.7 ? 'shrubland' : 'forest';
   const marine = t.salinity > 0.5;
@@ -99,5 +137,9 @@ export function formOf(t) {
 }
 
 export function isLandPlant(t) {
-  return realms(t).land > 0.05;
+  return !t.animal && realms(t).land > 0.05;
+}
+
+export function isLandAnimal(t) {
+  return !!t.animal && realms(t).land > 0.05;
 }

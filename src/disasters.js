@@ -362,6 +362,19 @@ export class Disasters {
     sim.climate.winter = name;
   }
 
+  // A moment worth a note that isn't a disaster, such as the first animal
+  // to walk out of the water, at a life cell.
+  milestone(sim, label, c) {
+    const { LW } = sim.life;
+    const ev = {
+      id: this.nextId++, kind: 'milestone', size: null, years: sim.years,
+      x: (c % LW) * 2 + 1, y: Math.floor(c / LW) * 2 + 1, r: 3, label,
+    };
+    this.events.push(ev);
+    if (this.events.length > KEEP_EVENTS) this.events.shift();
+    return ev;
+  }
+
   // Centre and reach of a set of cells, for the map to draw and pan to.
   place(land, cells, draw) {
     const { W } = land;

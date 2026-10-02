@@ -46,8 +46,13 @@ export class Simulation {
     this.climate.winter = this.disasters.winterName();
     this.climate.set(this.years, d <= SEASONAL_TICK);
     this.land.step(this.climate, d);
+    const ashore = this.life.stats.firstLandAnimal;
     this.life.step(this.land, this.climate, d, this.years);
     this.syncCover();
+    const st = this.life.stats;
+    if (ashore === null && st.firstLandAnimal !== null) {
+      this.disasters.milestone(this, `The first animal walks out of the water: ${st.firstLandAnimalName}`, st.firstLandAnimalAt);
+    }
     this.disasters.natural(this, d);
     if (this.years >= this.nextSample) this.sample();
   }
@@ -213,7 +218,7 @@ export function transferList(frame) {
   const L = frame.life;
   const list = [frame.z.buffer, frame.Q.buffer, frame.rec.buffer, frame.ocean.buffer,
     frame.lake.buffer, frame.ice.buffer, frame.snow.buffer, frame.history.sea.buffer, frame.history.mouthQ.buffer,
-    L.aqua.buffer, L.veg.buffer, L.vegC.buffer, L.rgb.buffer];
+    L.aqua.buffer, L.veg.buffer, L.vegC.buffer, L.rgb.buffer, L.fishes.buffer, L.herds.buffer];
   if (L.selected) list.push(L.selected.buffer);
   return list;
 }

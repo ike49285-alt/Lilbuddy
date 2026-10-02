@@ -347,6 +347,59 @@ export class MapRenderer {
       const k = v.zoom / this.zoom;
       ctx.drawImage(this.rivers, (v.x0 - this.x0) * sx, (v.y0 - this.y0) * (h / vh), w * k, h * k);
     }
+    if (this.mode !== 'species' && f.life.fishes) this.drawSpecks(f, ctx, w);
+  }
+
+  // Animals as specks where they're dense: silver shoals in the water, dark
+  // herds on land. Each has a fixed home in its cell and wanders around it,
+  // so they drift as time runs.
+  drawSpecks(f, ctx, w) {
+    const { W, H, ocean, lake, Q } = f;
+    const { LW, LH, fishes, herds } = f.life;
+    const vw = W / this.zoom, vh = H / this.zoom;
+    const s = w / vw;
+    const px = w / Math.max(1, this.canvas.clientWidth);
+    const size = px * Math.min(3.2, 1.5 + 0.2 * (this.zoom - 1));
+    const t = performance.now() / 1000;
+    const lx0 = Math.max(0, Math.floor(this.x0 / 2) - 1), lx1 = Math.min(LW - 1, Math.ceil((this.x0 + vw) / 2));
+    const ly0 = Math.max(0, Math.floor(this.y0 / 2) - 1), ly1 = Math.min(LH - 1, Math.ceil((this.y0 + vh) / 2));
+    const wet = (i) => ocean[i] || lake[i] || Q[i] >= 2.5e6;
+    const fishPath = new Path2D(), herdPath = new Path2D();
+    let anyFish = false, anyHerd = false;
+    for (let ly = ly0; ly <= ly1; ly++) {
+      for (let lx = lx0; lx <= lx1; lx++) {
+        const c = ly * LW + lx;
+        for (let kind = 0; kind < 2; kind++) {
+          const d = kind === 0 ? fishes[c] : herds[c];
+          if (d < 10) continue;
+          const count = Math.min(4, Math.ceil(d / 60));
+          for (let k = 0; k < count; k++) {
+            let h = Math.imul(c * 8 + k * 2 + kind + 1, 2654435761) >>> 0;
+            h = Math.imul(h ^ (h >>> 15), 2246822519) >>> 0;
+            // A sub-cell of the right kind: water for fish, dry ground for herds.
+            let i = -1;
+            for (let q = 0; q < 4; q++) {
+              const sub = (h + q) & 3;
+              const ix = lx * 2 + (sub & 1), iy = ly * 2 + (sub >> 1);
+              if (ix >= W || iy >= H) continue;
+              const j = iy * W + ix;
+              if ((kind === 0) === !!wet(j)) { i = j; break; }
+            }
+            if (i < 0) continue;
+            const ph = ((h >>> 20) & 1023) / 163;
+            const sp = kind === 0 ? 0.9 + ((h >>> 4) & 7) * 0.12 : 0.25 + ((h >>> 4) & 7) * 0.03;
+            const amp = kind === 0 ? 0.28 : 0.18;
+            const wx = (i % W) + 0.2 + 0.6 * (((h >>> 8) & 255) / 255) + amp * Math.sin(t * sp + ph);
+            const wy = ((i / W) | 0) + 0.2 + 0.6 * (((h >>> 16) & 15) / 15) + amp * Math.cos(t * sp * 0.8 + ph * 1.3);
+            const x = (wx - this.x0) * s, y = (wy - this.y0) * s;
+            if (kind === 0) { fishPath.rect(x - size / 2, y - size / 2, size * 1.6, size); anyFish = true; }
+            else { herdPath.rect(x - size / 2, y - size / 2, size * 1.3, size * 1.3); anyHerd = true; }
+          }
+        }
+      }
+    }
+    if (anyFish) { ctx.fillStyle = 'rgba(236, 243, 247, 0.9)'; ctx.fill(fishPath); }
+    if (anyHerd) { ctx.fillStyle = 'rgba(48, 32, 22, 0.88)'; ctx.fill(herdPath); }
   }
 
   // --- disaster effects ------------------------------------------------------
@@ -355,7 +408,7 @@ export class MapRenderer {
   // display's rate without the terrain being redrawn.
 
   addEffect(ev, quiet) {
-    if (ev.missed) return;
+    if (ev.missed || !EFFECT_MS[ev.kind]) return;
     if (quiet && this.effects.length >= 6) return;
     this.effects.push({ ev, t0: performance.now(), dur: EFFECT_MS[ev.kind] || 4000 });
     if (this.effects.length > 12) this.effects.shift();

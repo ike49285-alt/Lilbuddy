@@ -16,12 +16,13 @@
 import { CELL_M } from './terrain.js';
 import { CHANNEL_Q } from './landscape.js';
 import {
-  realms, mutate, genusName, epithet, formOf, isLandPlant,
+  realms, mutate, genusName, epithet, formOf, isLandPlant, isLandAnimal,
   tempOptC, tempWidthC, toTempTrait, traitDistance,
 } from './species.js';
 
 export const LIFE_SCALE = 2;
-export const MAX_LIVE_SPECIES = 32;
+export const MAX_LIVE_SPECIES = 32;     // plants and microbes
+export const MAX_LIVE_ANIMALS = 16;
 const KEEP_EXTINCT = 200;
 
 const R_MAX = 3;                    // growth per year of the simplest, fastest species
@@ -38,6 +39,12 @@ const EXCLUSION = 3;                // how hard the best-fitted species in a cel
 const ADAPT_YEARS = 20000;          // how long tempOpt takes to track a changed climate
 const MAX_SUBSTEPS = 2;
 const BIG_RIVER_Q = 3e8;            // m³/yr: a river this big is a barrier to land species
+// Animals graze. What they can eat sets how many there can be, and where
+// they're dense they leave less room for what they eat.
+const A_RATE = 1.2;                 // growth per year of the fastest-breeding animal
+const EAT = 0.35;                   // animal biomass one unit of food supports
+const APPETITE = 1.2;               // what a unit of animal biomass eats, relative to EAT
+const MAX_GRAZE = 0.6;              // grazers take at most this share of a plant's room
 
 export class Life {
   constructor(land, rng) {
@@ -77,6 +84,17 @@ export class Life {
     this.kmFresh = [new Float32Array(NL), new Float32Array(NL)];
     this.kmSea = [new Float32Array(NL), new Float32Array(NL)];
     this.kmLand = [new Float32Array(NL), new Float32Array(NL)];
+    // Animals: their own crowding totals, and how hard they graze each size
+    // class of plant in each realm.
+    this.aFresh = new Float32Array(NL);
+    this.aSea = new Float32Array(NL);
+    this.aLand = new Float32Array(NL);
+    this.kmAFresh = new Float32Array(NL);
+    this.kmASea = new Float32Array(NL);
+    this.kmALand = new Float32Array(NL);
+    this.eatFresh = [new Float32Array(NL), new Float32Array(NL)];
+    this.eatSea = [new Float32Array(NL), new Float32Array(NL)];
+    this.eatLand = [new Float32Array(NL), new Float32Array(NL)];
     this.cover = new Float32Array(NL);
     this.coverC = new Float32Array(NL);     // mean complexity of the plants there
     this.tmp = new Float32Array(NL);
@@ -89,7 +107,10 @@ export class Life {
     this.registry = new Map();
     this.nextId = 1;
     this.light = 0.8;
-    this.stats = { alive: 0, landPlants: 0, firstLandPlant: null, vegetated: 0, everLived: 0 };
+    this.stats = {
+      alive: 0, landPlants: 0, firstLandPlant: null, vegetated: 0, everLived: 0,
+      animals: 0, landAnimals: 0, firstLandAnimal: null, firstLandAnimalAt: -1, firstLandAnimalName: '',
+    };
   }
 
   // --- environment ---------------------------------------------------------
@@ -169,6 +190,7 @@ export class Life {
   // coast; the freshwater ones follow the rivers inland as they form.
   seed(land, climate) {
     this.sense(land, climate);
+    this.meanSeaT = climate.meanSeaT;
     const coastT = climate.meanSeaT;
     const start = [
       { form: 'plankton', habitat: 0.02, salinity: 0.95, complexity: 0.03, tempTol: 0.45, dispersal: 0.7, hue: 0.52, where: 'shelf' },
@@ -189,6 +211,32 @@ export class Life {
         else if (s.where === 'shallows') here = sea > 0.2 && this.coastal(c);
         else here = sea > 0.05 && (sea < 1 || this.coastal(c));
         if (here) N[c] = 0.2;
+      }
+    }
+    this.seedFish(0);
+  }
+
+  // The first animals: a few simple jawless fish in the sea, one living out
+  // on the shelf and filtering plankton, one in the shallows and estuaries
+  // grazing the weed, salt-tolerant enough to follow fresh water upriver.
+  seedFish(years) {
+    if (this.fishSeeded) return;
+    this.fishSeeded = true;
+    const T = toTempTrait(this.meanSeaT ?? 15);
+    const start = [
+      { habitat: 0.03, salinity: 0.9, complexity: 0.15, tempTol: 0.45, dispersal: 0.65, hue: 0.62, diet: 0.2, where: 'shelf' },
+      { habitat: 0.08, salinity: 0.5, complexity: 0.18, tempTol: 0.5, dispersal: 0.5, hue: 0.78, diet: 0.65, where: 'coast' },
+    ];
+    for (const s of start) {
+      const traits = {
+        habitat: s.habitat, salinity: s.salinity, tempOpt: T, tempTol: s.tempTol, complexity: s.complexity,
+        dispersal: s.dispersal, hue: s.hue, animal: true, diet: s.diet, limbs: 0, lungs: 0.05,
+      };
+      const sp = this.addSpecies(traits, null, years);
+      for (let c = 0; c < this.NL; c++) {
+        const sea = this.sea[c];
+        const here = s.where === 'shelf' ? sea > 0.9 : sea > 0.2 && this.coastal(c);
+        if (here) sp.N[c] = 0.02;
       }
     }
   }
@@ -261,8 +309,9 @@ export class Life {
     this.lastDt = dt;
     this.sense(land, climate);
     this.seedFreshwater(climate, years);
+    if (!this.fishSeeded) { this.meanSeaT = climate.meanSeaT; this.seedFish(years); }
     this.tally();
-    for (const a of [...this.kmFresh, ...this.kmSea, ...this.kmLand]) a.fill(0);
+    for (const a of [...this.kmFresh, ...this.kmSea, ...this.kmLand, this.kmAFresh, this.kmASea, this.kmALand]) a.fill(0);
     for (const sp of this.species) this.capacity(sp);
     for (const sp of this.species) this.grow(sp, dt);
     for (const sp of this.species) this.disperse(sp, dt);
@@ -273,8 +322,10 @@ export class Life {
 
   // Realm totals: how much biomass already lives in each realm of each cell.
   tally() {
-    for (const a of [...this.bFresh, ...this.bSea, ...this.bLand]) a.fill(0);
+    for (const a of [...this.bFresh, ...this.bSea, ...this.bLand, this.aFresh, this.aSea, this.aLand,
+      ...this.eatFresh, ...this.eatSea, ...this.eatLand]) a.fill(0);
     for (const sp of this.species) {
+      if (sp.traits.animal) { this.tallyAnimal(sp); continue; }
       const tier = tierOf(sp.traits);
       const bFresh = this.bFresh[tier], bSea = this.bSea[tier], bLand = this.bLand[tier];
       const r = realms(sp.traits);
@@ -287,6 +338,33 @@ export class Life {
         bFresh[c] += n * wf; bSea[c] += n * ws; bLand[c] += n * wl;
       });
     }
+  }
+
+  // An animal's crowding, and what it eats: filter feeders the microbes and
+  // plankton, grazers the larger plants.
+  tallyAnimal(sp) {
+    const t = sp.traits;
+    const r = realms(t);
+    const sum = r.fresh + r.sea + r.land || 1;
+    const wf = r.fresh / sum, ws = r.sea / sum, wl = r.land / sum;
+    const small = (1 - t.diet) * APPETITE, big = t.diet * APPETITE;
+    const { aFresh, aSea, aLand } = this;
+    const [eF0, eF1] = this.eatFresh, [eS0, eS1] = this.eatSea, [eL0, eL1] = this.eatLand;
+    const N = sp.N;
+    this.forBox(sp, 0, (c) => {
+      const n = N[c];
+      if (n === 0) return;
+      aFresh[c] += n * wf; aSea[c] += n * ws; aLand[c] += n * wl;
+      eF0[c] += n * wf * small; eF1[c] += n * wf * big;
+      eS0[c] += n * ws * small; eS1[c] += n * ws * big;
+      eL0[c] += n * wl * small; eL1[c] += n * wl * big;
+    });
+  }
+
+  // How much of a plant's room the grazers take, in one realm and size class.
+  grazed(eat, have, c) {
+    const e = eat[c];
+    return e > 0 ? Math.min(MAX_GRAZE, e / (have[c] + 0.05)) : 0;
   }
 
   // Calls fn(c) for every cell in a species' occupied box, grown by m cells.
@@ -303,6 +381,7 @@ export class Life {
   // What each cell could hold for this species on its own, and the best any
   // species present manages in each realm.
   capacity(sp) {
+    if (sp.traits.animal) { this.capacityAnimal(sp); return; }
     const t = sp.traits;
     const r = realms(t);
     const opt = tempOptC(t.tempOpt), width = tempWidthC(t.tempTol);
@@ -314,15 +393,54 @@ export class Life {
     const N = sp.N, K = sp.K;
     const dom = r.land >= r.fresh && r.land >= r.sea ? kmLand : r.sea > r.fresh ? kmSea : kmFresh;
     sp.dom = dom;
+    const eF = this.eatFresh[tier], eS = this.eatSea[tier], eL = this.eatLand[tier];
+    const hF = this.bFresh[tier], hS = this.bSea[tier], hL = this.bLand[tier];
     this.forBox(sp, MAX_SUBSTEPS + 1, (c) => {
       const hf = r.fresh * fresh[c], hs = r.sea * sea[c], hl = r.land * landF[c];
       const habitat = hf + hs + hl;
       if (habitat <= 0) { K[c] = 0; return; }
       const resource = (hf * nutFresh[c] + hs * nutSea[c] + hl * nutLand[c]) / habitat;
       const dT = (tempMean[c] - opt) / width;
+      // Grazers take their share of the room.
+      const graze = (hf * this.grazed(eF, hF, c) + hs * this.grazed(eS, hS, c) + hl * this.grazed(eL, hL, c)) / habitat;
       // Complex life needs rich ground: in poor water or raw soil the simple
       // forms keep their place.
-      const k = habitat * Math.pow(resource, rExp) * Math.exp(-0.5 * dT * dT) * kMult * (1 - ice[c]);
+      const k = habitat * Math.pow(resource, rExp) * Math.exp(-0.5 * dT * dT) * kMult * (1 - ice[c]) * (1 - graze);
+      K[c] = k;
+      if (N[c] > RANGE_DENSITY && k > dom[c]) dom[c] = k;
+    });
+  }
+
+  // What a cell can hold of an animal: as much as its food supports there.
+  // Fish with fleshy, limb-like fins or a way to gulp air do a little better
+  // in warm, shallow, weedy water edges, each on its own; out in open
+  // water, fins do better than limbs.
+  capacityAnimal(sp) {
+    const t = sp.traits;
+    const r = realms(t);
+    const opt = tempOptC(t.tempOpt), width = tempWidthC(t.tempTol);
+    const kMult = EAT * (0.8 + 0.4 * t.complexity);
+    const d = t.diet;
+    const finCost = 0.3 * t.limbs;
+    const { sea, fresh, landF, ice, tempMean, kmAFresh, kmASea, kmALand } = this;
+    const [bF0, bF1] = this.bFresh, [bS0, bS1] = this.bSea, [bL0, bL1] = this.bLand;
+    const N = sp.N, K = sp.K;
+    const dom = r.land >= r.fresh && r.land >= r.sea ? kmALand : r.sea > r.fresh ? kmASea : kmAFresh;
+    sp.dom = dom;
+    this.forBox(sp, MAX_SUBSTEPS + 1, (c) => {
+      const water = fresh[c] + sea[c];
+      const margin = Math.min(1, 4 * water * landF[c]);
+      const inWater = r.fresh * ((1 - d) * bF0[c] + d * bF1[c]) + r.sea * ((1 - d) * bS0[c] + d * bS1[c]);
+      const onLand = r.land * ((1 - d) * bL0[c] + d * bL1[c]);
+      const food = inWater * (1 - finCost * (1 - margin)) + onLand;
+      if (food <= 0) { K[c] = 0; return; }
+      const T = tempMean[c];
+      // Warm shallows run short of oxygen, so a gulp of air helps there;
+      // a fin that can prop and push helps through the weed.
+      const warm = Math.max(0, Math.min(1, (T - 8) / 14));
+      const edge = 1 + margin * (0.35 * t.lungs * warm + 0.35 * t.limbs);
+      const dT = (T - opt) / width;
+      const k = food * kMult * edge * Math.exp(-0.5 * dT * dT) * (1 - ice[c]);
       K[c] = k;
       if (N[c] > RANGE_DENSITY && k > dom[c]) dom[c] = k;
     });
@@ -336,10 +454,13 @@ export class Life {
     const t = sp.traits;
     const r = realms(t);
     const rsum = r.fresh + r.sea + r.land || 1;
-    const rate = R_MAX * (1 - 0.6 * t.complexity);
+    const animal = !!t.animal;
+    const rate = animal ? A_RATE * (1 - 0.5 * t.complexity) : R_MAX * (1 - 0.6 * t.complexity);
     const { snow, temp, landF } = this;
     const tier = tierOf(t);
-    const bFresh = this.bFresh[tier], bSea = this.bSea[tier], bLand = this.bLand[tier];
+    const bFresh = animal ? this.aFresh : this.bFresh[tier];
+    const bSea = animal ? this.aSea : this.bSea[tier];
+    const bLand = animal ? this.aLand : this.bLand[tier];
     const N = sp.N, K = sp.K, dom = sp.dom;
     const light = this.light;
     const landy = r.land > 0;
@@ -353,9 +474,11 @@ export class Life {
       const crowd = (r.fresh * bFresh[c] + r.sea * bSea[c] + r.land * bLand[c]) / rsum;
       const keff = k - Math.max(0, crowd - n);
       // Growing season: cold and snow stop growth; short days slow it.
-      let g = light;
+      // Animals don't need the light, and only slow down in the cold.
+      let g = animal ? 1 : light;
       const T = temp[c];
-      if (T < 2) g = 0;
+      if (animal) g = T < 0 ? 0.25 : T < 8 ? 0.25 + (0.75 * T) / 8 : 1;
+      else if (T < 2) g = 0;
       else if (T < 10) g *= (T - 2) / 8;
       if (landy && landF[c] > 0 && snow[c] > 0.5) g *= 1 - snow[c];
       const rg = rate * g;
@@ -375,7 +498,7 @@ export class Life {
     const r = realms(t);
     const { LW, LH, NL, pass, sea, fresh, landF, barrier, tmp } = this;
     const N = sp.N;
-    const D = 0.03 + 0.6 * t.dispersal;          // cells² per year
+    const D = t.animal ? 0.1 + 1.2 * t.dispersal : 0.03 + 0.6 * t.dispersal;   // cells² per year
     const want = D * dt;
     const steps = Math.min(MAX_SUBSTEPS, Math.max(1, Math.ceil(want / 0.2)));
     const f = Math.min(0.2, want / steps);
@@ -469,13 +592,22 @@ export class Life {
       }
       if (rng.chance(pBud)) this.bud(sp, years);
     }
-    // The valley only holds so many species. Over the cap, the rarest
-    // established species in the most crowded realm dies out to make room,
-    // so a boom on land doesn't wipe out the rivers and the sea.
-    while (this.species.length > MAX_LIVE_SPECIES) {
+    // The valley only holds so many species, plants and animals counted
+    // apart. Over the cap, the rarest established species in the most
+    // crowded realm dies out to make room, so a boom on land doesn't wipe
+    // out the rivers and the sea.
+    this.cull(years, false, MAX_LIVE_SPECIES);
+    this.cull(years, true, MAX_LIVE_ANIMALS);
+    this.prune();
+    this.updateStats(years);
+  }
+
+  cull(years, animals, cap) {
+    const isKind = (sp) => !!sp.traits.animal === animals;
+    while (this.species.filter(isKind).length > cap) {
       const byRealm = new Map();
       for (const sp of this.species) {
-        if (sp.born >= years) continue;
+        if (sp.born >= years || !isKind(sp)) continue;
         const k = realmOf(sp.traits);
         if (!byRealm.has(k)) byRealm.set(k, []);
         byRealm.get(k).push(sp);
@@ -490,8 +622,6 @@ export class Life {
       gone.K = null;
       this.species = this.species.filter((sp) => sp !== gone);
     }
-    this.prune();
-    this.updateStats(years);
   }
 
   // A daughter population at a random place in the parent's range, with
@@ -581,6 +711,26 @@ export class Life {
     for (const s of extinct.slice(KEEP_EXTINCT)) this.registry.delete(s.id);
   }
 
+  // How much of a species lives out of the water: in each cell, the share of
+  // its numbers on the dry part. Returns the cells where that alone counts
+  // as living there, and the densest of them.
+  onLand(sp) {
+    const r = realms(sp.traits);
+    const { NL, fresh, sea, landF } = this;
+    const N = sp.N;
+    let cells = 0, best = -1, bestN = 0;
+    for (let c = 0; c < NL; c++) {
+      const n = N[c];
+      if (n <= RANGE_DENSITY) continue;
+      const hw = r.fresh * fresh[c] + r.sea * sea[c], hl = r.land * landF[c];
+      const dry = hw + hl > 0 ? (n * hl) / (hw + hl) : 0;
+      if (dry <= RANGE_DENSITY) continue;
+      cells++;
+      if (dry > bestN) { bestN = dry; best = c; }
+    }
+    return { cells, best };
+  }
+
   // After a disaster has struck from outside a step: recount every species,
   // take out the ones with nothing left, and redo the plant cover, so the
   // losses show at once. Returns how many species died out.
@@ -616,7 +766,26 @@ export class Life {
 
   updateStats(years) {
     let land = 0;
-    for (const sp of this.species) if (isLandPlant(sp.traits)) land++;
+    let animals = 0, landAnimals = 0;
+    for (const sp of this.species) {
+      if (isLandPlant(sp.traits)) land++;
+      if (!sp.traits.animal) continue;
+      animals++;
+      if (!isLandAnimal(sp.traits)) continue;
+      // Out of the water for real: established on dry ground in a few places,
+      // not just able to be, nor living in a river that crosses the land.
+      const ashore = this.onLand(sp);
+      if (ashore.cells < 4) continue;
+      const best = ashore.best;
+      landAnimals++;
+      if (this.stats.firstLandAnimal === null) {
+        this.stats.firstLandAnimal = years;
+        this.stats.firstLandAnimalAt = best;
+        this.stats.firstLandAnimalName = sp.name;
+      }
+    }
+    this.stats.animals = animals;
+    this.stats.landAnimals = landAnimals;
     this.stats.alive = this.species.length;
     this.stats.landPlants = land;
     this.stats.everLived = this.nextId - 1;
@@ -628,6 +797,7 @@ export class Life {
     const { NL, cover, coverC } = this;
     cover.fill(0); coverC.fill(0);
     for (const sp of this.species) {
+      if (sp.traits.animal) continue;
       const r = realms(sp.traits);
       if (r.land <= 0) continue;
       const w = r.land / (r.fresh + r.sea + r.land);
@@ -664,6 +834,7 @@ export class Life {
       rng: this.rng.getState(),
       nextId: this.nextId,
       freshSeeded: !!this.freshSeeded,
+      fishSeeded: !!this.fishSeeded,
       lastDt: this.lastDt || 1,
       stats: { ...this.stats },
       // Registry order matters for pruning ties, so keep it.
@@ -675,8 +846,9 @@ export class Life {
     this.rng.setState(s.rng);
     this.nextId = s.nextId;
     this.freshSeeded = s.freshSeeded;
+    this.fishSeeded = !!s.fishSeeded;
     this.lastDt = s.lastDt;
-    this.stats = { ...s.stats };
+    this.stats = { ...this.stats, ...s.stats };
     this.registry = new Map();
     this.species = [];
     for (const r of s.species) {
@@ -706,14 +878,24 @@ export class Life {
     const sum = new Float32Array(NL);
     const acc = new Float32Array(NL * 3);
     const water = new Float32Array(NL);
+    // Animals in the water and on land, for the specks on the map.
+    const swim = new Float32Array(NL), walk = new Float32Array(NL);
+    const { landF } = this;
     for (const sp of this.species) {
       const r = realms(sp.traits);
-      const wa = (r.fresh + r.sea) / (r.fresh + r.sea + r.land || 1);
+      const animal = !!sp.traits.animal;
+      const wa = animal ? 0 : (r.fresh + r.sea) / (r.fresh + r.sea + r.land || 1);
       const col = hueRgb(sp.traits.hue);
       const N = sp.N;
       for (let c = 0; c < NL; c++) {
         const n = N[c];
         if (n === 0) continue;
+        if (animal) {
+          const hw = r.fresh * fresh[c] + r.sea * sea[c], hl = r.land * landF[c];
+          const onLand = hw + hl > 0 ? hl / (hw + hl) : 0;
+          walk[c] += n * onLand;
+          swim[c] += n * (1 - onLand);
+        }
         water[c] += n * wa;
         sum[c] += n;
         acc[c * 3] += n * col[0]; acc[c * 3 + 1] += n * col[1]; acc[c * 3 + 2] += n * col[2];
@@ -737,14 +919,19 @@ export class Life {
       selected = new Uint8Array(NL);
       for (let c = 0; c < NL; c++) selected[c] = Math.min(255, Math.round(sel.N[c] * 300));
     }
-    return { LW: this.LW, LH: this.LH, aqua, veg, vegC, rgb, selected };
+    const fishes = new Uint8Array(NL), herds = new Uint8Array(NL);
+    for (let c = 0; c < NL; c++) {
+      fishes[c] = Math.min(255, Math.round(swim[c] * 900));
+      herds[c] = Math.min(255, Math.round(walk[c] * 900));
+    }
+    return { LW: this.LW, LH: this.LH, aqua, veg, vegC, rgb, selected, fishes, herds };
   }
 
   summary() {
     const out = [];
     for (const sp of this.registry.values()) {
       out.push({
-        id: sp.id, parent: sp.parent, name: sp.name, form: formOf(sp.traits), hue: sp.traits.hue,
+        id: sp.id, parent: sp.parent, name: sp.name, form: formOf(sp.traits), hue: sp.traits.hue, animal: !!sp.traits.animal,
         born: sp.born, died: sp.died, range: sp.range, peakRange: sp.peakRange, trend: sp.trend,
         traits: { ...sp.traits, tempOptC: tempOptC(sp.traits.tempOpt), tempWidthC: tempWidthC(sp.traits.tempTol) },
       });
@@ -757,7 +944,7 @@ export class Life {
     const out = [];
     for (const sp of this.species) {
       const n = sp.N[c];
-      if (n > RANGE_DENSITY * 0.5) out.push({ id: sp.id, name: sp.name, form: formOf(sp.traits), hue: sp.traits.hue, density: n });
+      if (n > RANGE_DENSITY * 0.5) out.push({ id: sp.id, name: sp.name, form: formOf(sp.traits), hue: sp.traits.hue, animal: !!sp.traits.animal, density: n });
     }
     out.sort((a, b) => b.density - a.density);
     return out;

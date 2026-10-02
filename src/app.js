@@ -449,6 +449,8 @@ function drawLife(f) {
   $('l-land').textContent = ls.firstLandPlant === null ? 'not yet' : `${ls.landPlants} species, since ${when(ls.firstLandPlant)}`;
   $('l-veg').textContent = `${n0.format(ls.vegetated)} km²`;
   $('l-ever').textContent = `${n0.format(ls.everLived)} species`;
+  $('l-animals').textContent = ls.animals ? `${ls.animals} species` : 'none';
+  $('l-ashore').textContent = ls.firstLandAnimal === null ? 'not yet' : `${ls.landAnimals} species, since ${when(ls.firstLandAnimal)}`;
 
   const living = f.species.filter((s) => s.died === null).sort((a, b) => b.range - a.range);
   const byId = new Map(f.species.map((s) => [s.id, s]));
@@ -512,6 +514,11 @@ function renderCard(card, sp, byId) {
   row('Warmth', t.tempOpt, `${n0.format(t.tempOptC)} ± ${n0.format(t.tempWidthC)} °C`);
   row('Complexity', t.complexity, t.complexity < 0.3 ? 'simple' : t.complexity < 0.6 ? 'moderate' : 'complex');
   row('Spread', t.dispersal, t.dispersal < 0.35 ? 'slow' : t.dispersal < 0.7 ? 'medium' : 'fast');
+  if (t.animal) {
+    row('Food: tiny ↔ plants', t.diet, t.diet < 0.35 ? 'filters plankton' : t.diet < 0.65 ? 'a bit of both' : 'grazes plants');
+    row('Fins ↔ legs', t.limbs, t.limbs < 0.25 ? 'fins' : t.limbs < 0.6 ? 'fleshy fins' : 'legs');
+    row('Gills ↔ lungs', t.lungs, t.lungs < 0.25 ? 'gills' : t.lungs < 0.6 ? 'gulps air' : 'lungs');
+  }
   card.append(dl);
 }
 
@@ -771,7 +778,7 @@ function pumpNotes() {
   // One you set off yourself is answered at once.
   const own = pendingNotes.some((e) => e.byHand);
   if (pendingNotes.length && (own || now - noteAt >= NOTE_GAP_MS)) {
-    const rank = (e) => (e.byHand ? 4 : e.catastrophic ? 3 : e.kind === 'meteor' || e.kind === 'volcano' ? 2 : e.missed ? 0 : 1);
+    const rank = (e) => (e.byHand ? 4 : e.catastrophic || e.kind === 'milestone' ? 3 : e.kind === 'meteor' || e.kind === 'volcano' ? 2 : e.missed ? 0 : 1);
     let pick = pendingNotes[pendingNotes.length - 1];
     for (const e of pendingNotes) if (rank(e) > rank(pick)) pick = e;
     showNote(pick, pendingNotes.length - 1);
