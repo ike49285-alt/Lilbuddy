@@ -6,17 +6,18 @@
 // longer than the model's maximum step. When ticks can't be computed fast
 // enough the actual rate falls behind the target, and the page says so.
 //
-// Frames go out one at a time: the next is sent only once the page says it
-// has drawn the last, so a slow phone gets fewer frames rather than a
-// backlog that starves its taps. While paused, frames go out only when
-// something has changed.
+// At most two frames are in flight: one being drawn and one waiting, so the
+// page always has the next ready when the screen refreshes. More go out only
+// as the page acknowledges them, and no sooner than the interval it asks for,
+// which it sets from how long its frames take to draw. A fast device gets up
+// to 30 fps; a slow phone gets fewer rather than a backlog that starves its
+// taps. While paused, frames go out only when something has changed.
 
 import { Simulation, transferList, stateTransferList, MAX_STEP_YEARS } from './sim.js';
 
 const DAY = 1 / 365.25;
 const TICKS_PER_SECOND = 10;
 const BUDGET_MS = 12;       // longest a single slice may run before yielding
-const FRAME_MS = 125;       // at most 8 frames a second to the page
 const LOOP_MS = 16;
 
 export function tickFor(rate) {
@@ -35,8 +36,11 @@ export function createHost(post) {
   let stepMs = 0;
   let tickYears = tickFor(rate);
   let selectedId = null;
-  let inFlight = false;     // a frame the page hasn't acknowledged yet
+  let paceMs = 1000 / 30;   // the page's requested spacing between frames
+  let inFlight = 0;         // frames the page hasn't acknowledged yet
+  const MAX_IN_FLIGHT = 2;
   let dirty = true;         // something changed that the page should see
+  let urgent = false;       // a control changed: show it without waiting for the pace
   // Rolling measure of the actual rate: [real ms, sim years] samples.
   const recent = [];
 
@@ -56,12 +60,14 @@ export function createHost(post) {
     f.tickYears = tickYears;
     post({ type: 'frame', frame: f }, transferList(f));
     lastFrame = performance.now();
-    inFlight = true;
+    inFlight++;
     dirty = false;
+    urgent = false;
   }
 
   function maybeSend(now) {
-    if (inFlight || now - lastFrame < FRAME_MS) return;
+    if (inFlight >= MAX_IN_FLIGHT) return;
+    if (!urgent && now - lastFrame < paceMs - 1) return;
     if (!paused || dirty) sendFrame();
   }
 
@@ -102,7 +108,13 @@ export function createHost(post) {
     recent.push([now, sim.years]);
     while (recent.length > 2 && now - recent[0][0] > 1000) recent.shift();
     maybeSend(now);
-    timer = setTimeout(loop, LOOP_MS);
+    // Wake again when the next frame is due if that's sooner than the usual
+    // beat, so frames go out on pace rather than at the next loop after it.
+    let wait = LOOP_MS;
+    if (!paused && inFlight < MAX_IN_FLIGHT) {
+      wait = Math.max(2, Math.min(LOOP_MS, lastFrame + paceMs - performance.now()));
+    }
+    timer = setTimeout(loop, wait);
   }
 
   function start() {
@@ -111,16 +123,23 @@ export function createHost(post) {
   }
 
   return function onMessage(msg) {
+    handle(msg);
+    if (sim && urgent) maybeSend(performance.now());
+  };
+
+  function handle(msg) {
     switch (msg.type) {
       case 'ack':
-        inFlight = false;
+        inFlight = Math.max(0, inFlight - 1);
+        if (msg.nextIn > 0) paceMs = Math.max(1000 / 30, Math.min(500, msg.nextIn));
+        if (sim) maybeSend(performance.now());
         break;
       case 'init':
         sim = new Simulation(msg.seed);
         selectedId = null;
         debt = 0;
         recent.length = 0;
-        inFlight = false;
+        inFlight = 0;
         dirty = true;
         start();
         break;
@@ -130,6 +149,7 @@ export function createHost(post) {
         debt = 0;
         recent.length = 0;
         dirty = true;
+        urgent = true;
         break;
       case 'save': {
         const state = sim.saveState();
@@ -141,13 +161,14 @@ export function createHost(post) {
         selectedId = null;
         debt = 0;
         recent.length = 0;
-        inFlight = false;
+        inFlight = 0;
         dirty = true;
         start();
         break;
       case 'select':
         selectedId = msg.id || null;
         dirty = true;
+        urgent = true;
         break;
       case 'inspect':
         post({ type: 'inspected', info: sim.inspect(msg.i) });
@@ -156,6 +177,7 @@ export function createHost(post) {
         paused = true;
         recent.length = 0;
         dirty = true;
+        urgent = true;
         break;
       case 'play':
         paused = false;
@@ -163,6 +185,7 @@ export function createHost(post) {
         recent.length = 0;
         last = performance.now();
         dirty = true;
+        urgent = true;
         break;
       // Test hook: advance synchronously to a year using the given tick.
       case 'runTo': {
@@ -174,5 +197,5 @@ export function createHost(post) {
         break;
       }
     }
-  };
+  }
 }

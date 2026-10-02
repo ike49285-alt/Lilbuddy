@@ -84,6 +84,9 @@ function afterStart(seed) {
 function onMessage(e) {
   const msg = e.data;
   if (msg.type === 'frame') {
+    // A frame that arrives while another is still waiting replaces it; the
+    // replaced one is acknowledged at once so the worker can keep going.
+    if (drawPending && worker) worker.postMessage({ type: 'ack', nextIn: paceMs });
     last = msg.frame;
     if (!drawPending) {
       drawPending = true;
@@ -229,11 +232,38 @@ function togglePlay() {
 let drawPending = false;
 let lastSlow = 0;
 const SLOW_MS = 500;
-function drawLatest() {
+
+// Adaptive pacing: each frame's real cost on the main thread is its script
+// time, or how far it pushed the next display frame late (which catches the
+// browser's paint and canvas work), whichever is larger. The worker is told
+// to space frames so drawing takes about a quarter of the main thread: up to
+// 30 fps when frames are cheap, fewer on a device that's struggling.
+const SHARE = 0.25;
+const MIN_PACE = 1000 / 30;
+const MAX_PACE = 500;
+let frameCost = 8;
+let paceMs = MIN_PACE;
+let vsync = 1000 / 60;
+const drawnAt = [];
+
+function drawLatest(ts) {
   drawPending = false;
   if (!last) return;
+  const t0 = performance.now();
   draw(last);
-  if (worker) worker.postMessage({ type: 'ack' });
+  const js = performance.now() - t0;
+  // Ask for the next frame now, paced by what earlier frames cost; this
+  // frame's own cost is folded in once the browser has painted it.
+  if (worker) worker.postMessage({ type: 'ack', nextIn: paceMs });
+  drawnAt.push(t0);
+  while (drawnAt.length && t0 - drawnAt[0] > 2000) drawnAt.shift();
+  requestAnimationFrame((ts2) => {
+    const gap = ts2 - ts;
+    if (gap > 4 && gap < vsync) vsync = gap;
+    const cost = Math.max(js, gap - vsync);
+    frameCost = frameCost * 0.7 + cost * 0.3;
+    paceMs = Math.max(MIN_PACE, Math.min(MAX_PACE, frameCost / SHARE));
+  });
 }
 
 // Colour tokens, read once and again when the colour scheme changes.
@@ -597,6 +627,7 @@ window.Headwaters = {
   }),
   setRate: (r) => setRate(r),
   life: () => (last ? { stats: last.lifeStats, species: last.species } : null),
+  fps: () => ({ fps: drawnAt.length / 2, paceMs, frameCost }),
   saveNow: () => new Promise((resolve) => { pendingSave = resolve; requestSave('test'); }),
   select: (id) => selectSpecies(id),
 };

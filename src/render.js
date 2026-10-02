@@ -246,7 +246,7 @@ export class MapRenderer {
     // the costliest thing on a phone, so they're drawn to their own layer and
     // redrawn only when they've had time to change.
     const now = performance.now();
-    const stale = now - this.riverAt >= 1500;
+    const stale = now - this.riverAt >= 1000;
     if (this.rivers.width !== w || this.rivers.height !== h || (stale && f.years !== this.riverYears)) {
       if (this.rivers.width !== w || this.rivers.height !== h) { this.rivers.width = w; this.rivers.height = h; }
       this.rctx.clearRect(0, 0, w, h);
