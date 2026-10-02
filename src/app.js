@@ -212,7 +212,10 @@ function draw(f) {
   $('s-q').textContent = `${n1.format(st.mouthQ / 3.156e7)} m³/s`;
   $('s-share').textContent = `${n0.format(st.mainShare * 100)}%`;
   $('s-relief').textContent = `${n0.format(st.relief)} m`;
-  $('s-ice').textContent = st.iceCells ? `${n0.format(st.iceCells * CELL_KM2)} km²` : 'none';
+  const iceKm = st.iceCells * CELL_KM2, snowKm = (st.snowCells || 0) * CELL_KM2;
+  $('s-ice').textContent = iceKm || snowKm
+    ? [iceKm ? `${n0.format(iceKm)} km² ice` : '', snowKm ? `${n0.format(snowKm)} km² snow` : ''].filter(Boolean).join(', ')
+    : 'none';
   $('s-lakes').textContent = st.lakeCells ? `${n0.format(st.lakeCells * CELL_KM2)} km²` : 'none';
   $('s-delta').textContent = `${n0.format(st.deltaCells * CELL_KM2)} km²`;
   $('s-temp').textContent = `${n1.format(f.climate.seaT)} °C`;

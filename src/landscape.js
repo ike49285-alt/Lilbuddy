@@ -20,8 +20,10 @@ const ICE_EROSION = 2.4;        // multiplier under ice
 const TRANSPORT = 25;           // transport capacity as a multiple of detachment
 const DEPOSIT_RATE = 0.35;      // fraction of over-capacity load dropped per cell
 const MAX_DEPOSIT_PER_YR = 0.003; // metres per cell
+const MELT_PER_DEG_DAY = 0.004; // metres of snow (water equivalent) melted per °C above freezing per day
+const MAX_SNOW = 4;              // metres; deeper than this it counts as glacier, not seasonal snow
 const LAKE_TRAP = 0.92;         // fraction of a river's load a lake keeps
-const HILL_DIFF_PER_YR = 3e-6;  // hillslope smoothing on land
+const HILL_DIFF_PER_YR = 1.5e-5; // hillslope smoothing on land
 const SLIDE_SLOPE = 0.5;        // beyond this gradient a slope fails and slides
 const SLIDE_PER_YR = 5e-4;
 const MARINE_DIFF_PER_YR = 1.2e-4; // smoothing on the sea floor
@@ -57,8 +59,10 @@ export class Landscape {
     this.fert = new Float32Array(N);      // recent deposition, smoothed — floodplain fertility
     this.ocean = new Uint8Array(N);
     this.ice = new Uint8Array(N);
+    this.snow = new Float32Array(N);      // seasonal snowpack, metres of water
     this.lake = new Uint8Array(N);
     this.maxDonor = new Int32Array(N);
+    this.share = new Float64Array(8);
     this.basin = new Int32Array(N);
     this.tmp = new Float64Array(N);
 
@@ -70,7 +74,7 @@ export class Landscape {
 
     this.stats = {
       mouthQ: 0, trunkLen: 0, relief: 0, deltaCells: 0, lakeCells: 0,
-      mainShare: 0, outlets: 0, iceCells: 0, catchment: 0,
+      mainShare: 0, outlets: 0, iceCells: 0, snowCells: 0, catchment: 0,
     };
     this.mouth = -1;
   }
@@ -80,7 +84,7 @@ export class Landscape {
   prime(climate) {
     this.markOcean(climate.seaLevel);
     this.priorityFlood(climate.seaLevel);
-    this.accumulate(climate);
+    this.accumulate(climate, 1);
     this.measure(climate);
   }
 
@@ -94,7 +98,7 @@ export class Landscape {
 
     this.markOcean(climate.seaLevel);
     this.priorityFlood(climate.seaLevel);
-    this.accumulate(climate);
+    this.accumulate(climate, dt);
     this.erode(climate, dt);
     this.transport(climate.seaLevel, dt);
     this.diffuse(dt);
@@ -181,23 +185,73 @@ export class Landscape {
     for (let i = 0; i < N; i++) lake[i] = !ocean[i] && filled[i] - z[i] > LAKE_MIN_DEPTH ? 1 : 0;
   }
 
-  // Discharge: rain (and meltwater) on every land cell, summed downstream.
-  accumulate(climate) {
-    const { N, z, Q, rec, stack, ocean, ice, maxDonor } = this;
+  // Discharge: rain and meltwater on every land cell, summed downstream.
+  // Through the seasons, snow piles up in the cold and runs off in the
+  // thaw; with longer ticks every cell simply sheds its annual rain.
+  accumulate(climate, dt) {
+    const { N, z, Q, rec, stack, ocean, ice, snow, maxDonor } = this;
     const area = CELL_M * CELL_M;
-    let iceCells = 0;
+    const seasonal = climate.seasonal;
+    const meltPerDeg = MELT_PER_DEG_DAY * dt * 365.25;
+    let iceCells = 0, snowCells = 0;
     for (let i = 0; i < N; i++) {
-      if (ocean[i]) { Q[i] = 0; ice[i] = 0; continue; }
-      Q[i] = climate.precipAt(z[i]) * area;
+      if (ocean[i]) { Q[i] = 0; ice[i] = 0; snow[i] = 0; continue; }
+      const P = climate.precipAt(z[i]);
       ice[i] = climate.iceAt(z[i]) ? 1 : 0;
       iceCells += ice[i];
+      if (!seasonal) {
+        snow[i] = 0;
+        Q[i] = P * area;
+        continue;
+      }
+      const T = climate.tempAt(z[i]);
+      const fall = P * dt;
+      let water = 0;
+      if (T < 0) snow[i] = Math.min(MAX_SNOW, snow[i] + fall);
+      else water = fall;
+      if (T > 0 && snow[i] > 0) {
+        const m = Math.min(snow[i], meltPerDeg * T);
+        snow[i] -= m;
+        water += m;
+      }
+      if (snow[i] > 0.02) snowCells++;
+      Q[i] = (water / dt) * area;
     }
+    this.stats.snowCells = snowCells;
+    // Below the channel threshold, water spreads over every downhill
+    // neighbour in proportion to slope (multiple flow direction), the way
+    // sheetwash does on a real hillside. Once it's a channel it all follows
+    // the steepest path. Spreading on the slopes keeps the grid from carving
+    // ranks of straight, parallel gullies.
+    const { W, H, filled, lake } = this;
     maxDonor.fill(-1);
     for (let s = N - 1; s >= 0; s--) {
       const i = stack[s];
       const r = rec[i];
       if (r === i) continue;
-      Q[r] += Q[i];
+      if (Q[i] >= CHANNEL_Q || lake[i]) {
+        Q[r] += Q[i];
+        const d = maxDonor[r];
+        if (d < 0 || Q[i] > Q[d]) maxDonor[r] = i;
+        continue;
+      }
+      const x = i % W, y = (i / W) | 0;
+      const fi = filled[i];
+      let total = 0;
+      for (let k = 0; k < 8; k++) {
+        const nx = x + NB[k][0], ny = y + NB[k][1];
+        if (nx < 0 || nx >= W || ny < 0 || ny >= H) { this.share[k] = 0; continue; }
+        const drop = fi - filled[ny * W + nx];
+        const w = drop > 0 ? drop / NB[k][2] : 0;
+        this.share[k] = w;
+        total += w;
+      }
+      if (total <= 0) { Q[r] += Q[i]; continue; }
+      const q = Q[i] / total;
+      for (let k = 0; k < 8; k++) {
+        const w = this.share[k];
+        if (w > 0) Q[(y + NB[k][1]) * W + x + NB[k][0]] += q * w;
+      }
       const d = maxDonor[r];
       if (d < 0 || Q[i] > Q[d]) maxDonor[r] = i;
     }

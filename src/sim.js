@@ -2,7 +2,7 @@
 
 import { makeRng } from './rng.js';
 import { generateTerrain } from './terrain.js';
-import { Climate } from './climate.js';
+import { Climate, SEASONAL_TICK } from './climate.js';
 import { Landscape, MAX_STEP_YEARS } from './landscape.js';
 
 export { MAX_STEP_YEARS };
@@ -26,7 +26,7 @@ export class Simulation {
       count: 0,
       head: 0,
     };
-    this.climate.set(0);
+    this.climate.set(0, false);
     this.land.prime(this.climate);
     this.sample();
   }
@@ -36,7 +36,7 @@ export class Simulation {
     const d = Math.min(MAX_STEP_YEARS, dt);
     this.years += d;
     this.steps++;
-    this.climate.set(this.years);
+    this.climate.set(this.years, d <= SEASONAL_TICK);
     this.land.step(this.climate, d);
     if (this.years >= this.nextSample) this.sample();
   }
@@ -73,9 +73,12 @@ export class Simulation {
       ocean: land.ocean.slice(),
       lake: land.lake.slice(),
       ice: land.ice.slice(),
+      snow: Uint8Array.from(land.snow, (m) => Math.min(255, Math.round(m * 510))),
       seaLevel: climate.seaLevel,
       climate: {
         label: climate.label(),
+        seasonal: climate.seasonal,
+        season: climate.seasonal ? climate.season() : null,
         glacial: climate.glacial,
         seaT: climate.seaT,
         precip: climate.precip,
@@ -88,5 +91,5 @@ export class Simulation {
 
 export function transferList(frame) {
   return [frame.z.buffer, frame.Q.buffer, frame.rec.buffer, frame.ocean.buffer,
-    frame.lake.buffer, frame.ice.buffer, frame.history.sea.buffer, frame.history.mouthQ.buffer];
+    frame.lake.buffer, frame.ice.buffer, frame.snow.buffer, frame.history.sea.buffer, frame.history.mouthQ.buffer];
 }

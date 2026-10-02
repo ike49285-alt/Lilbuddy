@@ -67,7 +67,8 @@ export class MapRenderer {
   }
 
   draw(f) {
-    const { W, H, z, ocean, lake, ice, Q, rec, seaLevel } = f;
+    const { W, H, z, ocean, lake, ice, snow, seaLevel } = f;
+    const seaT = f.climate.seaT;
     if (!this.image || this.image.width !== W || this.image.height !== H) {
       this.terrain.width = W;
       this.terrain.height = H;
@@ -100,10 +101,18 @@ export class MapRenderer {
           if (ice[i]) {
             r = 226 * shade; g = 234 * shade; b = 240 * shade;
           } else if (lake[i]) {
-            r = 84; g = 138; b = 174;
+            // A lake freezes over when it's well below zero up there.
+            const frozen = f.climate.seasonal && seaT - 0.0065 * Math.max(0, e) < -2;
+            if (frozen) { r = 200; g = 216; b = 228; } else { r = 84; g = 138; b = 174; }
           } else {
             const c = ramp(LAND, e);
             r = c[1] * shade; g = c[2] * shade; b = c[3] * shade;
+            // Seasonal snow: a dusting shows; ten centimetres covers.
+            const depth = snow[i] / 510;
+            if (depth > 0.005) {
+              const a = Math.min(1, depth / 0.1) * 0.92;
+              r += (238 * shade - r) * a; g += (242 * shade - g) * a; b += (247 * shade - b) * a;
+            }
           }
         }
         px[o] = r; px[o + 1] = g; px[o + 2] = b; px[o + 3] = 255;

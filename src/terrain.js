@@ -19,6 +19,7 @@ export function generateTerrain(rng) {
   const rough = makeNoise2D(rng.fork('rough'));
   const strata = makeNoise2D(rng.fork('strata'));
   const ridge = makeNoise2D(rng.fork('ridge'));
+  const domes = makeNoise2D(rng.fork('domes'));
 
   // Where the valley axis sits, wandering a little down the slope.
   const axis0 = rng.range(0.38, 0.62);
@@ -56,7 +57,8 @@ export function generateTerrain(rng) {
       // Low-amplitude roughness: enough to break up the ramp into many
       // competing trickles, not enough to pre-draw any valleys.
       const seaward = smooth((v - SHORE_ROW + 0.03) / 0.06);
-      const r = fbm(rough, u * 7, v * 12, 5) * 18 * (1 - 0.7 * seaward);
+      const highland = Math.max(0, 1 - v / 0.5);
+      const r = fbm(rough, u * 7, v * 9, 5) * (18 + 70 * highland) * (1 - 0.7 * seaward);
       // A ragged summit line rather than a ruler edge.
       const rr = v < 0.18 ? fbm(ridge, u * 5, 0.5, 3) * 60 * (1 - v / 0.18) : 0;
       z[i] = base + trough + r + rr;
@@ -68,7 +70,11 @@ export function generateTerrain(rng) {
       // Land uplift and coastal subsidence blend across a band at the shore,
       // so no fault scarp grows along the old coastline.
       const off = Math.max(0, (v - SHORE_ROW) / (1 - SHORE_ROW));
-      const range = v < 0.5 ? 0.0011 * Math.pow(1 - v / 0.5, 1.2) : 0;
+      // The range doesn't rise evenly: some blocks are pushed up faster than
+      // others, so ridges and spurs form and the drainage has to branch
+      // around them instead of running straight down the slope.
+      const swell = 1 + 0.75 * fbm(domes, u * 3.2, v * 4.5, 3);
+      const range = v < 0.5 ? 0.0011 * Math.pow(1 - v / 0.5, 1.2) * swell : 0;
       const flankTaper = 1 - smooth((v - SHORE_ROW + 0.12) / 0.12);
       const flank = 0.00016 * Math.pow(Math.min(1, across * 2.2), 2) * (1 - 0.6 * Math.min(1, v / SHORE_ROW)) * flankTaper;
       const sink = -0.00008 * (1 + 2 * off);
