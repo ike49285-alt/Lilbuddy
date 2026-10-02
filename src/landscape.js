@@ -55,6 +55,7 @@ export class Landscape {
     this.rec = new Int32Array(N);
     this.stack = new Int32Array(N);
     this.Q = new Float32Array(N);         // discharge, m³/yr
+    this.runoff = new Float32Array(N);    // each cell's own water before routing, m³/yr
     this.qs = new Float64Array(N);        // sediment in transit, m³ per step
     this.eroded = new Float32Array(N);    // metres removed this step (negative = deposited)
     this.fert = new Float32Array(N);      // recent deposition, smoothed — floodplain fertility
@@ -90,7 +91,19 @@ export class Landscape {
     this.measure(climate);
   }
 
-  // One century.
+  // Re-routes the water after the surface has been changed from outside a
+  // step (an impact, an eruption), so the change shows at once even while
+  // paused. Uses the last step's runoff, so nothing advances in time.
+  refresh(climate) {
+    this.markOcean(climate.seaLevel);
+    this.priorityFlood(climate.seaLevel);
+    const { N, Q, runoff, ocean } = this;
+    for (let i = 0; i < N; i++) Q[i] = ocean[i] ? 0 : runoff[i];
+    this.route();
+    this.measure(climate);
+  }
+
+  // One step of dt years.
   step(climate, dt) {
     const { N, z, uplift } = this;
     for (let i = 0; i < N; i++) {
@@ -191,7 +204,7 @@ export class Landscape {
   // Through the seasons, snow piles up in the cold and runs off in the
   // thaw; with longer ticks every cell simply sheds its annual rain.
   accumulate(climate, dt) {
-    const { N, z, Q, rec, stack, ocean, ice, snow, maxDonor } = this;
+    const { N, z, Q, ocean, ice, snow } = this;
     const area = CELL_M * CELL_M;
     const seasonal = climate.seasonal;
     const meltPerDeg = MELT_PER_DEG_DAY * dt * 365.25;
@@ -220,6 +233,13 @@ export class Landscape {
       Q[i] = (water / dt) * area;
     }
     this.stats.snowCells = snowCells;
+    this.stats.iceCells = iceCells;
+    this.runoff.set(Q);
+    this.route();
+  }
+
+  route() {
+    const { N, Q, rec, stack, maxDonor } = this;
     // Below the channel threshold, water spreads over every downhill
     // neighbour in proportion to slope (multiple flow direction), the way
     // sheetwash does on a real hillside. Once it's a channel it all follows
@@ -257,7 +277,6 @@ export class Landscape {
       const d = maxDonor[r];
       if (d < 0 || Q[i] > Q[d]) maxDonor[r] = i;
     }
-    this.stats.iceCells = iceCells;
   }
 
   // Implicit stream-power incision, downstream first so every receiver is

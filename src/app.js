@@ -75,6 +75,9 @@ function afterStart(seed) {
   clearInterval(inspectTimer);
   $('inspect').hidden = true;
   renderer.resetView();
+  renderer.effects = [];
+  pendingNotes = [];
+  hideNote();
   viewChanged();
   $('seed').value = seed;
   try { history.replaceState(null, '', `#${seed}`); } catch { /* some hosts forbid it */ }
@@ -89,6 +92,9 @@ function onMessage(e) {
     // A frame that arrives while another is still waiting replaces it; the
     // replaced one is acknowledged at once so the worker can keep going.
     if (drawPending && worker) worker.postMessage({ type: 'ack', nextIn: paceMs });
+    // Events ride on the frame they happened in; a replaced frame hands its
+    // own on to the next, so none are missed.
+    if (drawPending && last && last.events && last.events.length) msg.frame.events = last.events.concat(msg.frame.events || []);
     last = msg.frame;
     if (!drawPending) {
       drawPending = true;
@@ -286,6 +292,10 @@ function draw(f, force) {
   if (sel) renderer.selectedRgb = hslRgb(sel.hue);
   renderer.draw(f);
   composedKey = renderer.viewKey();
+  if (f.events && f.events.length) {
+    for (const ev of f.events) onEvent(ev, f);
+    f.events = [];
+  }
   $('time').textContent = formatTime(f.years, f.tickYears);
   $('tick').textContent = `tick ${formatSpan(f.tickYears)}`;
   const lag = $('lag');
@@ -687,6 +697,10 @@ canvas.addEventListener('pointercancel', (e) => release(e, true));
 function tap(clientX, clientY) {
   const now = performance.now();
   const [fx, fy] = fractions(clientX, clientY);
+  if (armed) {
+    dropAt(...renderer.toWorld(fx, fy));
+    return;
+  }
   if (lastTap && now - lastTap.t < DOUBLE_TAP_MS && Math.hypot(clientX - lastTap.x, clientY - lastTap.y) < 30) {
     lastTap = null;
     renderer.zoomAt(ZOOM_STEP, fx, fy);
@@ -712,6 +726,121 @@ canvas.addEventListener('wheel', (e) => {
 $('zoom-in').addEventListener('click', () => { renderer.zoomAt(ZOOM_STEP, 0.5, 0.5); viewChanged(); });
 $('zoom-out').addEventListener('click', () => { renderer.zoomAt(1 / ZOOM_STEP, 0.5, 0.5); viewChanged(); });
 $('zoom-reset').addEventListener('click', () => { renderer.resetView(); viewChanged(); });
+
+// --- disasters ------------------------------------------------------------------
+
+let armed = null;            // the tool waiting for a tap on the map
+let toolSize = 'big';
+let pendingNotes = [];
+let noteEv = null;
+let noteAt = 0;
+let noteTimer = null;
+let fxRunning = false;
+const NOTE_MS = 6000;
+const NOTE_GAP_MS = 1000;
+const eventLog = [];         // for the test hooks
+
+renderer.setEffectsCanvas($('fx-canvas'));
+
+function onEvent(ev) {
+  eventLog.push({ ...ev, cells: ev.cells ? ev.cells.length : 0 });
+  if (eventLog.length > 50) eventLog.shift();
+  renderer.addEffect(ev, ev.quiet);
+  startEffects();
+  if (!ev.quiet) {
+    pendingNotes.push(ev);
+    pumpNotes();
+  }
+}
+
+function startEffects() {
+  if (fxRunning) return;
+  fxRunning = true;
+  const tick = () => {
+    if (renderer.drawEffects()) requestAnimationFrame(tick);
+    else fxRunning = false;
+  };
+  requestAnimationFrame(tick);
+}
+
+// One note at a time, at most one new one a second; when several arrive
+// together the most serious shows, with a count of the rest.
+function pumpNotes() {
+  const now = performance.now();
+  clearTimeout(noteTimer);
+  // One you set off yourself is answered at once.
+  const own = pendingNotes.some((e) => e.byHand);
+  if (pendingNotes.length && (own || now - noteAt >= NOTE_GAP_MS)) {
+    const rank = (e) => (e.byHand ? 4 : e.catastrophic ? 3 : e.kind === 'meteor' || e.kind === 'volcano' ? 2 : e.missed ? 0 : 1);
+    let pick = pendingNotes[pendingNotes.length - 1];
+    for (const e of pendingNotes) if (rank(e) > rank(pick)) pick = e;
+    showNote(pick, pendingNotes.length - 1);
+    pendingNotes = [];
+    noteAt = now;
+  }
+  if (pendingNotes.length) noteTimer = setTimeout(pumpNotes, NOTE_GAP_MS - (now - noteAt));
+  else if (noteEv) noteTimer = setTimeout(() => { if (performance.now() - noteAt >= NOTE_MS - 20) hideNote(); else pumpNotes(); }, NOTE_MS - (now - noteAt));
+}
+
+function showNote(ev, more) {
+  const b = $('event-note');
+  noteEv = ev;
+  b.textContent = ev.label;
+  if (more > 0) b.append(el('span', 'more', `+${more} more`));
+  b.classList.toggle('catastrophic', !!ev.catastrophic);
+  b.setAttribute('aria-label', ev.missed ? ev.label : `${ev.label}. Show on the map.`);
+  b.hidden = false;
+}
+
+function hideNote() {
+  noteEv = null;
+  $('event-note').hidden = true;
+}
+
+$('event-note').addEventListener('click', () => {
+  const ev = noteEv;
+  if (!ev) return;
+  renderer.lookAt(ev.x, ev.y, Math.max(renderer.zoom, Math.min(6, renderer.W / Math.max(20, 5 * ev.r))));
+  viewChanged();
+  if (!ev.missed) { renderer.addEffect({ ...ev, quiet: false }); startEffects(); }
+  hideNote();
+});
+
+function dropAt(wx, wy) {
+  if (!last || !armed) return;
+  const x = Math.floor(wx), y = Math.floor(wy);
+  if (x < 0 || y < 0 || x >= last.W || y >= last.H) return;
+  const sized = armed === 'volcano' || armed === 'meteor';
+  worker.postMessage({ type: 'disaster', kind: armed, i: y * last.W + x, size: sized ? toolSize : 'big' });
+}
+
+function setArmed(kind) {
+  armed = kind;
+  for (const b of document.querySelectorAll('.tools .tool')) b.setAttribute('aria-pressed', b.dataset.kind === kind ? 'true' : 'false');
+  $('size-row').hidden = !(kind === 'volcano' || kind === 'meteor');
+  const names = { flood: 'flood a river', lightning: 'strike with lightning', volcano: 'raise a volcano', meteor: 'drop a meteor' };
+  $('tools-hint').textContent = kind ? `Tap the map to ${names[kind]}.` : 'Pick one, then tap the map.';
+  const label = { flood: 'Flood', lightning: 'Lightning', volcano: 'Volcano', meteor: 'Meteor' };
+  $('tools-toggle').textContent = kind ? `Tap map: ${label[kind]}` : 'Disasters';
+  canvas.classList.toggle('armed', !!kind);
+}
+
+function setTray(open) {
+  $('tools-toggle').setAttribute('aria-expanded', open ? 'true' : 'false');
+  $('tools').hidden = !open;
+  if (!open) setArmed(null);
+}
+
+$('tools-toggle').addEventListener('click', () => setTray($('tools').hidden));
+for (const b of document.querySelectorAll('.tools .tool')) {
+  b.addEventListener('click', () => setArmed(armed === b.dataset.kind ? null : b.dataset.kind));
+}
+for (const b of document.querySelectorAll('#size-row button')) {
+  b.addEventListener('click', () => {
+    toolSize = b.dataset.size;
+    for (const o of document.querySelectorAll('#size-row button')) o.setAttribute('aria-pressed', o === b ? 'true' : 'false');
+  });
+}
 
 // Tap the map: what lives here?
 function inspectCell(wx, wy) {
@@ -779,6 +908,19 @@ window.Headwaters = {
   saveNow: () => new Promise((resolve) => { pendingSave = resolve; requestSave('test'); }),
   select: (id) => selectSpecies(id),
   view: () => ({ zoom: renderer.zoom, x0: renderer.x0, y0: renderer.y0, inspectAt }),
+  events: () => eventLog.slice(),
+  note: () => (noteEv ? $('event-note').textContent : null),
+  effects: () => renderer.effects.length,
+  disaster: (kind, x, y, size) => worker.postMessage({ type: 'disaster', kind, i: y * last.W + x, size }),
+  cooling: () => (last ? last.climate.cooling : 0),
+  lookAt: (x, y, zoom) => { renderer.lookAt(x, y, zoom); viewChanged(); },
+  // The most thickly vegetated spot, in world cells.
+  greenest: () => {
+    const v = last.life.veg;
+    let best = 0;
+    for (let c = 1; c < v.length; c++) if (v[c] > v[best]) best = c;
+    return { x: (best % last.life.LW) * 2 + 1, y: Math.floor(best / last.life.LW) * 2 + 1, veg: v[best] / 255 };
+  },
 };
 
 // Editing the seed in the link starts that world.

@@ -26,6 +26,10 @@ export class Climate {
     this.p1 = r.range(0, Math.PI * 2);
     this.p2 = r.range(0, Math.PI * 2);
     this.p3 = r.range(0, Math.PI * 2);
+    // A short-lived chill from a big eruption or impact, set by the
+    // simulation before each set(): degrees of cooling and what caused it.
+    this.cooling = 0;
+    this.winter = '';
     this.set(0, false);
   }
 
@@ -46,7 +50,7 @@ export class Climate {
     this.t = t;
     this.era = era;
     this.glacial = glacial;
-    this.meanSeaT = BASE_T - 4 * (era - 0.5) - GLACIAL_COOLING * glacial;
+    this.meanSeaT = BASE_T - 4 * (era - 0.5) - GLACIAL_COOLING * glacial - this.cooling;
     this.seaLevel = -GLACIAL_SEA_DROP * glacial + 12 * (0.5 - era);
     // Ice ages are dry; long wet and dry spells come from their own noise.
     const spell = this.wet(t / 6e5, 0.81);
@@ -89,6 +93,7 @@ export class Climate {
   label() {
     const era = this.era > 0.62 ? 'icehouse' : this.era < 0.38 ? 'hothouse' : 'temperate';
     const phase = this.glacial > 0.55 ? 'glacial' : this.glacial > 0.2 ? 'cooling' : 'interglacial';
-    return this.seasonal ? `${this.season()} · ${phase} · ${era}` : `${phase} · ${era}`;
+    const base = this.seasonal ? `${this.season()} · ${phase} · ${era}` : `${phase} · ${era}`;
+    return this.cooling > 0.3 && this.winter ? `${this.winter} · ${base}` : base;
   }
 }

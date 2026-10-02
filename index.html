@@ -16,7 +16,23 @@
   <main class="layout">
     <figure class="map" id="map">
       <canvas id="map-canvas" role="img" aria-label="Relief map of the valley, mountains at the top and the sea at the bottom. Tap a spot to see what lives there; pinch or use the buttons to zoom, and drag to move around when zoomed in."></canvas>
+      <canvas id="fx-canvas" class="fx" aria-hidden="true"></canvas>
       <span id="phase" class="chip on-map">interglacial</span>
+      <button type="button" id="tools-toggle" class="tools-toggle" aria-expanded="false" aria-controls="tools">Disasters</button>
+      <div class="tools" id="tools" hidden>
+        <div class="tool-row" role="group" aria-label="Disaster to drop">
+          <button type="button" class="tool" data-kind="flood" aria-pressed="false">Flood</button>
+          <button type="button" class="tool" data-kind="lightning" aria-pressed="false">Lightning</button>
+          <button type="button" class="tool" data-kind="volcano" aria-pressed="false">Volcano</button>
+          <button type="button" class="tool" data-kind="meteor" aria-pressed="false">Meteor</button>
+        </div>
+        <div class="size-row" id="size-row" role="group" aria-label="Size" hidden>
+          <button type="button" data-size="small" aria-pressed="false">Small</button>
+          <button type="button" data-size="big" aria-pressed="true">Big</button>
+          <button type="button" data-size="catastrophic" aria-pressed="false">Catastrophic</button>
+        </div>
+        <p class="visually-hidden" id="tools-hint" aria-live="polite">Pick one, then tap the map.</p>
+      </div>
       <div class="north" aria-hidden="true">N<span>↑</span></div>
       <div class="map-mode" role="group" aria-label="Map shows">
         <button type="button" id="mode-landscape" aria-pressed="true">Landscape</button>
@@ -107,6 +123,7 @@
   </main>
 
   <div class="timebar" id="timebar" role="region" aria-label="Time">
+    <button type="button" id="event-note" class="event-note" hidden aria-live="polite"></button>
     <div class="tb-main">
       <span id="time" class="time" aria-live="off">0 yr</span>
       <button type="button" id="play" class="play" aria-label="Pause" title="Pause (Space)">

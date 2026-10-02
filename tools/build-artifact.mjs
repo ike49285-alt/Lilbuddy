@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url';
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const out = process.argv[2] || join(root, 'dist', 'headwaters.html');
 
-const WORKER_MODULES = ['rng', 'terrain', 'climate', 'landscape', 'species', 'life', 'sim', 'host', 'worker'];
+const WORKER_MODULES = ['rng', 'terrain', 'climate', 'landscape', 'species', 'life', 'disasters', 'sim', 'host', 'worker'];
 const PAGE_MODULES = ['render', 'save', 'app'];
 const WORKER_CALL = "new Worker(new URL('./worker.js', import.meta.url), { type: 'module' })";
 

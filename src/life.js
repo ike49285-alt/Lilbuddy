@@ -581,6 +581,39 @@ export class Life {
     for (const s of extinct.slice(KEEP_EXTINCT)) this.registry.delete(s.id);
   }
 
+  // After a disaster has struck from outside a step: recount every species,
+  // take out the ones with nothing left, and redo the plant cover, so the
+  // losses show at once. Returns how many species died out.
+  settle(years) {
+    const { NL } = this;
+    let lost = 0;
+    for (const sp of this.species) {
+      const N = sp.N;
+      let total = 0, range = 0;
+      for (let c = 0; c < NL; c++) {
+        const n = N[c];
+        if (n === 0) continue;
+        total += n;
+        if (n > RANGE_DENSITY) range++;
+      }
+      sp.total = total;
+      sp.range = range;
+      if (total < EXTINCT_TOTAL) {
+        sp.died = years;
+        sp.N = null;
+        sp.K = null;
+        lost++;
+      }
+    }
+    if (lost) {
+      this.species = this.species.filter((sp) => sp.died === null);
+      this.prune();
+    }
+    this.updateStats(years);
+    this.computeCover();
+    return lost;
+  }
+
   updateStats(years) {
     let land = 0;
     for (const sp of this.species) if (isLandPlant(sp.traits)) land++;

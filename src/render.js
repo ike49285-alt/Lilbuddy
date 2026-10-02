@@ -4,6 +4,7 @@
 const CELL_M = 500;
 const MAX_ZOOM = 8;
 const SETTLE_MS = 120;   // the view has stopped moving; redraw the rivers sharp
+const EFFECT_MS = { meteor: 3500, volcano: 5000, lightning: 4000, flood: 5000 };
 
 // Bare ground by elevation (metres): sand and ochre low down, rust-brown and
 // grey rock higher, pale scree near the top. Nothing is green until plants
@@ -77,6 +78,14 @@ export class MapRenderer {
     this.x0 = 0;
     this.y0 = 0;
     this.viewAt = 0;
+    this.effects = [];
+    this.fx = null;
+  }
+
+  // The canvas the disaster effects are drawn on.
+  setEffectsCanvas(c) {
+    this.fx = c;
+    this.fxCtx = c.getContext('2d');
   }
 
   // --- view ----------------------------------------------------------------
@@ -189,8 +198,11 @@ export class MapRenderer {
   hillshade(f) {
     const { W, H, z, years } = f;
     const now = performance.now();
-    if (Math.abs(years - this.shadeYears) < 500 && now - this.shadeAt < 1000) return;
-    if (years === this.shadeYears) return;
+    // Reshaped ground (a crater, a cone) is shaded at once.
+    const reshaped = f.terrainEpoch !== this.shadeEpoch;
+    if (!reshaped && Math.abs(years - this.shadeYears) < 500 && now - this.shadeAt < 1000) return;
+    if (!reshaped && years === this.shadeYears) return;
+    this.shadeEpoch = f.terrainEpoch;
     this.shadeYears = years;
     this.shadeAt = now;
     const out = this.shade;
@@ -317,13 +329,14 @@ export class MapRenderer {
     const v = this.riverView;
     const sized = this.rivers.width === w && this.rivers.height === h;
     const sameView = v && v.zoom === this.zoom && v.x0 === this.x0 && v.y0 === this.y0;
-    const stale = now - this.riverAt >= 1000 && f.years !== this.riverYears;
+    const stale = (now - this.riverAt >= 1000 && f.years !== this.riverYears) || f.terrainEpoch !== this.riverEpoch;
     const settled = now - this.viewAt >= SETTLE_MS;
     if (!sized || !v || (stale && (sameView || settled)) || (!sameView && settled)) {
       if (!sized) { this.rivers.width = w; this.rivers.height = h; }
       this.rctx.clearRect(0, 0, w, h);
       this.drawRivers(f, w, h, this.rctx);
       this.riverYears = f.years;
+      this.riverEpoch = f.terrainEpoch;
       this.riverAt = now;
       this.riverView = { zoom: this.zoom, x0: this.x0, y0: this.y0 };
       ctx.drawImage(this.rivers, 0, 0);
@@ -334,6 +347,108 @@ export class MapRenderer {
       const k = v.zoom / this.zoom;
       ctx.drawImage(this.rivers, (v.x0 - this.x0) * sx, (v.y0 - this.y0) * (h / vh), w * k, h * k);
     }
+  }
+
+  // --- disaster effects ------------------------------------------------------
+  //
+  // Drawn on their own canvas over the map, so an effect can animate at the
+  // display's rate without the terrain being redrawn.
+
+  addEffect(ev, quiet) {
+    if (ev.missed) return;
+    if (quiet && this.effects.length >= 6) return;
+    this.effects.push({ ev, t0: performance.now(), dur: EFFECT_MS[ev.kind] || 4000 });
+    if (this.effects.length > 12) this.effects.shift();
+  }
+
+  // Draws the running effects; returns whether any are still running.
+  drawEffects() {
+    const fx = this.fx;
+    if (!fx) return false;
+    const dpr = Math.min(1.5, window.devicePixelRatio || 1);
+    const w = Math.max(1, Math.round(fx.clientWidth * dpr)), h = Math.max(1, Math.round(fx.clientHeight * dpr));
+    if (fx.width !== w || fx.height !== h) { fx.width = w; fx.height = h; }
+    const ctx = this.fxCtx;
+    ctx.clearRect(0, 0, w, h);
+    const now = performance.now();
+    this.effects = this.effects.filter((e) => now - e.t0 < e.dur);
+    if (!this.effects.length) return false;
+    const vw = this.W / this.zoom;
+    const s = w / vw;
+    const X = (wx) => (wx - this.x0) * s, Y = (wy) => (wy - this.y0) * s;
+    for (const e of this.effects) {
+      const t = (now - e.t0) / 1000;
+      const fade = 1 - (now - e.t0) / e.dur;
+      const ev = e.ev;
+      const cx = X(ev.x), cy = Y(ev.y);
+      const r = Math.max(ev.r * s, 6 * dpr);
+      if (ev.kind === 'meteor') {
+        if (t < 0.35) {
+          const k = t / 0.35;
+          const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r * (1 + 2.5 * k));
+          g.addColorStop(0, `rgba(255,255,255,${0.95 - 0.5 * k})`);
+          g.addColorStop(0.5, `rgba(255,236,190,${0.7 - 0.4 * k})`);
+          g.addColorStop(1, 'rgba(255,200,120,0)');
+          ctx.fillStyle = g;
+          ctx.beginPath(); ctx.arc(cx, cy, r * (1 + 2.5 * k), 0, Math.PI * 2); ctx.fill();
+        }
+        const k = Math.min(1, t / 1.5);
+        ctx.strokeStyle = `rgba(255,226,170,${0.85 * fade})`;
+        ctx.lineWidth = 2.5 * dpr;
+        ctx.beginPath(); ctx.arc(cx, cy, r * (1 + 1.6 * k), 0, Math.PI * 2); ctx.stroke();
+        ctx.fillStyle = `rgba(255,120,40,${0.45 * fade * fade})`;
+        ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill();
+      } else if (ev.kind === 'volcano') {
+        const ash = ctx.createRadialGradient(cx, cy, r * 0.5, cx, cy, r * 3.2);
+        ash.addColorStop(0, `rgba(90,86,84,${0.5 * fade})`);
+        ash.addColorStop(1, 'rgba(90,86,84,0)');
+        ctx.fillStyle = ash;
+        ctx.beginPath(); ctx.arc(cx, cy, r * 3.2, 0, Math.PI * 2); ctx.fill();
+        const pulse = 0.75 + 0.25 * Math.sin(t * 9);
+        const lava = ctx.createRadialGradient(cx, cy, 0, cx, cy, r * 1.2);
+        lava.addColorStop(0, `rgba(255,214,90,${0.95 * fade * pulse})`);
+        lava.addColorStop(0.45, `rgba(240,90,30,${0.8 * fade * pulse})`);
+        lava.addColorStop(1, 'rgba(180,30,10,0)');
+        ctx.fillStyle = lava;
+        ctx.beginPath(); ctx.arc(cx, cy, r * 1.2, 0, Math.PI * 2); ctx.fill();
+      } else if (ev.kind === 'lightning') {
+        if (ev.cells) this.fillCells(ctx, ev.cells, s, `rgba(255,${110 + 60 * fade | 0},30,${0.6 * fade})`);
+        if (t < 0.12 || (t > 0.2 && t < 0.3)) {
+          const [bx, by] = ev.strike || [ev.x, ev.y];
+          this.bolt(ctx, X(bx), Y(by), ev.id, dpr);
+        }
+      } else if (ev.kind === 'flood') {
+        if (ev.cells) this.fillCells(ctx, ev.cells, s, `rgba(70,150,230,${0.6 * Math.min(1, fade * 1.6)})`);
+      }
+    }
+    return true;
+  }
+
+  fillCells(ctx, cells, s, style) {
+    const W = this.W;
+    ctx.fillStyle = style;
+    ctx.beginPath();
+    for (const c of cells) ctx.rect(((c % W) - this.x0) * s, (((c / W) | 0) - this.y0) * s, s + 0.5, s + 0.5);
+    ctx.fill();
+  }
+
+  // A jagged bolt from the top of the view down to the strike.
+  bolt(ctx, x, y, seed, dpr) {
+    let h = Math.imul(seed + 7, 2654435761) >>> 0;
+    const rnd = () => { h = Math.imul(h ^ (h >>> 13), 1274126177) >>> 0; return (h & 0xffff) / 65535 - 0.5; };
+    const top = Math.max(0, y - 220 * dpr);
+    const steps = 9;
+    ctx.strokeStyle = 'rgba(255,255,255,0.95)';
+    ctx.shadowColor = 'rgba(190,210,255,0.9)';
+    ctx.shadowBlur = 10 * dpr;
+    ctx.lineWidth = 2.2 * dpr;
+    ctx.lineJoin = 'miter';
+    ctx.beginPath();
+    ctx.moveTo(x + rnd() * 40 * dpr, top);
+    for (let k = 1; k < steps; k++) ctx.lineTo(x + rnd() * 26 * dpr * (1 - k / steps), top + ((y - top) * k) / steps);
+    ctx.lineTo(x, y);
+    ctx.stroke();
+    ctx.shadowBlur = 0;
   }
 
   // Each river cell draws one curve: from halfway along the reach coming in

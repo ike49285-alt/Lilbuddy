@@ -5,6 +5,7 @@ import { generateTerrain } from './terrain.js';
 import { Climate, SEASONAL_TICK } from './climate.js';
 import { Landscape, MAX_STEP_YEARS } from './landscape.js';
 import { Life } from './life.js';
+import { Disasters } from './disasters.js';
 
 export { MAX_STEP_YEARS };
 
@@ -31,6 +32,8 @@ export class Simulation {
     this.land.prime(this.climate);
     this.life = new Life(this.land, this.rng.fork('life'));
     this.life.seed(this.land, this.climate);
+    this.disasters = new Disasters(this.rng.fork('disasters'));
+    this.sentEvent = 0;       // the last event id handed to the page
     this.sample();
   }
 
@@ -39,13 +42,28 @@ export class Simulation {
     const d = Math.min(MAX_STEP_YEARS, dt);
     this.years += d;
     this.steps++;
+    this.climate.cooling = this.disasters.coolingAt(this.years);
+    this.climate.winter = this.disasters.winterName();
     this.climate.set(this.years, d <= SEASONAL_TICK);
     this.land.step(this.climate, d);
     this.life.step(this.land, this.climate, d, this.years);
+    this.syncCover();
+    this.disasters.natural(this, d);
+    if (this.years >= this.nextSample) this.sample();
+  }
+
+  // Life's plant cover, handed to the landscape: plants hold the soil.
+  syncCover() {
     const { cover, toLife } = this.life;
     const landCover = this.land.cover;
     for (let i = 0; i < landCover.length; i++) landCover[i] = cover[toLife[i]];
-    if (this.years >= this.nextSample) this.sample();
+  }
+
+  // Drops a disaster from the page at a landscape cell, now.
+  disaster(kind, i, size) {
+    const ev = this.disasters.trigger(this, kind, i, size);
+    this.climate.set(this.years, this.climate.seasonal);
+    return ev;
   }
 
   sample() {
@@ -86,6 +104,7 @@ export class Simulation {
       },
       land: { z: land.z.slice(), fert: land.fert.slice(), snow: land.snow.slice(), cover: land.cover.slice() },
       life: life.saveState(),
+      disasters: this.disasters.saveState(),
     };
   }
 
@@ -103,6 +122,10 @@ export class Simulation {
     land.fert.set(state.land.fert);
     land.snow.set(state.land.snow);
     land.cover.set(state.land.cover);
+    sim.disasters.restoreState(state.disasters);
+    sim.sentEvent = sim.disasters.nextId - 1;
+    sim.climate.cooling = sim.disasters.coolingAt(sim.years);
+    sim.climate.winter = sim.disasters.winterName();
     sim.climate.set(sim.years, false);
     land.prime(sim.climate);
     sim.life.restoreState(state.life);
@@ -137,6 +160,13 @@ export class Simulation {
     };
   }
 
+  // Events the page hasn't been sent yet.
+  takeEvents() {
+    const evs = this.disasters.since(this.sentEvent);
+    if (evs.length) this.sentEvent = evs[evs.length - 1].id;
+    return evs.map((e) => ({ ...e, cells: e.cells ? e.cells.slice() : undefined }));
+  }
+
   // Everything the page needs to draw one frame, as fresh transferable copies.
   frame(selectedId) {
     const { land, climate } = this;
@@ -159,10 +189,13 @@ export class Simulation {
         glacial: climate.glacial,
         seaT: climate.seaT,
         precip: climate.precip,
+        cooling: climate.cooling,
       },
       stats: { ...land.stats },
       life: this.life.frameData(selectedId),
       lifeStats: { ...this.life.stats },
+      terrainEpoch: this.disasters.epoch,
+      events: this.takeEvents(),
       species: this.life.summary(),
       history: { sea: this.series('sea'), mouthQ: this.series('mouthQ'), everyYears: HISTORY_EVERY },
     };

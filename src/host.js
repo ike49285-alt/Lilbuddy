@@ -170,6 +170,11 @@ export function createHost(post) {
         dirty = true;
         urgent = true;
         break;
+      case 'disaster':
+        sim.disaster(msg.kind, msg.i, msg.size);
+        dirty = true;
+        urgent = true;
+        break;
       case 'inspect':
         post({ type: 'inspected', info: sim.inspect(msg.i) });
         break;

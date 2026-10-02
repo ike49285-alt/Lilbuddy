@@ -28,6 +28,7 @@ then open http://localhost:8000/.
 - `src/climate.js` — ice-age cycles, long eras, temperature, rain, sea level
 - `src/landscape.js` — the river and landscape model
 - `src/species.js`, `src/life.js` — species traits, names, and the population model
+- `src/disasters.js` — floods, wildfires, eruptions and impacts
 - `src/sim.js` — one world, its clock, and saving/restoring it
 - `src/save.js` — the continue slot in IndexedDB
 - `src/host.js`, `src/worker.js` — runs the sim off the main thread
@@ -45,6 +46,26 @@ population in two or by mutation. Plants need enough complexity before they
 can live on land; once they do, they green the valley and hold the soil, so
 vegetated slopes erode more slowly. At slow speeds you see blooms and
 dormancy through the seasons; at fast speeds, evolution.
+
+## Disasters
+
+Nature sets them off as time runs: lightning fires in dry summers on
+vegetated ground (about one every 30 years), floods on the trunk river (about
+one in 50, mostly with the spring melt), eruptions in the rising mountains
+(about one per 400,000 years) and meteor impacts (about one per 3 million).
+The Disasters button on the map lets you drop any of them where you tap.
+Eruptions build cones and impacts dig craters, and the rivers re-route around
+them at once: a cone across a valley dams a lake. Floods lay silt on the
+floodplain, and fires burn the plants but leave the soil richer. The biggest
+eruptions and impacts bring a volcanic or impact winter a few degrees colder
+for a few years, and the species least able to take the cold die out.
+
+## The map
+
+Pinch, double-tap, scroll or use the + and − buttons to zoom in; drag to
+move around once zoomed. Tap a spot to see what lives there.
+
+## Saving
 
 The world saves itself in the browser every 30 seconds and when you leave,
 and picks up exactly where it stopped on the next visit.
