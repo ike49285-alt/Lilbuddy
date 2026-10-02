@@ -74,6 +74,8 @@ function afterStart(seed) {
   inspectAt = -1;
   clearInterval(inspectTimer);
   $('inspect').hidden = true;
+  renderer.resetView();
+  viewChanged();
   $('seed').value = seed;
   try { history.replaceState(null, '', `#${seed}`); } catch { /* some hosts forbid it */ }
   paused = false;
@@ -283,6 +285,7 @@ function draw(f, force) {
   if (selectedId && !sel) selectSpecies(null);
   if (sel) renderer.selectedRgb = hslRgb(sel.hue);
   renderer.draw(f);
+  composedKey = renderer.viewKey();
   $('time').textContent = formatTime(f.years, f.tickYears);
   $('tick').textContent = `tick ${formatSpan(f.tickYears)}`;
   const lag = $('lag');
@@ -335,8 +338,7 @@ function drawSlow(f) {
   const span = (f.history.sea.length * f.history.everyYears) / 1000;
   $('sp-from').textContent = span >= 1000 ? `−${n1.format(span / 1000)} Myr` : `−${n0.format(span)} kyr`;
 
-  // 10 km = 20 cells.
-  $('scale-bar').style.width = `${(20 / f.W) * $('map').clientWidth}px`;
+  updateScale();
 }
 
 buildRateSelect();
@@ -563,18 +565,164 @@ function setMode(mode) {
 $('mode-landscape').addEventListener('click', () => setMode('landscape'));
 $('mode-species').addEventListener('click', () => setMode('species'));
 
+// --- zoom and pan -------------------------------------------------------------
+
+const canvas = $('map-canvas');
+const TAP_PX = 6;            // a press that moves less than this is a tap
+const DOUBLE_TAP_MS = 300;
+const ZOOM_STEP = 2;
+let viewDrawPending = false;
+let settleTimer = null;
+let composedKey = '';
+
+// Redraws the map for the current view from the last frame, without waiting
+// for the worker, and again once the view has settled so the rivers sharpen.
+function viewChanged() {
+  canvas.classList.toggle('zoomed', renderer.zoom > 1.001);
+  $('zoom-out').disabled = renderer.zoom <= 1.001;
+  $('zoom-reset').disabled = renderer.zoom <= 1.001;
+  $('zoom-in').disabled = renderer.zoom >= 7.999;
+  updateScale();
+  if (!viewDrawPending) {
+    viewDrawPending = true;
+    requestAnimationFrame(() => {
+      viewDrawPending = false;
+      if (last && renderer.viewKey() !== composedKey) composeView();
+    });
+  }
+  clearTimeout(settleTimer);
+  settleTimer = setTimeout(() => { if (last) composeView(); }, 140);
+}
+
+function composeView() {
+  renderer.compose(last);
+  composedKey = renderer.viewKey();
+}
+
+// A round distance whose bar fits the corner left of the map-mode switch.
+function updateScale() {
+  const width = $('map').clientWidth;
+  if (!width) return;
+  const kmPerPx = ((renderer.W / renderer.zoom) * 0.5) / width;
+  const room = Math.min(80, width * 0.2);
+  const steps = [0.2, 0.5, 1, 2, 5, 10, 20];
+  let km = steps[0];
+  for (const s of steps) if (s / kmPerPx <= room) km = s;
+  $('scale-bar').style.width = `${km / kmPerPx}px`;
+  $('scale-label').textContent = km < 1 ? `${km * 1000} m` : `${km} km`;
+}
+
+function fractions(clientX, clientY) {
+  const r = canvas.getBoundingClientRect();
+  return [(clientX - r.left) / r.width, (clientY - r.top) / r.height];
+}
+
+const pointers = new Map();
+let press = null;            // one finger or the mouse: where it went down, and whether it moved
+let pinch = null;            // two fingers: their spread and midpoint when the pinch began
+let lastTap = null;
+
+function pinchState() {
+  const [a, b] = [...pointers.values()];
+  return { dist: Math.hypot(a.x - b.x, a.y - b.y), mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2 };
+}
+
+canvas.addEventListener('pointerdown', (e) => {
+  if (e.pointerType === 'mouse' && e.button !== 0) return;
+  try { canvas.setPointerCapture(e.pointerId); } catch { /* not every pointer can be captured */ }
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (pointers.size === 1) {
+    press = { x: e.clientX, y: e.clientY, lx: e.clientX, ly: e.clientY, moved: false };
+    pinch = null;
+  } else if (pointers.size === 2) {
+    const p = pinchState();
+    const [fx, fy] = fractions(p.mx, p.my);
+    pinch = { dist: Math.max(1, p.dist), zoom: renderer.zoom, world: renderer.toWorld(fx, fy) };
+    press = null;
+  }
+});
+
+canvas.addEventListener('pointermove', (e) => {
+  const pt = pointers.get(e.pointerId);
+  if (!pt) return;
+  pt.x = e.clientX;
+  pt.y = e.clientY;
+  if (pinch && pointers.size >= 2) {
+    // Keep the world point that started under the fingers' midpoint under it.
+    const p = pinchState();
+    const [fx, fy] = fractions(p.mx, p.my);
+    const z = Math.max(1, Math.min(8, pinch.zoom * (p.dist / pinch.dist)));
+    renderer.setView(z, pinch.world[0] - fx * (renderer.W / z), pinch.world[1] - fy * (renderer.H / z));
+    viewChanged();
+    return;
+  }
+  if (!press) return;
+  if (!press.moved && Math.hypot(e.clientX - press.x, e.clientY - press.y) < TAP_PX) return;
+  press.moved = true;
+  if (renderer.zoom > 1.001) {
+    const r = canvas.getBoundingClientRect();
+    renderer.panBy((e.clientX - press.lx) / r.width, (e.clientY - press.ly) / r.height);
+    canvas.classList.add('dragging');
+    viewChanged();
+  }
+  press.lx = e.clientX;
+  press.ly = e.clientY;
+});
+
+function release(e, cancelled) {
+  if (!pointers.has(e.pointerId)) return;
+  pointers.delete(e.pointerId);
+  canvas.classList.remove('dragging');
+  if (pinch) {
+    // Lifting one finger of a pinch doesn't start a drag or count as a tap.
+    if (pointers.size === 0) pinch = null;
+    return;
+  }
+  if (press && !press.moved && !cancelled) tap(e.clientX, e.clientY);
+  press = null;
+}
+canvas.addEventListener('pointerup', (e) => release(e, false));
+canvas.addEventListener('pointercancel', (e) => release(e, true));
+
+function tap(clientX, clientY) {
+  const now = performance.now();
+  const [fx, fy] = fractions(clientX, clientY);
+  if (lastTap && now - lastTap.t < DOUBLE_TAP_MS && Math.hypot(clientX - lastTap.x, clientY - lastTap.y) < 30) {
+    lastTap = null;
+    renderer.zoomAt(ZOOM_STEP, fx, fy);
+    viewChanged();
+    return;
+  }
+  lastTap = { t: now, x: clientX, y: clientY };
+  inspectCell(...renderer.toWorld(fx, fy));
+}
+
+// Wheel and trackpad zoom around the pointer. At the limits the wheel is left
+// to scroll the page.
+canvas.addEventListener('wheel', (e) => {
+  let dy = e.deltaY * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1);
+  if (!dy) return;
+  if ((dy > 0 && renderer.zoom <= 1.001) || (dy < 0 && renderer.zoom >= 7.999)) return;
+  e.preventDefault();
+  const [fx, fy] = fractions(e.clientX, e.clientY);
+  renderer.zoomAt(Math.exp(-dy * (e.ctrlKey ? 0.01 : 0.0015)), fx, fy);
+  viewChanged();
+}, { passive: false });
+
+$('zoom-in').addEventListener('click', () => { renderer.zoomAt(ZOOM_STEP, 0.5, 0.5); viewChanged(); });
+$('zoom-out').addEventListener('click', () => { renderer.zoomAt(1 / ZOOM_STEP, 0.5, 0.5); viewChanged(); });
+$('zoom-reset').addEventListener('click', () => { renderer.resetView(); viewChanged(); });
+
 // Tap the map: what lives here?
-$('map-canvas').addEventListener('click', (e) => {
+function inspectCell(wx, wy) {
   if (!last) return;
-  const r = e.currentTarget.getBoundingClientRect();
-  const x = Math.floor(((e.clientX - r.left) / r.width) * last.W);
-  const y = Math.floor(((e.clientY - r.top) / r.height) * last.H);
+  const x = Math.floor(wx), y = Math.floor(wy);
   if (x < 0 || y < 0 || x >= last.W || y >= last.H) return;
   inspectAt = y * last.W + x;
   worker.postMessage({ type: 'inspect', i: inspectAt });
   clearInterval(inspectTimer);
   inspectTimer = setInterval(() => { if (inspectAt >= 0) worker.postMessage({ type: 'inspect', i: inspectAt }); }, 1000);
-});
+}
 $('inspect-close').addEventListener('click', () => {
   inspectAt = -1;
   clearInterval(inspectTimer);
@@ -613,7 +761,7 @@ function renderInspect(info) {
   $('ramp').style.background = `linear-gradient(to right, ${stops.map((m) => `${elevationColor(m)} ${(pos(m) * 100).toFixed(1)}%`).join(', ')})`;
 }
 
-window.addEventListener('resize', () => { if (last) draw(last, true); });
+window.addEventListener('resize', () => { if (last) draw(last, true); updateScale(); });
 
 // Test hooks.
 window.Headwaters = {
@@ -630,6 +778,7 @@ window.Headwaters = {
   fps: () => ({ fps: drawnAt.length / 2, paceMs, frameCost }),
   saveNow: () => new Promise((resolve) => { pendingSave = resolve; requestSave('test'); }),
   select: (id) => selectSpecies(id),
+  view: () => ({ zoom: renderer.zoom, x0: renderer.x0, y0: renderer.y0, inspectAt }),
 };
 
 // Editing the seed in the link starts that world.

@@ -2,6 +2,8 @@
 // lakes and ice, and the rivers as lines whose width follows their discharge.
 
 const CELL_M = 500;
+const MAX_ZOOM = 8;
+const SETTLE_MS = 120;   // the view has stopped moving; redraw the rivers sharp
 
 // Bare ground by elevation (metres): sand and ochre low down, rust-brown and
 // grey rock higher, pale scree near the top. Nothing is green until plants
@@ -65,7 +67,62 @@ export class MapRenderer {
     this.rctx = this.rivers.getContext('2d');
     this.riverYears = -Infinity;
     this.riverAt = 0;
+    this.riverView = null;
     this.selectedRgb = [255, 210, 90];
+    // The view: how far it's zoomed in (1 = the whole valley) and the world
+    // position, in cells, of its top-left corner.
+    this.W = 128;
+    this.H = 224;
+    this.zoom = 1;
+    this.x0 = 0;
+    this.y0 = 0;
+    this.viewAt = 0;
+  }
+
+  // --- view ----------------------------------------------------------------
+
+  // Sets the view, keeping it inside the world. The map's box has the
+  // world's shape, so at zoom 1 the whole valley fills it exactly.
+  setView(zoom, x0, y0) {
+    const z = Math.max(1, Math.min(MAX_ZOOM, zoom));
+    const vw = this.W / z, vh = this.H / z;
+    this.zoom = z;
+    this.x0 = Math.max(0, Math.min(this.W - vw, x0));
+    this.y0 = Math.max(0, Math.min(this.H - vh, y0));
+    this.viewAt = performance.now();
+  }
+
+  // Zooms by a factor, keeping the world point under (fx, fy) — fractions of
+  // the map's width and height — where it is on screen.
+  zoomAt(factor, fx, fy) {
+    const vw = this.W / this.zoom, vh = this.H / this.zoom;
+    const wx = this.x0 + fx * vw, wy = this.y0 + fy * vh;
+    const z = Math.max(1, Math.min(MAX_ZOOM, this.zoom * factor));
+    this.setView(z, wx - fx * (this.W / z), wy - fy * (this.H / z));
+  }
+
+  // Moves the view by a fraction of the map's width and height.
+  panBy(dfx, dfy) {
+    this.setView(this.zoom, this.x0 - dfx * (this.W / this.zoom), this.y0 - dfy * (this.H / this.zoom));
+  }
+
+  // Centres the view on a world point at the given zoom.
+  lookAt(wx, wy, zoom) {
+    const z = Math.max(1, Math.min(MAX_ZOOM, zoom));
+    this.setView(z, wx - this.W / z / 2, wy - this.H / z / 2);
+  }
+
+  resetView() {
+    this.setView(1, 0, 0);
+  }
+
+  // The world point (in cells) under a fraction of the map's width and height.
+  toWorld(fx, fy) {
+    return [this.x0 + fx * (this.W / this.zoom), this.y0 + fy * (this.H / this.zoom)];
+  }
+
+  viewKey() {
+    return `${this.zoom.toFixed(5)},${this.x0.toFixed(4)},${this.y0.toFixed(4)},${this.canvas.width},${this.canvas.height}`;
   }
 
   // Keeps the backing store matched to the element's size on screen.
@@ -236,25 +293,47 @@ export class MapRenderer {
       px[o] = r; px[o + 1] = g; px[o + 2] = b; px[o + 3] = 255;
     }
     this.tctx.putImageData(this.image, 0, 0);
+    this.compose(f);
+  }
 
+  // Puts the current view on screen from the cached terrain image and river
+  // layer. Cheap enough to run on every move of a finger.
+  compose(f) {
+    if (!this.image) return;
+    this.W = f.W;
+    this.H = f.H;
     const { w, h } = this.fit();
     const ctx = this.ctx;
+    const vw = this.W / this.zoom, vh = this.H / this.zoom;
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'low';
-    ctx.drawImage(this.terrain, 0, 0, w, h);
+    ctx.drawImage(this.terrain, this.x0, this.y0, vw, vh, 0, 0, w, h);
     // Rivers change slowly; re-stroking thousands of reaches every frame is
     // the costliest thing on a phone, so they're drawn to their own layer and
-    // redrawn only when they've had time to change.
+    // redrawn only when they've had time to change. While the view moves, the
+    // old layer is shifted and stretched to follow, and redrawn sharp once
+    // the view has settled.
     const now = performance.now();
-    const stale = now - this.riverAt >= 1000;
-    if (this.rivers.width !== w || this.rivers.height !== h || (stale && f.years !== this.riverYears)) {
-      if (this.rivers.width !== w || this.rivers.height !== h) { this.rivers.width = w; this.rivers.height = h; }
+    const v = this.riverView;
+    const sized = this.rivers.width === w && this.rivers.height === h;
+    const sameView = v && v.zoom === this.zoom && v.x0 === this.x0 && v.y0 === this.y0;
+    const stale = now - this.riverAt >= 1000 && f.years !== this.riverYears;
+    const settled = now - this.viewAt >= SETTLE_MS;
+    if (!sized || !v || (stale && (sameView || settled)) || (!sameView && settled)) {
+      if (!sized) { this.rivers.width = w; this.rivers.height = h; }
       this.rctx.clearRect(0, 0, w, h);
       this.drawRivers(f, w, h, this.rctx);
       this.riverYears = f.years;
       this.riverAt = now;
+      this.riverView = { zoom: this.zoom, x0: this.x0, y0: this.y0 };
+      ctx.drawImage(this.rivers, 0, 0);
+    } else if (sameView) {
+      ctx.drawImage(this.rivers, 0, 0);
+    } else {
+      const sx = w / vw;
+      const k = v.zoom / this.zoom;
+      ctx.drawImage(this.rivers, (v.x0 - this.x0) * sx, (v.y0 - this.y0) * (h / vh), w * k, h * k);
     }
-    ctx.drawImage(this.rivers, 0, 0);
   }
 
   // Each river cell draws one curve: from halfway along the reach coming in
@@ -275,8 +354,16 @@ export class MapRenderer {
       const d = mainDonor[r];
       if (d < 0 || Q[i] > Q[d]) mainDonor[r] = i;
     }
-    const sx = w / W, sy = h / H;
-    const cell = Math.min(sx, sy);
+    // World cells to layer pixels for the current view; reaches outside it
+    // (with a cell's margin) aren't stroked.
+    const vw = W / this.zoom, vh = H / this.zoom;
+    const sx = w / vw, sy = h / vh;
+    const ox = this.x0, oy = this.y0;
+    const xa = Math.floor(ox) - 2, xb = Math.ceil(ox + vw) + 2;
+    const ya = Math.floor(oy) - 2, yb = Math.ceil(oy + vh) + 2;
+    // Lines thicken as the view zooms in, but less than the ground does, so
+    // a zoomed-in river still reads as a channel rather than a flood.
+    const cell = Math.min(sx, sy) / Math.pow(this.zoom, 0.4);
     const CLASSES = 10;
     const paths = Array.from({ length: CLASSES }, () => new Path2D());
     const used = new Uint8Array(CLASSES);
@@ -284,12 +371,14 @@ export class MapRenderer {
       if (ocean[i] || lake[i] || Q[i] < MIN_Q) continue;
       const r = rec[i];
       if (r === i) continue;
+      const cx = i % W, cy = (i / W) | 0;
+      if (cx < xa || cx > xb || cy < ya || cy > yb) continue;
       const k = Math.max(0, Math.min(CLASSES - 1, Math.floor((Math.log10(Q[i]) - 6.48) / 0.34)));
       const p = paths[k];
-      const xi = X[i] * sx, yi = Y[i] * sy;
-      const xr = X[r] * sx, yr = Y[r] * sy;
+      const xi = (X[i] - ox) * sx, yi = (Y[i] - oy) * sy;
+      const xr = (X[r] - ox) * sx, yr = (Y[r] - oy) * sy;
       const d = mainDonor[i];
-      if (d >= 0) p.moveTo((X[d] * sx + xi) / 2, (Y[d] * sy + yi) / 2);
+      if (d >= 0) p.moveTo(((X[d] - ox) * sx + xi) / 2, ((Y[d] - oy) * sy + yi) / 2);
       else p.moveTo(xi, yi);
       p.quadraticCurveTo(xi, yi, (xi + xr) / 2, (yi + yr) / 2);
       if (mainDonor[r] !== i || ocean[r] || lake[r]) p.lineTo(xr, yr);

@@ -251,7 +251,36 @@ body {
   cursor: pointer;
 }
 .map-mode button[aria-pressed="true"] { background: #1d2827; color: #f7f8f5; }
-.map canvas { cursor: crosshair; touch-action: manipulation; }
+.map canvas { cursor: crosshair; touch-action: pan-y; }
+.map canvas.zoomed { touch-action: none; }
+.map canvas.dragging { cursor: grabbing; }
+
+/* Zoom buttons, stacked on the right under the north arrow. */
+.zoom {
+  position: absolute;
+  top: 40px;
+  right: 8px;
+  display: flex;
+  flex-direction: column;
+  border-radius: 6px;
+  overflow: hidden;
+  box-shadow: 0 0 0 1px rgba(29, 40, 39, 0.25);
+}
+.zoom button {
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-top: 1px solid rgba(29, 40, 39, 0.15);
+  background: rgba(247, 248, 245, 0.85);
+  color: #1d2827;
+  font: 500 22px/1 var(--font-body);
+  cursor: pointer;
+}
+.zoom button:first-child { border-top: 0; }
+.zoom button:disabled { color: rgba(29, 40, 39, 0.35); cursor: default; }
+.zoom button:focus-visible { outline: 2px solid var(--water); outline-offset: -2px; }
 
 .inspect {
   position: absolute;

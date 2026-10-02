@@ -15,14 +15,21 @@
 <div class="app">
   <main class="layout">
     <figure class="map" id="map">
-      <canvas id="map-canvas" role="img" aria-label="Relief map of the valley, mountains at the top and the sea at the bottom. Tap a spot to see what lives there."></canvas>
+      <canvas id="map-canvas" role="img" aria-label="Relief map of the valley, mountains at the top and the sea at the bottom. Tap a spot to see what lives there; pinch or use the buttons to zoom, and drag to move around when zoomed in."></canvas>
       <span id="phase" class="chip on-map">interglacial</span>
       <div class="north" aria-hidden="true">N<span>↑</span></div>
       <div class="map-mode" role="group" aria-label="Map shows">
         <button type="button" id="mode-landscape" aria-pressed="true">Landscape</button>
         <button type="button" id="mode-species" aria-pressed="false">Species</button>
       </div>
-      <div class="scale" aria-hidden="true"><span id="scale-bar" class="bar"></span><span>10 km</span></div>
+      <div class="zoom" role="group" aria-label="Zoom">
+        <button type="button" id="zoom-in" aria-label="Zoom in" title="Zoom in">+</button>
+        <button type="button" id="zoom-out" aria-label="Zoom out" title="Zoom out">−</button>
+        <button type="button" id="zoom-reset" aria-label="Show the whole valley" title="Show the whole valley">
+          <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><path d="M3 8V3h5M12 3h5v5M17 12v5h-5M8 17H3v-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+      </div>
+      <div class="scale" aria-hidden="true"><span id="scale-bar" class="bar"></span><span id="scale-label">10 km</span></div>
       <div class="inspect" id="inspect" hidden>
         <div class="inspect-head">
           <span id="inspect-title">Here</span>

@@ -53,10 +53,13 @@ pageSrc = pageSrc.replace(WORKER_CALL,
 const html = readFileSync(join(root, 'index.html'), 'utf8');
 const css = readFileSync(join(root, 'style.css'), 'utf8');
 const title = html.match(/<title>.*<\/title>/)[0];
+const viewport = html.match(/<meta name="viewport"[^>]*>/)[0];
 const fonts = [...html.matchAll(/<link rel="(?:preconnect|stylesheet)" href="https:\/\/fonts[^>]*>/g)].map((m) => m[0]);
 const body = html.slice(html.indexOf('<!-- app:start -->'), html.indexOf('<!-- app:end -->'));
 
 const page = [
+  '<meta charset="UTF-8" />',
+  viewport,
   title,
   ...fonts,
   `<style>\n${css}\n</style>`,
