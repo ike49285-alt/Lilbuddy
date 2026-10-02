@@ -47,6 +47,16 @@ can live on land; once they do, they green the valley and hold the soil, so
 vegetated slopes erode more slowly. At slow speeds you see blooms and
 dormancy through the seasons; at fast speeds, evolution.
 
+Animals start as two simple jawless fish in the sea. They graze: some
+filter plankton, some crop the larger plants, and where they're dense they
+leave less for what they eat. Diet, limbs and lungs evolve like any other
+trait, through armored, ray-finned and lobe-finned fish. Fleshy fins and
+gulping air each help a little in warm, weedy shallows; with real legs and
+lungs, and land plants to eat, an animal can walk out of the water.
+Nothing schedules it: in some worlds it takes tens of millions of years, in
+some it may not happen at all. Fish show as silver specks in the water,
+land animals as dark specks on the ground.
+
 ## Disasters
 
 Nature sets them off as time runs: lightning fires in dry summers on

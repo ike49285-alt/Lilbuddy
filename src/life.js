@@ -35,7 +35,7 @@ const INNOVATION = 0.2;             // share of buddings that are big jumps
 const SPLIT_EVERY = 40000;          // years between checks for a cut-off population
 const SPLIT_MIN_CELLS = 12;
 const SPLIT_MIN_SHARE = 0.1;
-const EXCLUSION = 3;                // how hard the best-fitted species in a cell crowds out the rest
+const EXCLUSION = 3;                // how hard the best-fitted species in a cell crowds out the rest (grow() cubes it inline)
 const ADAPT_YEARS = 20000;          // how long tempOpt takes to track a changed climate
 const MAX_SUBSTEPS = 2;
 const BIG_RIVER_Q = 3e8;            // m³/yr: a river this big is a barrier to land species
@@ -45,6 +45,11 @@ const A_RATE = 1.2;                 // growth per year of the fastest-breeding a
 const EAT = 0.35;                   // animal biomass one unit of food supports
 const APPETITE = 1.2;               // what a unit of animal biomass eats, relative to EAT
 const MAX_GRAZE = 0.6;              // grazers take at most this share of a plant's room
+// Lookup tables, rebuilt per species each tick, so the per-cell work has no
+// pow or exp in it: temperature fit over −40…40 °C in quarter degrees, and
+// resource richness 0…2.5 in 1/256ths.
+const LUT_T_MIN = -40, LUT_T_STEP = 4, LUT_T_N = 321;
+const LUT_R_STEP = 256, LUT_R_N = 641;
 
 export class Life {
   constructor(land, rng) {
@@ -95,9 +100,15 @@ export class Life {
     this.eatFresh = [new Float32Array(NL), new Float32Array(NL)];
     this.eatSea = [new Float32Array(NL), new Float32Array(NL)];
     this.eatLand = [new Float32Array(NL), new Float32Array(NL)];
+    // The share of a plant's room grazed away, per realm and size class.
+    this.gFresh = [new Float32Array(NL), new Float32Array(NL)];
+    this.gSea = [new Float32Array(NL), new Float32Array(NL)];
+    this.gLand = [new Float32Array(NL), new Float32Array(NL)];
     this.cover = new Float32Array(NL);
     this.coverC = new Float32Array(NL);     // mean complexity of the plants there
     this.tmp = new Float32Array(NL);
+    this.lutT = new Float32Array(LUT_T_N);
+    this.lutR = new Float32Array(LUT_R_N);
     this.pass = new Float32Array(NL);
     this.fit = new Float32Array(NL);
     this.queue = new Int32Array(NL);
@@ -324,8 +335,9 @@ export class Life {
   tally() {
     for (const a of [...this.bFresh, ...this.bSea, ...this.bLand, this.aFresh, this.aSea, this.aLand,
       ...this.eatFresh, ...this.eatSea, ...this.eatLand]) a.fill(0);
+    let grazers = false;
     for (const sp of this.species) {
-      if (sp.traits.animal) { this.tallyAnimal(sp); continue; }
+      if (sp.traits.animal) { this.tallyAnimal(sp); grazers = true; continue; }
       const tier = tierOf(sp.traits);
       const bFresh = this.bFresh[tier], bSea = this.bSea[tier], bLand = this.bLand[tier];
       const r = realms(sp.traits);
@@ -337,6 +349,11 @@ export class Life {
         if (n === 0) return;
         bFresh[c] += n * wf; bSea[c] += n * ws; bLand[c] += n * wl;
       });
+    }
+    for (let tier = 0; tier < 2; tier++) {
+      this.grazeOf(this.gFresh[tier], this.eatFresh[tier], this.bFresh[tier], grazers);
+      this.grazeOf(this.gSea[tier], this.eatSea[tier], this.bSea[tier], grazers);
+      this.grazeOf(this.gLand[tier], this.eatLand[tier], this.bLand[tier], grazers);
     }
   }
 
@@ -362,9 +379,12 @@ export class Life {
   }
 
   // How much of a plant's room the grazers take, in one realm and size class.
-  grazed(eat, have, c) {
-    const e = eat[c];
-    return e > 0 ? Math.min(MAX_GRAZE, e / (have[c] + 0.05)) : 0;
+  grazeOf(out, eat, have, any) {
+    if (!any) { out.fill(0); return; }
+    for (let c = 0; c < this.NL; c++) {
+      const e = eat[c];
+      out[c] = e > 0 ? Math.min(MAX_GRAZE, e / (have[c] + 0.05)) : 0;
+    }
   }
 
   // Calls fn(c) for every cell in a species' occupied box, grown by m cells.
@@ -384,32 +404,51 @@ export class Life {
     if (sp.traits.animal) { this.capacityAnimal(sp); return; }
     const t = sp.traits;
     const r = realms(t);
-    const opt = tempOptC(t.tempOpt), width = tempWidthC(t.tempTol);
     const kMult = 0.7 + 0.6 * t.complexity;
     const rExp = 0.6 + 1.6 * t.complexity;
-    const { sea, fresh, landF, ice, tempMean, nutFresh, nutSea, nutLand } = this;
+    const { sea, fresh, landF, ice, tempMean, nutFresh, nutSea, nutLand, lutR } = this;
+    const lutT = this.tempFit(t);
+    for (let k = 0; k < LUT_R_N; k++) lutR[k] = Math.pow(k / LUT_R_STEP, rExp);
     const tier = tierOf(t);
     const kmFresh = this.kmFresh[tier], kmSea = this.kmSea[tier], kmLand = this.kmLand[tier];
     const N = sp.N, K = sp.K;
     const dom = r.land >= r.fresh && r.land >= r.sea ? kmLand : r.sea > r.fresh ? kmSea : kmFresh;
     sp.dom = dom;
-    const eF = this.eatFresh[tier], eS = this.eatSea[tier], eL = this.eatLand[tier];
-    const hF = this.bFresh[tier], hS = this.bSea[tier], hL = this.bLand[tier];
-    this.forBox(sp, MAX_SUBSTEPS + 1, (c) => {
-      const hf = r.fresh * fresh[c], hs = r.sea * sea[c], hl = r.land * landF[c];
-      const habitat = hf + hs + hl;
-      if (habitat <= 0) { K[c] = 0; return; }
-      const resource = (hf * nutFresh[c] + hs * nutSea[c] + hl * nutLand[c]) / habitat;
-      const dT = (tempMean[c] - opt) / width;
-      // Grazers take their share of the room.
-      const graze = (hf * this.grazed(eF, hF, c) + hs * this.grazed(eS, hS, c) + hl * this.grazed(eL, hL, c)) / habitat;
-      // Complex life needs rich ground: in poor water or raw soil the simple
-      // forms keep their place.
-      const k = habitat * Math.pow(resource, rExp) * Math.exp(-0.5 * dT * dT) * kMult * (1 - ice[c]) * (1 - graze);
-      K[c] = k;
-      if (N[c] > RANGE_DENSITY && k > dom[c]) dom[c] = k;
-    });
+    const gF = this.gFresh[tier], gS = this.gSea[tier], gL = this.gLand[tier];
+    const rf = r.fresh, rs = r.sea, rl = r.land;
+    const { LW, LH } = this;
+    const m = MAX_SUBSTEPS + 1;
+    const x0 = Math.max(0, sp.x0 - m), x1 = Math.min(LW - 1, sp.x1 + m);
+    const y0 = Math.max(0, sp.y0 - m), y1 = Math.min(LH - 1, sp.y1 + m);
+    for (let y = y0; y <= y1; y++) {
+      for (let c = y * LW + x0, end = y * LW + x1; c <= end; c++) {
+        const hf = rf * fresh[c], hs = rs * sea[c], hl = rl * landF[c];
+        const habitat = hf + hs + hl;
+        if (habitat <= 0) { K[c] = 0; continue; }
+        const resource = (hf * nutFresh[c] + hs * nutSea[c] + hl * nutLand[c]) / habitat;
+        // Grazers take their share of the room.
+        const graze = (hf * gF[c] + hs * gS[c] + hl * gL[c]) / habitat;
+        // Complex life needs rich ground: in poor water or raw soil the simple
+        // forms keep their place.
+        const k = habitat * lookup(lutR, resource * LUT_R_STEP, LUT_R_N) * lutT[tempIndex(tempMean[c])]
+          * kMult * (1 - ice[c]) * (1 - graze);
+        K[c] = k;
+        if (N[c] > RANGE_DENSITY && k > dom[c]) dom[c] = k;
+      }
+    }
   }
+
+  // How well a species does at each temperature, as a table.
+  tempFit(t) {
+    const opt = tempOptC(t.tempOpt), width = tempWidthC(t.tempTol);
+    const lut = this.lutT;
+    for (let k = 0; k < LUT_T_N; k++) {
+      const dT = (LUT_T_MIN + k / LUT_T_STEP - opt) / width;
+      lut[k] = Math.exp(-0.5 * dT * dT);
+    }
+    return lut;
+  }
+
 
   // What a cell can hold of an animal: as much as its food supports there.
   // Fish with fleshy, limb-like fins or a way to gulp air do a little better
@@ -418,7 +457,7 @@ export class Life {
   capacityAnimal(sp) {
     const t = sp.traits;
     const r = realms(t);
-    const opt = tempOptC(t.tempOpt), width = tempWidthC(t.tempTol);
+    const lutT = this.tempFit(t);
     const kMult = EAT * (0.8 + 0.4 * t.complexity);
     const d = t.diet;
     const finCost = 0.3 * t.limbs;
@@ -439,8 +478,7 @@ export class Life {
       // a fin that can prop and push helps through the weed.
       const warm = Math.max(0, Math.min(1, (T - 8) / 14));
       const edge = 1 + margin * (0.35 * t.lungs * warm + 0.35 * t.limbs);
-      const dT = (T - opt) / width;
-      const k = food * kMult * edge * Math.exp(-0.5 * dT * dT) * (1 - ice[c]);
+      const k = food * kMult * edge * lutT[tempIndex(T)] * (1 - ice[c]);
       K[c] = k;
       if (N[c] > RANGE_DENSITY && k > dom[c]) dom[c] = k;
     });
@@ -454,9 +492,10 @@ export class Life {
     const t = sp.traits;
     const r = realms(t);
     const rsum = r.fresh + r.sea + r.land || 1;
+    const rf = r.fresh / rsum, rs = r.sea / rsum, rl = r.land / rsum;
     const animal = !!t.animal;
     const rate = animal ? A_RATE * (1 - 0.5 * t.complexity) : R_MAX * (1 - 0.6 * t.complexity);
-    const { snow, temp, landF } = this;
+    const { snow, temp, landF, LW } = this;
     const tier = tierOf(t);
     const bFresh = animal ? this.aFresh : this.bFresh[tier];
     const bSea = animal ? this.aSea : this.bSea[tier];
@@ -464,31 +503,35 @@ export class Life {
     const N = sp.N, K = sp.K, dom = sp.dom;
     const light = this.light;
     const landy = r.land > 0;
-    this.forBox(sp, 0, (c) => {
-      const n = N[c];
-      if (n <= 0) return;
-      let k = K[c];
-      if (k <= 0) { N[c] = n * Math.exp(-MORTALITY * 4 * dt); if (N[c] < MIN_DENSITY) N[c] = 0; return; }
-      const best = dom[c];
-      if (best > k) k *= Math.pow(k / best, EXCLUSION);
-      const crowd = (r.fresh * bFresh[c] + r.sea * bSea[c] + r.land * bLand[c]) / rsum;
-      const keff = k - Math.max(0, crowd - n);
-      // Growing season: cold and snow stop growth; short days slow it.
-      // Animals don't need the light, and only slow down in the cold.
-      let g = animal ? 1 : light;
-      const T = temp[c];
-      if (animal) g = T < 0 ? 0.25 : T < 8 ? 0.25 + (0.75 * T) / 8 : 1;
-      else if (T < 2) g = 0;
-      else if (T < 10) g *= (T - 2) / 8;
-      if (landy && landF[c] > 0 && snow[c] > 0.5) g *= 1 - snow[c];
-      const rg = rate * g;
-      let next;
-      if (keff > 1e-6 && rg > 0) next = keff / (1 + ((keff - n) / n) * Math.exp(-rg * dt));
-      else if (keff > 1e-6) next = n;
-      else next = n * Math.exp(-MORTALITY * dt);
-      N[c] = next < MIN_DENSITY ? 0 : next;
-    });
+    const starve = Math.exp(-MORTALITY * 4 * dt), dwindle = Math.exp(-MORTALITY * dt);
+    for (let y = sp.y0; y <= sp.y1; y++) {
+      for (let c = y * LW + sp.x0, end = y * LW + sp.x1; c <= end; c++) {
+        const n = N[c];
+        if (n <= 0) continue;
+        let k = K[c];
+        if (k <= 0) { const v = n * starve; N[c] = v < MIN_DENSITY ? 0 : v; continue; }
+        const best = dom[c];
+        if (best > k) { const q = k / best; k *= q * q * q; }   // EXCLUSION = 3
+        const crowd = rf * bFresh[c] + rs * bSea[c] + rl * bLand[c];
+        const keff = k - Math.max(0, crowd - n);
+        // Growing season: cold and snow stop growth; short days slow it.
+        // Animals don't need the light, and only slow down in the cold.
+        let g;
+        const T = temp[c];
+        if (animal) g = T < 0 ? 0.25 : T < 8 ? 0.25 + (0.75 * T) / 8 : 1;
+        else g = T < 2 ? 0 : T < 10 ? (light * (T - 2)) / 8 : light;
+        if (landy && landF[c] > 0 && snow[c] > 0.5) g *= 1 - snow[c];
+        const rgdt = rate * g * dt;
+        let next;
+        // Over a long tick a growing population simply reaches what the cell holds.
+        if (keff > 1e-6 && rgdt > 0) next = rgdt > 40 ? keff : keff / (1 + ((keff - n) / n) * Math.exp(-rgdt));
+        else if (keff > 1e-6) next = n;
+        else next = n * dwindle;
+        N[c] = next < MIN_DENSITY ? 0 : next;
+      }
+    }
   }
+
 
   // Spread to neighbouring cells the species can live in. Aquatic species
   // only move through water; big rivers hold back land species unless they
@@ -949,6 +992,19 @@ export class Life {
     out.sort((a, b) => b.density - a.density);
     return out;
   }
+}
+
+// A table entry, interpolated between its two neighbours.
+function lookup(lut, x, n) {
+  if (x <= 0) return lut[0];
+  if (x >= n - 1) return lut[n - 1];
+  const i = x | 0;
+  return lut[i] + (lut[i + 1] - lut[i]) * (x - i);
+}
+
+function tempIndex(T) {
+  const k = Math.round((T - LUT_T_MIN) * LUT_T_STEP);
+  return k < 0 ? 0 : k >= LUT_T_N ? LUT_T_N - 1 : k;
 }
 
 // Size class: microbes and single cells (0) or anything larger (1).

@@ -5,6 +5,7 @@ const CELL_M = 500;
 const MAX_ZOOM = 8;
 const SETTLE_MS = 120;   // the view has stopped moving; redraw the rivers sharp
 const EFFECT_MS = { meteor: 3500, volcano: 5000, lightning: 4000, flood: 5000 };
+const SPECKS = 600;      // most animal specks drawn in one view
 
 // Bare ground by elevation (metres): sand and ochre low down, rust-brown and
 // grey rock higher, pale scree near the top. Nothing is green until plants
@@ -352,7 +353,9 @@ export class MapRenderer {
 
   // Animals as specks where they're dense: silver shoals in the water, dark
   // herds on land. Each has a fixed home in its cell and wanders around it,
-  // so they drift as time runs.
+  // so they drift as time runs. A view shows at most about SPECKS of them,
+  // a fixed sample of the whole, so zooming in shows more of each place
+  // without drawing more in all.
   drawSpecks(f, ctx, w) {
     const { W, H, ocean, lake, Q } = f;
     const { LW, LH, fishes, herds } = f.life;
@@ -364,6 +367,16 @@ export class MapRenderer {
     const lx0 = Math.max(0, Math.floor(this.x0 / 2) - 1), lx1 = Math.min(LW - 1, Math.ceil((this.x0 + vw) / 2));
     const ly0 = Math.max(0, Math.floor(this.y0 / 2) - 1), ly1 = Math.min(LH - 1, Math.ceil((this.y0 + vh) / 2));
     const wet = (i) => ocean[i] || lake[i] || Q[i] >= 2.5e6;
+    let total = 0;
+    for (let ly = ly0; ly <= ly1; ly++) {
+      for (let lx = lx0; lx <= lx1; lx++) {
+        const c = ly * LW + lx;
+        if (fishes[c] >= 10) total += Math.min(4, Math.ceil(fishes[c] / 60));
+        if (herds[c] >= 10) total += Math.min(4, Math.ceil(herds[c] / 60));
+      }
+    }
+    if (!total) return;
+    const keep = Math.min(1, SPECKS / total) * 65536;
     const fishPath = new Path2D(), herdPath = new Path2D();
     let anyFish = false, anyHerd = false;
     for (let ly = ly0; ly <= ly1; ly++) {
@@ -376,6 +389,7 @@ export class MapRenderer {
           for (let k = 0; k < count; k++) {
             let h = Math.imul(c * 8 + k * 2 + kind + 1, 2654435761) >>> 0;
             h = Math.imul(h ^ (h >>> 15), 2246822519) >>> 0;
+            if ((Math.imul(h ^ (h >>> 13), 1274126177) >>> 16) >= keep) continue;
             // A sub-cell of the right kind: water for fish, dry ground for herds.
             let i = -1;
             for (let q = 0; q < 4; q++) {
@@ -391,9 +405,10 @@ export class MapRenderer {
             const amp = kind === 0 ? 0.28 : 0.18;
             const wx = (i % W) + 0.2 + 0.6 * (((h >>> 8) & 255) / 255) + amp * Math.sin(t * sp + ph);
             const wy = ((i / W) | 0) + 0.2 + 0.6 * (((h >>> 16) & 15) / 15) + amp * Math.cos(t * sp * 0.8 + ph * 1.3);
-            const x = (wx - this.x0) * s, y = (wy - this.y0) * s;
-            if (kind === 0) { fishPath.rect(x - size / 2, y - size / 2, size * 1.6, size); anyFish = true; }
-            else { herdPath.rect(x - size / 2, y - size / 2, size * 1.3, size * 1.3); anyHerd = true; }
+            const x = Math.round((wx - this.x0) * s), y = Math.round((wy - this.y0) * s);
+            const z = Math.round(size);
+            if (kind === 0) { fishPath.rect(x, y, Math.round(size * 1.6), z); anyFish = true; }
+            else { herdPath.rect(x, y, Math.round(size * 1.3), Math.round(size * 1.3)); anyHerd = true; }
           }
         }
       }
