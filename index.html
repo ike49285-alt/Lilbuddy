@@ -2,109 +2,83 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-  <title>Chronicle</title>
-  <meta name="description" content="A world that keeps running, and an archive that forgets." />
-  <meta name="color-scheme" content="light dark" />
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E🗺%3C/text%3E%3C/svg%3E" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Headwaters</title>
+  <meta name="description" content="A river carves its valley through geologic time." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Spectral:wght@500;600&display=swap" />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600&family=Barlow:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <header class="topbar">
-    <h1>Chronicle</h1>
-    <p class="strap">A world that keeps running, and an archive that forgets.</p>
-    <button id="open-settings" class="icon" type="button" aria-label="Seed, search and new world">
-      <span aria-hidden="true">☰</span>
-    </button>
+<!-- app:start -->
+<div class="app">
+  <header class="top">
+    <div class="brand">
+      <h1>Headwaters</h1>
+      <p class="sub">A river cuts its valley, a thousand years at a time.</p>
+    </div>
+    <div class="clock">
+      <span id="time" class="time">0 kyr</span>
+      <span id="phase" class="chip">interglacial</span>
+    </div>
   </header>
 
-  <main>
-    <section class="mapwrap" id="mapwrap">
-      <canvas id="map" aria-label="Map of the world, coloured by which state holds each region"></canvas>
-      <p id="winter-badge" class="winter-badge" hidden>❄ A volcanic winter grips the world</p>
-      <div class="maplayers" role="group" aria-label="Map overlays">
-        <button id="layer-unrest" type="button" class="chip" aria-pressed="false">Unrest</button>
-      </div>
-      <div class="mapzoom" role="group" aria-label="Map zoom">
-        <button id="zoom-in" type="button" aria-label="Zoom in">+</button>
-        <button id="zoom-out" type="button" aria-label="Zoom out">–</button>
-        <button id="zoom-reset" type="button" aria-label="Reset view" hidden>⤢</button>
-      </div>
-      <p id="mapnote" class="mapnote" hidden></p>
-    </section>
+  <main class="layout">
+    <figure class="map" id="map">
+      <canvas id="map-canvas" role="img" aria-label="Relief map of the valley, mountains at the top and the sea at the bottom"></canvas>
+      <div class="north" aria-hidden="true">N<span>↑</span></div>
+      <div class="scale" aria-hidden="true"><span id="scale-bar" class="bar"></span><span>10 km</span></div>
+    </figure>
 
-    <section class="controls">
-      <div class="clock">
-        <span id="year">0</span>
-        <small id="epoch">—</small>
+    <section class="panel" aria-label="Controls and measurements">
+      <div class="speed" role="group" aria-label="Speed">
+        <button type="button" id="speed-pause" data-speed="pause">Pause</button>
+        <button type="button" id="speed-10" data-speed="10" class="on">10 kyr/s</button>
+        <button type="button" id="speed-50" data-speed="50">50 kyr/s</button>
+        <button type="button" id="speed-max" data-speed="max">Max</button>
       </div>
-    </section>
 
-    <section class="scrubwrap">
-      <canvas id="climate-strip" class="climatestrip" height="14"
-              aria-label="Climate over time, with markers for epoch changes and global cataclysms — tap to jump there"></canvas>
-      <input id="scrub" type="range" min="0" max="1000" value="1000"
-             aria-label="Scrub back through the world's history" />
-      <div class="scrubrow">
-        <span id="viewing">watching the present</span>
-        <button id="live" type="button">Jump to now</button>
-      </div>
-    </section>
-
-    <section class="record">
-      <div class="section-head">
-        <h2 id="ticker-title">Living memory</h2>
-        <button id="clear-filter" type="button" class="chip" hidden>Show all tiers</button>
-      </div>
-      <ul id="events" class="feed"></ul>
-    </section>
-
-    <aside class="side">
-    <section class="panel">
-      <h2>Powers of the age</h2>
-      <ol class="powers" id="powers"></ol>
-    </section>
-
-    <section class="panel">
-      <h2>The archive</h2>
-      <p class="hint">
-        The record has a fixed budget. Events age into coarser tiers, merge, and
-        are dropped — what is left is what earned its place. Tap a tier to read
-        only what still survives at that depth.
-      </p>
-      <ul class="tiers" id="tiers"></ul>
-      <dl class="figures">
-        <div><dt>Retained</dt><dd id="fig-events">0</dd></div>
-        <div><dt>Forgotten</dt><dd id="fig-dropped">0</dd></div>
-        <div><dt>Merged</dt><dd id="fig-merged">0</dd></div>
-        <div><dt>Keyframes</dt><dd id="fig-keyframes">0</dd></div>
+      <dl class="stats">
+        <div><dt>Main river</dt><dd id="s-len">—</dd></div>
+        <div><dt>Flow at the mouth</dt><dd id="s-q">—</dd></div>
+        <div><dt>Share of all runoff</dt><dd id="s-share">—</dd></div>
+        <div><dt>Highest peak</dt><dd id="s-relief">—</dd></div>
+        <div><dt>Ice cover</dt><dd id="s-ice">—</dd></div>
+        <div><dt>Lakes</dt><dd id="s-lakes">—</dd></div>
+        <div><dt>Delta built</dt><dd id="s-delta">—</dd></div>
+        <div><dt>Coast temperature</dt><dd id="s-temp">—</dd></div>
       </dl>
-    </section>
 
-    <section class="panel">
-      <h2>The world now</h2>
-      <dl class="figures">
-        <div><dt>States</dt><dd id="fig-polities">0</dd></div>
-        <div><dt>People</dt><dd id="fig-pop">0</dd></div>
-        <div><dt>Towns</dt><dd id="fig-settle">0</dd></div>
-        <div><dt>Rate</dt><dd id="fig-rate">—</dd></div>
-      </dl>
+      <div class="sparks">
+        <figure>
+          <figcaption><span>Sea level</span><span id="sp-sea-v" class="val"></span></figcaption>
+          <canvas id="sp-sea" aria-label="Sea level over the last 1.2 million years"></canvas>
+        </figure>
+        <figure>
+          <figcaption><span>Flow at the mouth</span><span id="sp-q-v" class="val"></span></figcaption>
+          <canvas id="sp-q" aria-label="River flow at the mouth over the last 1.2 million years"></canvas>
+        </figure>
+        <p class="axis"><span id="sp-from">−1.2 Myr</span><span>now</span></p>
+      </div>
+
+      <div class="key" aria-label="Elevation key">
+        <div class="ramp" id="ramp"></div>
+        <div class="ticks"><span>0</span><span>500</span><span>1,000</span><span>2,000</span><span>2,900 m</span></div>
+      </div>
+
+      <form class="seed" id="seed-form">
+        <label for="seed">Seed</label>
+        <input id="seed" name="seed" autocomplete="off" spellcheck="false" maxlength="32" />
+        <button type="submit" id="seed-go">Start</button>
+        <button type="button" id="seed-random">Random</button>
+      </form>
+
+      <p class="note">Each step is 1,000 years. The rains begin light on a young mountain front still being pushed upward, so the first water is a trickle. Over millions of years it finds its way, cuts gorges, captures neighbouring streams and builds a delta, while ice ages pull the sea back across the shelf and let it return.</p>
     </section>
-    </aside>
   </main>
-
-  <div id="scrim" class="scrim" hidden></div>
-  <section id="sheet" class="sheet" hidden role="dialog" aria-modal="true" aria-labelledby="sheet-title">
-    <div class="sheet-handle" id="sheet-handle">
-      <span class="grab" aria-hidden="true"></span>
-    </div>
-    <button id="sheet-close" class="sheet-close" type="button" aria-label="Close">✕</button>
-    <div class="sheet-body" id="sheet-body"></div>
-  </section>
-
-  <script type="module" src="src/app.js"></script>
+</div>
+<!-- app:end -->
+<script type="module" src="src/app.js"></script>
 </body>
 </html>

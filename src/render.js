@@ -1,394 +1,173 @@
-// render.js — drawing the map.
-//
-// The whole map is one ImageData pass over the raster world.js built. Each
-// pixel looks up its cell, the cell looks up its owner, and the owner picks a
-// colour; a border is simply a pixel whose right or lower neighbour resolves to
-// a different owner. No polygons, no path stroking, no per-frame geometry.
+// render.js — draws a frame: hypsometric terrain with hillshade, the sea,
+// lakes and ice, and the rivers as lines whose width follows their discharge.
 
-// Radius per settlement tier. A mature world holds close to a thousand towns,
-// so the smallest tier has to stay near-invisible or the map disappears under
-// its own dots; cities are what the eye should pick out.
-const TIER_MARKERS = [0, 1.3, 2.4, 4.2];
-const TIER_ALPHA = [0, 0.3, 0.55, 0.95];
+const CELL_M = 500;
 
-// The scrubber and the climate strip beneath it share one time mapping:
-// logarithmic in age rather than linear in year, so a run measured in
-// hundreds of thousands of years doesn't collapse the last few centuries
-// into a single pixel. `fraction` is 0 at the oldest point shown, 1 at the
-// present — exported so app.js's slider math and the strip's pixel columns
-// are provably the same formula, not two copies that can drift apart.
-export function yearAtFraction(latestYear, fraction) {
-  const span = Math.max(1, latestYear);
-  const age = Math.pow(span + 1, 1 - fraction) - 1;
-  return Math.max(0, Math.round(latestYear - age));
+// Elevation tints (metres) — lowland green through tan and brown to snow.
+const LAND = [
+  [0, 112, 146, 96], [150, 140, 166, 106], [400, 184, 182, 126], [800, 194, 160, 112],
+  [1300, 164, 126, 94], [1900, 140, 120, 112], [2400, 196, 192, 190], [2900, 238, 238, 236],
+];
+// Sea depth (metres below sea level).
+const SEA = [
+  [0, 98, 156, 178], [40, 66, 124, 158], [140, 42, 94, 132], [600, 24, 60, 96], [1800, 14, 36, 64],
+];
+
+function ramp(stops, v) {
+  if (v <= stops[0][0]) return stops[0];
+  for (let k = 1; k < stops.length; k++) {
+    if (v <= stops[k][0]) {
+      const a = stops[k - 1], b = stops[k];
+      const t = (v - a[0]) / (b[0] - a[0]);
+      return [v, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t, a[3] + (b[3] - a[3]) * t];
+    }
+  }
+  return stops[stops.length - 1];
 }
 
-export function fractionAtYear(latestYear, year) {
-  const span = Math.max(1, latestYear);
-  const age = Math.max(0, latestYear - year);
-  return 1 - Math.log(age + 1) / Math.log(span + 1);
+export function elevationColor(m) {
+  const c = ramp(LAND, m);
+  return `rgb(${c[1] | 0}, ${c[2] | 0}, ${c[3] | 0})`;
 }
-
-// Zoom is expressed as how much of the raster's shorter side the view window
-// covers: 1 shows the whole world, MAX_SCALE shows the smallest patch.
-const MIN_SCALE = 1;
-const MAX_SCALE = 8;
 
 export class MapRenderer {
-  constructor(canvas, world) {
-    this.canvas = canvas;
-    this.world = world;
-    this.ctx = canvas.getContext('2d');
-
-    // Painted at raster resolution, then scaled up. Scaling one bitmap beats
-    // touching four times as many pixels. Zoom and pan only change which
-    // window of this same buffer gets blown up onto the canvas — the pixel
-    // loop that paints it never runs more often than the data actually
-    // changes, so panning and zooming stay free of it.
-    this.buffer = document.createElement('canvas');
-    this.buffer.width = world.width;
-    this.buffer.height = world.height;
-    this.bufferCtx = this.buffer.getContext('2d');
-    this.image = this.bufferCtx.createImageData(world.width, world.height);
-
-    // Cached RGB per polity id, so the hue hash isn't recomputed per pixel.
-    this.colorCache = new Map();
-    this.owners = null;
-    this.settlements = [];
-    this.highlight = -1;
-    // When set, only these polities keep their colour and everything else
-    // drops back — used to hold a war's two belligerents on the map while
-    // their analysis is open over it.
-    this.focus = null;
-    // Per-cell unrest (0..1) and whether to actually paint it. Kept separate
-    // from whether data exists: leaving stale unrest sitting in `this.unrest`
-    // is harmless as long as `overlay` is the only thing draw() checks to
-    // decide whether to show it.
-    this.unrest = null;
-    this.overlay = null; // null | 'unrest'
-
-    // View transform: viewScale 1 shows the whole raster; the centre is
-    // where zooming and panning both pivot around.
-    this.viewScale = MIN_SCALE;
-    this.viewCenterX = world.width / 2;
-    this.viewCenterY = world.height / 2;
-  }
-
-  // Golden-angle hue stepping keeps adjacent ids visually far apart, which
-  // matters because neighbouring polities usually have nearby ids.
-  colorFor(id) {
-    let c = this.colorCache.get(id);
-    if (c) return c;
-    const hue = (id * 137.508) % 360;
-    const sat = 0.42 + ((id * 37) % 23) / 100;
-    const light = 0.44 + ((id * 61) % 17) / 100;
-    c = hslToRgb(hue / 360, sat, light);
-    if (this.colorCache.size > 4096) this.colorCache.clear();
-    this.colorCache.set(id, c);
-    return c;
-  }
-
-  setState({ owners, settlements, highlight, focus, unrest, overlay }) {
-    if (owners) this.owners = owners;
-    if (settlements) this.settlements = settlements;
-    if (highlight !== undefined) this.highlight = highlight;
-    if (focus !== undefined) this.focus = focus && focus.length ? new Set(focus) : null;
-    if (unrest !== undefined) this.unrest = unrest;
-    if (overlay !== undefined) this.overlay = overlay;
-  }
-
-  // The raster-space rectangle the canvas currently shows, clamped so it
-  // never pans past the world's edge — zooming in near a corner shows that
-  // corner, not empty canvas beyond it.
-  viewRect() {
-    const w = this.world;
-    const sw = w.width / this.viewScale;
-    const sh = w.height / this.viewScale;
-    const sx = Math.min(Math.max(this.viewCenterX - sw / 2, 0), w.width - sw);
-    const sy = Math.min(Math.max(this.viewCenterY - sh / 2, 0), w.height - sh);
-    return { sx, sy, sw, sh };
-  }
-
-  clampCenter() {
-    const { sx, sy, sw, sh } = this.viewRect();
-    this.viewCenterX = sx + sw / 2;
-    this.viewCenterY = sy + sh / 2;
-  }
-
-  // Zoom to a raster cell and centre on it — what tapping a search result or
-  // an entity page's "show on map" link does.
-  centerOnCell(cell, scale = 4) {
-    const w = this.world;
-    this.viewCenterX = w.sx[cell];
-    this.viewCenterY = w.sy[cell];
-    this.viewScale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, scale));
-    this.clampCenter();
-  }
-
-  resetView() {
-    const w = this.world;
-    this.viewScale = MIN_SCALE;
-    this.viewCenterX = w.width / 2;
-    this.viewCenterY = w.height / 2;
-  }
-
-  // Zoom around a fixed canvas-space point (cursor position, pinch midpoint)
-  // rather than the view centre, so the thing under your fingers stays under
-  // your fingers as the scale changes.
-  zoomAt(clientX, clientY, factor) {
-    const rect = this.canvas.getBoundingClientRect();
-    if (!rect.width || !rect.height) return;
-    const { sx, sy, sw, sh } = this.viewRect();
-    const fx = (clientX - rect.left) / rect.width;
-    const fy = (clientY - rect.top) / rect.height;
-    const anchorX = sx + fx * sw;
-    const anchorY = sy + fy * sh;
-    const nextScale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, this.viewScale * factor));
-    if (nextScale === this.viewScale) return;
-    this.viewScale = nextScale;
-    // Recentre so the anchor point lands back under the same canvas fraction.
-    const nsw = this.world.width / nextScale;
-    const nsh = this.world.height / nextScale;
-    this.viewCenterX = anchorX - (fx - 0.5) * nsw;
-    this.viewCenterY = anchorY - (fy - 0.5) * nsh;
-    this.clampCenter();
-  }
-
-  // Pan by a delta in canvas (client) pixels — converted into raster space at
-  // the current zoom, so a drag always tracks the point under the finger.
-  panByClientDelta(dx, dy) {
-    const rect = this.canvas.getBoundingClientRect();
-    if (!rect.width || !rect.height) return;
-    const { sw, sh } = this.viewRect();
-    this.viewCenterX -= (dx / rect.width) * sw;
-    this.viewCenterY -= (dy / rect.height) * sh;
-    this.clampCenter();
-  }
-
-  draw() {
-    const w = this.world;
-    const { raster, palette } = w;
-    const owners = this.owners;
-    const focus = this.focus;
-    const data = this.image.data;
-    const width = w.width;
-    const height = w.height;
-    const unrest = this.overlay === 'unrest' ? this.unrest : null;
-
-    for (let y = 0; y < height; y++) {
-      const row = y * width;
-      for (let x = 0; x < width; x++) {
-        const i = row + x;
-        const cell = raster[i];
-        const p = i * 4;
-
-        let r = palette[cell * 3];
-        let g = palette[cell * 3 + 1];
-        let b = palette[cell * 3 + 2];
-
-        const owner = owners ? owners[cell] : -1;
-        if (owner >= 0) {
-          const col = this.colorFor(owner);
-          // Political colour over terrain rather than instead of it, so
-          // mountains and desert still read through an empire.
-          const lit = !focus || focus.has(owner);
-          const mix = lit ? 0.68 : 0.16;
-          r = (r * (1 - mix) + col[0] * mix) | 0;
-          g = (g * (1 - mix) + col[1] * mix) | 0;
-          b = (b * (1 - mix) + col[2] * mix) | 0;
-          if (focus && !lit) { r = (r * 0.72) | 0; g = (g * 0.72) | 0; b = (b * 0.72) | 0; }
-        }
-
-        // Unrest overlay: a heat tint over the political colour, not instead
-        // of it — the map underneath should still read while it's on.
-        if (unrest) {
-          const u = unrest[cell];
-          if (u > 0.03) {
-            const [hr, hg, hb] = heatColor(u);
-            const mix = Math.min(0.8, u * 0.85 + 0.1);
-            r = (r * (1 - mix) + hr * mix) | 0;
-            g = (g * (1 - mix) + hg * mix) | 0;
-            b = (b * (1 - mix) + hb * mix) | 0;
-          }
-        }
-
-        // Borders: a pixel whose right or lower neighbour belongs to someone
-        // else. Cheap, and it traces the Voronoi edges exactly.
-        let edge = false;
-        if (x + 1 < width) {
-          const nc = raster[i + 1];
-          if (nc !== cell && (owners ? owners[nc] : -1) !== owner) edge = true;
-        }
-        if (!edge && y + 1 < height) {
-          const nc = raster[i + width];
-          if (nc !== cell && (owners ? owners[nc] : -1) !== owner) edge = true;
-        }
-        if (edge && owner >= 0) { r = (r * 0.55) | 0; g = (g * 0.55) | 0; b = (b * 0.55) | 0; }
-
-        if (cell === this.highlight) { r = Math.min(255, r + 60); g = Math.min(255, g + 60); b = Math.min(255, b + 50); }
-
-        data[p] = r;
-        data[p + 1] = g;
-        data[p + 2] = b;
-        data[p + 3] = 255;
-      }
-    }
-
-    this.bufferCtx.putImageData(this.image, 0, 0);
-
-    const ctx = this.ctx;
-    const cw = this.canvas.width;
-    const ch = this.canvas.height;
-    const { sx, sy, sw, sh } = this.viewRect();
-    ctx.clearRect(0, 0, cw, ch);
-    ctx.imageSmoothingEnabled = true;
-    // Blit only the zoomed-to window of the same buffer — the pixel loop
-    // above never has to know the view moved.
-    ctx.drawImage(this.buffer, sx, sy, sw, sh, 0, 0, cw, ch);
-
-    this.drawSettlements(ctx, cw / sw, ch / sh, sx, sy);
-  }
-
-  drawSettlements(ctx, scaleX, scaleY, sx, sy) {
-    const w = this.world;
-    ctx.save();
-    for (const s of this.settlements) {
-      const tier = Math.min(3, s.tier);
-      const radius = TIER_MARKERS[tier] * (scaleX * 0.6);
-      if (radius <= 0) continue;
-      const x = (w.sx[s.cell] - sx) * scaleX;
-      const y = (w.sy[s.cell] - sy) * scaleY;
-      if (x < -radius || y < -radius || x > ctx.canvas.width + radius || y > ctx.canvas.height + radius) continue;
-      ctx.beginPath();
-      ctx.arc(x, y, radius, 0, Math.PI * 2);
-      ctx.fillStyle = tier >= 3 ? '#fff8e8' : '#12141a';
-      ctx.globalAlpha = TIER_ALPHA[tier];
-      ctx.fill();
-      if (s.tier >= 3) {
-        ctx.lineWidth = 1;
-        ctx.globalAlpha = 0.8;
-        ctx.strokeStyle = '#2b2b2b';
-        ctx.stroke();
-      }
-    }
-    ctx.restore();
-  }
-
-  // Canvas coordinates back to a cell index, for hover and click — inverts
-  // the same view window draw() just blitted.
-  cellAt(clientX, clientY) {
-    const rect = this.canvas.getBoundingClientRect();
-    if (!rect.width || !rect.height) return -1;
-    const w = this.world;
-    const { sx, sy, sw, sh } = this.viewRect();
-    const x = Math.floor(sx + ((clientX - rect.left) / rect.width) * sw);
-    const y = Math.floor(sy + ((clientY - rect.top) / rect.height) * sh);
-    if (x < 0 || y < 0 || x >= w.width || y >= w.height) return -1;
-    return w.raster[y * w.width + x];
-  }
-
-  resize() {
-    const rect = this.canvas.getBoundingClientRect();
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
-    this.canvas.width = Math.max(1, Math.round(rect.width * dpr));
-    this.canvas.height = Math.max(1, Math.round(rect.height * dpr));
-  }
-}
-
-function hslToRgb(h, s, l) {
-  const a = s * Math.min(l, 1 - l);
-  const f = (n) => {
-    const k = (n + h * 12) % 12;
-    return l - a * Math.max(-1, Math.min(Math.min(k - 3, 9 - k), 1));
-  };
-  return [Math.round(f(0) * 255), Math.round(f(8) * 255), Math.round(f(4) * 255)];
-}
-
-// Unrest 0..1 to a heat colour: pale yellow at the low end, through orange,
-// to a deep red at the top — the same three-stop gradient the eye already
-// reads as "warning" from every other heatmap.
-const HEAT_STOPS = [
-  [255, 241, 168],
-  [255, 150, 60],
-  [190, 30, 30],
-];
-function heatColor(u) {
-  const t = Math.min(1, Math.max(0, u)) * (HEAT_STOPS.length - 1);
-  const i = Math.min(HEAT_STOPS.length - 2, Math.floor(t));
-  const f = t - i;
-  const a = HEAT_STOPS[i], b = HEAT_STOPS[i + 1];
-  return [
-    a[0] + (b[0] - a[0]) * f,
-    a[1] + (b[1] - a[1]) * f,
-    a[2] + (b[2] - a[2]) * f,
-  ];
-}
-
-// Cool slate at the depths of a cycle, warm gold at its peak — the same
-// climatePhase the sim itself computes, read back out as colour.
-const COLD = [118, 148, 189];
-const WARM = [214, 181, 92];
-
-function markerColor(m) {
-  if (m.type === 'epoch') return m.data && m.data.direction === 'returns' ? '#c97a2b' : '#3a8f80';
-  if (m.type === 'winter') return '#dbe9f2';
-  return '#b23a3a'; // cataclysm
-}
-
-// The thin strip above the scrubber: one pixel column per point in history,
-// coloured by climate phase, with tick marks for whatever the archive still
-// remembers happening at the epoch/global scale. Independent of the map
-// canvas — its own tiny buffer, redrawn only when asked, never per map frame.
-export class ClimateStrip {
   constructor(canvas) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
-    this.markers = [];
+    this.terrain = document.createElement('canvas');
+    this.tctx = this.terrain.getContext('2d');
+    this.image = null;
   }
 
-  setMarkers(markers) { this.markers = markers; }
-
-  resize() {
-    const rect = this.canvas.getBoundingClientRect();
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
-    this.canvas.width = Math.max(1, Math.round(rect.width * dpr));
-    this.canvas.height = Math.max(1, Math.round(rect.height * dpr));
+  // Keeps the backing store matched to the element's size on screen.
+  fit() {
+    const dpr = Math.min(3, window.devicePixelRatio || 1);
+    const w = Math.max(1, Math.round(this.canvas.clientWidth * dpr));
+    const h = Math.max(1, Math.round(this.canvas.clientHeight * dpr));
+    if (this.canvas.width !== w || this.canvas.height !== h) {
+      this.canvas.width = w;
+      this.canvas.height = h;
+    }
+    return { w, h };
   }
 
-  draw(latestYear, climatePeriod) {
-    this._lastYear = latestYear;
+  draw(f) {
+    const { W, H, z, ocean, lake, ice, Q, rec, seaLevel } = f;
+    if (!this.image || this.image.width !== W || this.image.height !== H) {
+      this.terrain.width = W;
+      this.terrain.height = H;
+      this.image = this.tctx.createImageData(W, H);
+    }
+    const px = this.image.data;
+    // Light from the north-west, slopes exaggerated so relief reads at this scale.
+    const EXAG = 7;
+    const L = Math.hypot(1, 1, 1.4);
+    const flat = 1.4 / L;
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const i = y * W + x;
+        const o = i * 4;
+        const e = z[i] - seaLevel;
+        let r, g, b;
+        if (ocean[i]) {
+          const c = ramp(SEA, -e);
+          r = c[1]; g = c[2]; b = c[3];
+        } else {
+          const zl = z[x > 0 ? i - 1 : i], zr = z[x < W - 1 ? i + 1 : i];
+          const zu = z[y > 0 ? i - W : i], zd = z[y < H - 1 ? i + W : i];
+          const gx = ((zr - zl) / (2 * CELL_M)) * EXAG;
+          const gy = ((zd - zu) / (2 * CELL_M)) * EXAG;
+          const dot = (gx + gy + 1.4) / (Math.hypot(gx, gy, 1) * L);
+          const shade = Math.max(0.45, Math.min(1.35, dot / flat));
+          if (ice[i]) {
+            r = 226 * shade; g = 234 * shade; b = 240 * shade;
+          } else if (lake[i]) {
+            r = 84; g = 138; b = 174;
+          } else {
+            const c = ramp(LAND, e);
+            r = c[1] * shade; g = c[2] * shade; b = c[3] * shade;
+          }
+        }
+        px[o] = r; px[o + 1] = g; px[o + 2] = b; px[o + 3] = 255;
+      }
+    }
+    this.tctx.putImageData(this.image, 0, 0);
+
+    const { w, h } = this.fit();
     const ctx = this.ctx;
-    const w = this.canvas.width;
-    const h = this.canvas.height;
-    ctx.clearRect(0, 0, w, h);
-    if (!latestYear || w <= 0) return;
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(this.terrain, 0, 0, w, h);
 
-    for (let x = 0; x < w; x++) {
-      const year = yearAtFraction(latestYear, x / w);
-      const phase = Math.sin((year / climatePeriod) * Math.PI * 2); // -1..1
-      const t = (phase + 1) / 2;
-      const r = (COLD[0] + (WARM[0] - COLD[0]) * t) | 0;
-      const g = (COLD[1] + (WARM[1] - COLD[1]) * t) | 0;
-      const b = (COLD[2] + (WARM[2] - COLD[2]) * t) | 0;
-      ctx.fillStyle = `rgb(${r},${g},${b})`;
-      ctx.fillRect(x, 0, 1, h);
+    // Rivers: one path per width class, thinnest first.
+    const sx = w / W, sy = h / H;
+    const cell = Math.min(sx, sy);
+    const CLASSES = 10;
+    const paths = Array.from({ length: CLASSES }, () => new Path2D());
+    const used = new Uint8Array(CLASSES);
+    for (let i = 0; i < W * H; i++) {
+      if (ocean[i] || lake[i]) continue;
+      const q = Q[i];
+      if (q < 3e6) continue;
+      const r = rec[i];
+      if (r === i) continue;
+      const lq = Math.log10(q);
+      const k = Math.max(0, Math.min(CLASSES - 1, Math.floor((lq - 6.48) / 0.34)));
+      const x0 = ((i % W) + 0.5) * sx, y0 = (((i / W) | 0) + 0.5) * sy;
+      const x1 = ((r % W) + 0.5) * sx, y1 = (((r / W) | 0) + 0.5) * sy;
+      paths[k].moveTo(x0, y0);
+      paths[k].lineTo(x1, y1);
+      used[k] = 1;
     }
-
-    for (const m of this.markers) {
-      const x = Math.round(fractionAtYear(latestYear, m.t) * w);
-      if (x < 0 || x >= w) continue;
-      ctx.globalAlpha = m.dist >= 2 ? 0.45 : 0.9;
-      ctx.fillStyle = markerColor(m);
-      ctx.fillRect(Math.max(0, x - 1), 0, 3, h);
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    for (let k = 0; k < CLASSES; k++) {
+      if (!used[k]) continue;
+      const t = k / (CLASSES - 1);
+      ctx.lineWidth = cell * (0.16 + 1.05 * t * t + 0.12 * t);
+      ctx.strokeStyle = `rgba(${46 - 10 * t | 0}, ${112 + 6 * t | 0}, ${178 + 22 * t | 0}, ${0.35 + 0.65 * Math.min(1, t * 1.6)})`;
+      ctx.stroke(paths[k]);
     }
-    ctx.globalAlpha = 1;
   }
+}
 
-  // Canvas x back to the year at that column — what tapping the strip uses
-  // to jump the scrubber there, the same way tapping the map picks a cell.
-  yearAt(clientX) {
-    const rect = this.canvas.getBoundingClientRect();
-    if (!rect.width) return 0;
-    return yearAtFraction(this._lastYear || 0, (clientX - rect.left) / rect.width);
+// A small line chart drawn from the page's colour tokens.
+export function drawSpark(canvas, values, { color, fill, grid, zeroLine = null }) {
+  const dpr = Math.min(3, window.devicePixelRatio || 1);
+  const w = Math.round(canvas.clientWidth * dpr), h = Math.round(canvas.clientHeight * dpr);
+  if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, w, h);
+  if (values.length < 2) return;
+  let lo = Infinity, hi = -Infinity;
+  for (const v of values) { if (v < lo) lo = v; if (v > hi) hi = v; }
+  if (zeroLine !== null) { lo = Math.min(lo, zeroLine); hi = Math.max(hi, zeroLine); }
+  if (hi - lo < 1e-9) { hi += 1; lo -= 1; }
+  const pad = 3 * dpr;
+  const X = (k) => pad + (k / (values.length - 1)) * (w - 2 * pad);
+  const Y = (v) => h - pad - ((v - lo) / (hi - lo)) * (h - 2 * pad);
+  if (zeroLine !== null) {
+    ctx.strokeStyle = grid;
+    ctx.lineWidth = dpr;
+    ctx.setLineDash([3 * dpr, 3 * dpr]);
+    ctx.beginPath(); ctx.moveTo(pad, Y(zeroLine)); ctx.lineTo(w - pad, Y(zeroLine)); ctx.stroke();
+    ctx.setLineDash([]);
   }
+  ctx.beginPath();
+  ctx.moveTo(X(0), Y(values[0]));
+  for (let k = 1; k < values.length; k++) ctx.lineTo(X(k), Y(values[k]));
+  ctx.lineTo(X(values.length - 1), h - pad);
+  ctx.lineTo(X(0), h - pad);
+  ctx.closePath();
+  ctx.fillStyle = fill;
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(X(0), Y(values[0]));
+  for (let k = 1; k < values.length; k++) ctx.lineTo(X(k), Y(values[k]));
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1.5 * dpr;
+  ctx.stroke();
+  const lx = X(values.length - 1), ly = Y(values[values.length - 1]);
+  ctx.fillStyle = color;
+  ctx.beginPath(); ctx.arc(lx, ly, 2.5 * dpr, 0, Math.PI * 2); ctx.fill();
 }
