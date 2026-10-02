@@ -85,7 +85,10 @@ function onMessage(e) {
   const msg = e.data;
   if (msg.type === 'frame') {
     last = msg.frame;
-    draw(last);
+    if (!drawPending) {
+      drawPending = true;
+      requestAnimationFrame(drawLatest);
+    }
   } else if (msg.type === 'state') {
     saveWorld(msg.state).then(() => {
       lastSaved = Date.now();
@@ -221,13 +224,35 @@ function togglePlay() {
   setPausedUI();
 }
 
-function draw(f) {
+// Frames arrive one at a time; only the latest is drawn, once per display
+// frame, and the worker hears back so it can send the next.
+let drawPending = false;
+let lastSlow = 0;
+const SLOW_MS = 500;
+function drawLatest() {
+  drawPending = false;
+  if (!last) return;
+  draw(last);
+  if (worker) worker.postMessage({ type: 'ack' });
+}
+
+// Colour tokens, read once and again when the colour scheme changes.
+let tokens = null;
+function readTokens() {
+  const css = getComputedStyle(document.documentElement);
+  tokens = {
+    water: css.getPropertyValue('--water').trim(),
+    soft: css.getPropertyValue('--water-soft').trim(),
+    grid: css.getPropertyValue('--line').trim(),
+  };
+}
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { tokens = null; lastSlow = 0; });
+
+function draw(f, force) {
   const sel = selectedId && f.species.find((s) => s.id === selectedId && s.died === null);
   if (selectedId && !sel) selectSpecies(null);
   if (sel) renderer.selectedRgb = hslRgb(sel.hue);
   renderer.draw(f);
-  drawLife(f);
-  const st = f.stats;
   $('time').textContent = formatTime(f.years, f.tickYears);
   $('tick').textContent = `tick ${formatSpan(f.tickYears)}`;
   const lag = $('lag');
@@ -248,6 +273,17 @@ function draw(f) {
   phase.textContent = f.climate.label;
   phase.classList.toggle('glacial', f.climate.glacial > 0.55);
 
+  // Everything below changes slowly; it doesn't need redoing every frame.
+  const now = performance.now();
+  if (!force && now - lastSlow < SLOW_MS) return;
+  lastSlow = now;
+  drawSlow(f);
+}
+
+function drawSlow(f) {
+  const st = f.stats;
+  drawLife(f);
+
   $('s-len').textContent = st.trunkLen > 0 ? `${n0.format(st.trunkLen / 1000)} km` : 'not yet';
   $('s-q').textContent = `${n1.format(st.mouthQ / 3.156e7)} m³/s`;
   $('s-share').textContent = `${n0.format(st.mainShare * 100)}%`;
@@ -260,10 +296,8 @@ function draw(f) {
   $('s-delta').textContent = `${n0.format(st.deltaCells * CELL_KM2)} km²`;
   $('s-temp').textContent = `${n1.format(f.climate.seaT)} °C`;
 
-  const css = getComputedStyle(document.documentElement);
-  const water = css.getPropertyValue('--water').trim();
-  const soft = css.getPropertyValue('--water-soft').trim();
-  const grid = css.getPropertyValue('--line').trim();
+  if (!tokens) readTokens();
+  const { water, soft, grid } = tokens;
   drawSpark($('sp-sea'), f.history.sea, { color: water, fill: soft, grid, zeroLine: 0 });
   drawSpark($('sp-q'), Array.from(f.history.mouthQ, (q) => q / 3.156e7), { color: water, fill: soft, grid });
   $('sp-sea-v').textContent = `${n0.format(f.seaLevel)} m`;
@@ -473,6 +507,7 @@ function renderTree(all) {
 
 function selectSpecies(id) {
   selectedId = id;
+  lastSlow = 0;
   worker.postMessage({ type: 'select', id });
   for (const b of document.querySelectorAll('#species-list button')) {
     b.setAttribute('aria-pressed', Number(b.dataset.id) === id ? 'true' : 'false');
@@ -484,7 +519,8 @@ function showTab(name) {
     $(`tab-${t}`).setAttribute('aria-selected', t === name ? 'true' : 'false');
     $(`pane-${t}`).hidden = t !== name;
   }
-  if (name === 'tree') { treeSig = ''; if (last) renderTree(last.species); }
+  if (name === 'tree') treeSig = '';
+  if (last) drawSlow(last);
 }
 for (const t of ['river', 'life', 'tree']) $(`tab-${t}`).addEventListener('click', () => showTab(t));
 
@@ -492,7 +528,7 @@ function setMode(mode) {
   renderer.mode = mode;
   $('mode-landscape').setAttribute('aria-pressed', mode === 'landscape' ? 'true' : 'false');
   $('mode-species').setAttribute('aria-pressed', mode === 'species' ? 'true' : 'false');
-  if (last) draw(last);
+  if (last) draw(last, true);
 }
 $('mode-landscape').addEventListener('click', () => setMode('landscape'));
 $('mode-species').addEventListener('click', () => setMode('species'));
@@ -547,7 +583,7 @@ function renderInspect(info) {
   $('ramp').style.background = `linear-gradient(to right, ${stops.map((m) => `${elevationColor(m)} ${(pos(m) * 100).toFixed(1)}%`).join(', ')})`;
 }
 
-window.addEventListener('resize', () => { if (last) draw(last); });
+window.addEventListener('resize', () => { if (last) draw(last, true); });
 
 // Test hooks.
 window.Headwaters = {

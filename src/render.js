@@ -30,28 +30,22 @@ function ramp(stops, v) {
   return stops[stops.length - 1];
 }
 
-// Life runs on a grid half as fine as the landscape; sample it bilinearly so
-// the living layer reads as smooth country rather than 1 km blocks.
-function makeSampler(LW, LH) {
-  const w = new Float32Array(4);
-  const idx = new Int32Array(4);
-  return {
-    at(x, y) {
-      const fx = Math.min(LW - 1, Math.max(0, (x + 0.5) / 2 - 0.5));
-      const fy = Math.min(LH - 1, Math.max(0, (y + 0.5) / 2 - 0.5));
-      const x0 = Math.floor(fx), y0 = Math.floor(fy);
-      const x1 = Math.min(LW - 1, x0 + 1), y1 = Math.min(LH - 1, y0 + 1);
-      const tx = fx - x0, ty = fy - y0;
-      idx[0] = y0 * LW + x0; idx[1] = y0 * LW + x1; idx[2] = y1 * LW + x0; idx[3] = y1 * LW + x1;
-      w[0] = (1 - tx) * (1 - ty); w[1] = tx * (1 - ty); w[2] = (1 - tx) * ty; w[3] = tx * ty;
-    },
-    get(arr) {
-      return arr[idx[0]] * w[0] + arr[idx[1]] * w[1] + arr[idx[2]] * w[2] + arr[idx[3]] * w[3];
-    },
-    get3(arr, k) {
-      return arr[idx[0] * 3 + k] * w[0] + arr[idx[1] * 3 + k] * w[1] + arr[idx[2] * 3 + k] * w[2] + arr[idx[3] * 3 + k] * w[3];
-    },
-  };
+// Life runs on a grid half as fine as the landscape; it's sampled
+// bilinearly (tables below) so the living layer reads as smooth country
+// rather than 1 km blocks.
+
+// Colour lookup tables, 1 m per entry, so drawing doesn't allocate per pixel.
+const LAND_LUT_MAX = 3200;
+const SEA_LUT_MAX = 2000;
+const LAND_LUT = new Uint8ClampedArray((LAND_LUT_MAX + 1) * 3);
+const SEA_LUT = new Uint8ClampedArray((SEA_LUT_MAX + 1) * 3);
+for (let m = 0; m <= LAND_LUT_MAX; m++) {
+  const c = ramp(LAND, m);
+  LAND_LUT[m * 3] = c[1]; LAND_LUT[m * 3 + 1] = c[2]; LAND_LUT[m * 3 + 2] = c[3];
+}
+for (let m = 0; m <= SEA_LUT_MAX; m++) {
+  const c = ramp(SEA, m);
+  SEA_LUT[m * 3] = c[1]; SEA_LUT[m * 3 + 1] = c[2]; SEA_LUT[m * 3 + 2] = c[3];
 }
 
 export function elevationColor(m) {
@@ -67,12 +61,18 @@ export class MapRenderer {
     this.tctx = this.terrain.getContext('2d');
     this.image = null;
     this.mode = 'landscape';
+    this.rivers = document.createElement('canvas');
+    this.rctx = this.rivers.getContext('2d');
+    this.riverYears = -Infinity;
+    this.riverAt = 0;
     this.selectedRgb = [255, 210, 90];
   }
 
   // Keeps the backing store matched to the element's size on screen.
+  // The terrain image is only 128 × 224 cells, so a 1.5× backing store is
+  // as sharp as it gets; going denser costs phones a lot of drawing time.
   fit() {
-    const dpr = Math.min(3, window.devicePixelRatio || 1);
+    const dpr = Math.min(1.5, window.devicePixelRatio || 1);
     const w = Math.max(1, Math.round(this.canvas.clientWidth * dpr));
     const h = Math.max(1, Math.round(this.canvas.clientHeight * dpr));
     if (this.canvas.width !== w || this.canvas.height !== h) {
@@ -97,110 +97,171 @@ export class MapRenderer {
     }
   }
 
+  // Per-grid tables built once: clamped neighbour indices for the hillshade
+  // and the four life cells (with weights) behind each map pixel.
+  tables(W, H, LW, LH) {
+    if (this.tW === W && this.tH === H) return;
+    this.tW = W; this.tH = H;
+    const N = W * H;
+    this.shade = new Float32Array(N);
+    this.shadeYears = -Infinity;
+    this.shadeAt = 0;
+    this.bi = new Int32Array(N * 4);
+    this.bw = new Float32Array(N * 4);
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const i = y * W + x;
+        const fx = Math.min(LW - 1, Math.max(0, (x + 0.5) / 2 - 0.5));
+        const fy = Math.min(LH - 1, Math.max(0, (y + 0.5) / 2 - 0.5));
+        const x0 = Math.floor(fx), y0 = Math.floor(fy);
+        const x1 = Math.min(LW - 1, x0 + 1), y1 = Math.min(LH - 1, y0 + 1);
+        const tx = fx - x0, ty = fy - y0;
+        const k = i * 4;
+        this.bi[k] = y0 * LW + x0; this.bi[k + 1] = y0 * LW + x1;
+        this.bi[k + 2] = y1 * LW + x0; this.bi[k + 3] = y1 * LW + x1;
+        this.bw[k] = (1 - tx) * (1 - ty); this.bw[k + 1] = tx * (1 - ty);
+        this.bw[k + 2] = (1 - tx) * ty; this.bw[k + 3] = tx * ty;
+      }
+    }
+  }
+
+  // Hillshade from the north-west, slopes exaggerated so relief reads at
+  // this scale, with a 3×3 Sobel gradient so the shading doesn't comb along
+  // the grid's diagonals. The terrain changes slowly, so this is cached and
+  // redone only when it has had time to move.
+  hillshade(f) {
+    const { W, H, z, years } = f;
+    const now = performance.now();
+    if (Math.abs(years - this.shadeYears) < 500 && now - this.shadeAt < 1000) return;
+    if (years === this.shadeYears) return;
+    this.shadeYears = years;
+    this.shadeAt = now;
+    const out = this.shade;
+    const EXAG = 7 / (8 * CELL_M);
+    const L = Math.hypot(1, 1, 1.4);
+    const flat = 1.4 / L;
+    for (let y = 0; y < H; y++) {
+      const ym = (y > 0 ? y - 1 : 0) * W, y0 = y * W, yp = (y < H - 1 ? y + 1 : H - 1) * W;
+      for (let x = 0; x < W; x++) {
+        const xm = x > 0 ? x - 1 : 0, xp = x < W - 1 ? x + 1 : W - 1;
+        const gx = ((z[ym + xp] + 2 * z[y0 + xp] + z[yp + xp]) - (z[ym + xm] + 2 * z[y0 + xm] + z[yp + xm])) * EXAG;
+        const gy = ((z[yp + xm] + 2 * z[yp + x] + z[yp + xp]) - (z[ym + xm] + 2 * z[ym + x] + z[ym + xp])) * EXAG;
+        const dot = (gx + gy + 1.4) / (Math.sqrt(gx * gx + gy * gy + 1) * L);
+        out[y0 + x] = Math.max(0.45, Math.min(1.35, dot / flat));
+      }
+    }
+  }
+
   draw(f) {
     const { W, H, z, ocean, lake, ice, snow, seaLevel } = f;
     const seaT = f.climate.seaT;
+    const seasonal = f.climate.seasonal;
     const lf = f.life;
-    const LW = lf.LW;
     const speciesMode = this.mode === 'species';
     const sel = lf.selected;
-    const S = makeSampler(LW, lf.LH);
     const selRgb = this.selectedRgb;
     if (!this.image || this.image.width !== W || this.image.height !== H) {
       this.terrain.width = W;
       this.terrain.height = H;
       this.image = this.tctx.createImageData(W, H);
     }
+    this.tables(W, H, lf.LW, lf.LH);
+    this.hillshade(f);
+    const { bi, bw, shade: SH } = this;
     const px = this.image.data;
-    // Light from the north-west; slopes exaggerated so relief reads at this
-    // scale. A 3×3 Sobel gradient keeps the shading from combing along the
-    // grid's diagonals.
-    const EXAG = 7;
-    const L = Math.hypot(1, 1, 1.4);
-    const flat = 1.4 / L;
-    const Z = (x, y) => z[Math.min(H - 1, Math.max(0, y)) * W + Math.min(W - 1, Math.max(0, x))];
-    for (let y = 0; y < H; y++) {
-      for (let x = 0; x < W; x++) {
-        const i = y * W + x;
-        const o = i * 4;
-        const e = z[i] - seaLevel;
-        let r, g, b;
-        S.at(x, y);
-        const bloom = S.get(lf.aqua) / 255;
-        if (ocean[i]) {
-          const c = ramp(SEA, -e);
-          r = c[1]; g = c[2]; b = c[3];
-          const a = Math.min(0.5, bloom * 0.5) * (e > -150 ? 1 : 0.5);
-          r += (BLOOM[0] - r) * a; g += (BLOOM[1] - g) * a; b += (BLOOM[2] - b) * a;
+    const { aqua, veg, vegC, rgb } = lf;
+    const N = W * H;
+    for (let i = 0; i < N; i++) {
+      const o = i * 4;
+      const k = i * 4;
+      const i0 = bi[k], i1 = bi[k + 1], i2 = bi[k + 2], i3 = bi[k + 3];
+      const w0 = bw[k], w1 = bw[k + 1], w2 = bw[k + 2], w3 = bw[k + 3];
+      const e = z[i] - seaLevel;
+      let r, g, b;
+      if (ocean[i]) {
+        const d = Math.min(SEA_LUT_MAX, Math.max(0, Math.round(-e))) * 3;
+        r = SEA_LUT[d]; g = SEA_LUT[d + 1]; b = SEA_LUT[d + 2];
+        const bloom = (aqua[i0] * w0 + aqua[i1] * w1 + aqua[i2] * w2 + aqua[i3] * w3) / 255;
+        const a = Math.min(0.5, bloom * 0.5) * (e > -150 ? 1 : 0.5);
+        r += (BLOOM[0] - r) * a; g += (BLOOM[1] - g) * a; b += (BLOOM[2] - b) * a;
+      } else {
+        const shade = SH[i];
+        if (ice[i]) {
+          r = 226 * shade; g = 234 * shade; b = 240 * shade;
+        } else if (lake[i]) {
+          // A lake freezes over when it's well below zero up there.
+          const frozen = seasonal && seaT - 0.0065 * Math.max(0, e) < -2;
+          if (frozen) { r = 200; g = 216; b = 228; } else {
+            r = 84; g = 138; b = 174;
+            const bloom = (aqua[i0] * w0 + aqua[i1] * w1 + aqua[i2] * w2 + aqua[i3] * w3) / 255;
+            const a = Math.min(0.55, bloom * 0.55);
+            r += (BLOOM[0] - r) * a; g += (BLOOM[1] - g) * a; b += (BLOOM[2] - b) * a;
+          }
         } else {
-          const gx = ((Z(x + 1, y - 1) + 2 * Z(x + 1, y) + Z(x + 1, y + 1))
-            - (Z(x - 1, y - 1) + 2 * Z(x - 1, y) + Z(x - 1, y + 1))) / (8 * CELL_M) * EXAG;
-          const gy = ((Z(x - 1, y + 1) + 2 * Z(x, y + 1) + Z(x + 1, y + 1))
-            - (Z(x - 1, y - 1) + 2 * Z(x, y - 1) + Z(x + 1, y - 1))) / (8 * CELL_M) * EXAG;
-          const dot = (gx + gy + 1.4) / (Math.hypot(gx, gy, 1) * L);
-          const shade = Math.max(0.45, Math.min(1.35, dot / flat));
-          if (ice[i]) {
-            r = 226 * shade; g = 234 * shade; b = 240 * shade;
-          } else if (lake[i]) {
-            // A lake freezes over when it's well below zero up there.
-            const frozen = f.climate.seasonal && seaT - 0.0065 * Math.max(0, e) < -2;
-            if (frozen) { r = 200; g = 216; b = 228; } else {
-              r = 84; g = 138; b = 174;
-              const a = Math.min(0.55, bloom * 0.55);
-              r += (BLOOM[0] - r) * a; g += (BLOOM[1] - g) * a; b += (BLOOM[2] - b) * a;
-            }
-          } else {
-            const c = ramp(LAND, e);
-            r = c[1] * shade; g = c[2] * shade; b = c[3] * shade;
-            // Plants: moss-green when simple, deep forest green when complex;
-            // in winter the colour fades with dormancy.
-            const cover = S.get(lf.veg) / 255;
-            if (cover > 0.01) {
-              const cc = S.get(lf.vegC) / 255;
-              const t = Math.max(0, Math.min(1, (cc - 0.3) / 0.6));
-              const gr = MOSS[0] + (FOREST[0] - MOSS[0]) * t;
-              const gg = MOSS[1] + (FOREST[1] - MOSS[1]) * t;
-              const gb = MOSS[2] + (FOREST[2] - MOSS[2]) * t;
-              let leaf = 1;
-              if (f.climate.seasonal) leaf = Math.max(0.35, Math.min(1, (seaT - 0.0065 * Math.max(0, e) - 2) / 10));
-              const a = Math.min(0.9, cover) * (0.55 + 0.45 * leaf);
-              r += (gr * shade - r) * a; g += (gg * shade - g) * a; b += (gb * shade - b) * a;
-            }
-            // Seasonal snow: a dusting shows; ten centimetres covers.
-            const depth = snow[i] / 510;
-            if (depth > 0.005) {
-              const a = Math.min(1, depth / 0.1) * 0.92;
-              r += (238 * shade - r) * a; g += (242 * shade - g) * a; b += (247 * shade - b) * a;
-            }
+          const d = Math.min(LAND_LUT_MAX, Math.max(0, Math.round(e))) * 3;
+          r = LAND_LUT[d] * shade; g = LAND_LUT[d + 1] * shade; b = LAND_LUT[d + 2] * shade;
+          // Plants: moss-green when simple, deep forest green when complex;
+          // in winter the colour fades with dormancy.
+          const cover = (veg[i0] * w0 + veg[i1] * w1 + veg[i2] * w2 + veg[i3] * w3) / 255;
+          if (cover > 0.01) {
+            const cc = (vegC[i0] * w0 + vegC[i1] * w1 + vegC[i2] * w2 + vegC[i3] * w3) / 255;
+            const t = Math.max(0, Math.min(1, (cc - 0.3) / 0.6));
+            const gr = MOSS[0] + (FOREST[0] - MOSS[0]) * t;
+            const gg = MOSS[1] + (FOREST[1] - MOSS[1]) * t;
+            const gb = MOSS[2] + (FOREST[2] - MOSS[2]) * t;
+            let leaf = 1;
+            if (seasonal) leaf = Math.max(0.35, Math.min(1, (seaT - 0.0065 * Math.max(0, e) - 2) / 10));
+            const a = Math.min(0.9, cover) * (0.55 + 0.45 * leaf);
+            r += (gr * shade - r) * a; g += (gg * shade - g) * a; b += (gb * shade - b) * a;
+          }
+          // Seasonal snow: a dusting shows; ten centimetres covers.
+          const depth = snow[i] / 510;
+          if (depth > 0.005) {
+            const a = Math.min(1, depth / 0.1) * 0.92;
+            r += (238 * shade - r) * a; g += (242 * shade - g) * a; b += (247 * shade - b) * a;
           }
         }
-        if (speciesMode) {
-          const lr = S.get3(lf.rgb, 0), lg = S.get3(lf.rgb, 1), lb = S.get3(lf.rgb, 2);
-          const a = Math.min(1, (lr + lg + lb) / 200) * 0.85;
-          r = r * 0.55 + (lr - r * 0.55) * a; g = g * 0.55 + (lg - g * 0.55) * a; b = b * 0.55 + (lb - b * 0.55) * a;
-        }
-        if (sel) {
-          const a = Math.min(1, S.get(sel) / 120) * 0.85;
-          r = r * 0.6 + (selRgb[0] - r * 0.6) * a; g = g * 0.6 + (selRgb[1] - g * 0.6) * a; b = b * 0.6 + (selRgb[2] - b * 0.6) * a;
-        }
-        px[o] = r; px[o + 1] = g; px[o + 2] = b; px[o + 3] = 255;
       }
+      if (speciesMode) {
+        const lr = rgb[i0 * 3] * w0 + rgb[i1 * 3] * w1 + rgb[i2 * 3] * w2 + rgb[i3 * 3] * w3;
+        const lg = rgb[i0 * 3 + 1] * w0 + rgb[i1 * 3 + 1] * w1 + rgb[i2 * 3 + 1] * w2 + rgb[i3 * 3 + 1] * w3;
+        const lb = rgb[i0 * 3 + 2] * w0 + rgb[i1 * 3 + 2] * w1 + rgb[i2 * 3 + 2] * w2 + rgb[i3 * 3 + 2] * w3;
+        const a = Math.min(1, (lr + lg + lb) / 200) * 0.85;
+        r = r * 0.55 + (lr - r * 0.55) * a; g = g * 0.55 + (lg - g * 0.55) * a; b = b * 0.55 + (lb - b * 0.55) * a;
+      }
+      if (sel) {
+        const a = Math.min(1, (sel[i0] * w0 + sel[i1] * w1 + sel[i2] * w2 + sel[i3] * w3) / 120) * 0.85;
+        r = r * 0.6 + (selRgb[0] - r * 0.6) * a; g = g * 0.6 + (selRgb[1] - g * 0.6) * a; b = b * 0.6 + (selRgb[2] - b * 0.6) * a;
+      }
+      px[o] = r; px[o + 1] = g; px[o + 2] = b; px[o + 3] = 255;
     }
     this.tctx.putImageData(this.image, 0, 0);
 
     const { w, h } = this.fit();
     const ctx = this.ctx;
     ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = 'high';
+    ctx.imageSmoothingQuality = 'low';
     ctx.drawImage(this.terrain, 0, 0, w, h);
-    this.drawRivers(f, w, h);
+    // Rivers change slowly; re-stroking thousands of reaches every frame is
+    // the costliest thing on a phone, so they're drawn to their own layer and
+    // redrawn only when they've had time to change.
+    const now = performance.now();
+    const stale = now - this.riverAt >= 1500;
+    if (this.rivers.width !== w || this.rivers.height !== h || (stale && f.years !== this.riverYears)) {
+      if (this.rivers.width !== w || this.rivers.height !== h) { this.rivers.width = w; this.rivers.height = h; }
+      this.rctx.clearRect(0, 0, w, h);
+      this.drawRivers(f, w, h, this.rctx);
+      this.riverYears = f.years;
+      this.riverAt = now;
+    }
+    ctx.drawImage(this.rivers, 0, 0);
   }
 
   // Each river cell draws one curve: from halfway along the reach coming in
   // from its main tributary, bending through its own point, to halfway along
   // the reach going out. Joined end to end these make smooth channels; a
   // tributary finishes with a short line into the point it joins.
-  drawRivers(f, w, h) {
+  drawRivers(f, w, h, ctx) {
     const { W, H, ocean, lake, Q, rec } = f;
     const N = W * H;
     this.points(W, H);
@@ -234,7 +295,6 @@ export class MapRenderer {
       if (mainDonor[r] !== i || ocean[r] || lake[r]) p.lineTo(xr, yr);
       used[k] = 1;
     }
-    const ctx = this.ctx;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
     for (let k = 0; k < CLASSES; k++) {
@@ -249,7 +309,7 @@ export class MapRenderer {
 
 // A small line chart drawn from the page's colour tokens.
 export function drawSpark(canvas, values, { color, fill, grid, zeroLine = null }) {
-  const dpr = Math.min(3, window.devicePixelRatio || 1);
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
   const w = Math.round(canvas.clientWidth * dpr), h = Math.round(canvas.clientHeight * dpr);
   if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
   const ctx = canvas.getContext('2d');
