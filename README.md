@@ -91,8 +91,23 @@ trait, through armored, ray-finned and lobe-finned fish. Fleshy fins and
 gulping air each help a little in warm, weedy shallows; with real legs and
 lungs, and land plants to eat, an animal can walk out of the water.
 Nothing schedules it: in some worlds it takes tens of millions of years, in
-some it may not happen at all. Fish show as silver specks in the water,
-land animals as dark specks on the ground.
+some it may not happen at all.
+
+The first walkers are amphibians: they lay their eggs in water, so they do
+well only near streams, lakes or heavy rain. Shelled eggs (reptiles) free
+them to live anywhere on land, and only then can warm blood evolve: warm-
+blooded animals (mammals, and the far-ranging ones birds) keep going in the
+cold, at the price of more food. Plants follow the same way out of the wet:
+spore plants (mosses, ferns) need damp ground; seed plants (shrubland,
+conifer forest) take the dry uplands; flowering plants (meadows, broadleaf
+forest) grow and spread faster. Each step comes in order, by chance, if it
+comes at all, and the first of each gets a note.
+
+Some animals take to eating other animals. Hunters eat the plant-eaters
+around them and nothing else, need twice the food per head and breed
+slower; they thin their prey, and starve without it. Fish show as silver
+specks in the water, land animals as dark specks on the ground, and hunters
+as rust-red specks.
 
 ## Disasters
 
@@ -131,9 +146,10 @@ loose cover first). Dig cuts a channel along a line you draw, its bed
 falling steadily from the higher end to the lower and kept below the ground
 either side, so a river that finds it follows it. Storm parks a heavy storm
 for a day and a half where you tap; it slows the clock to an hour a second
-so you can watch the flood come down. Seed drops a species where you tap: the one
-picked in the Life tab, if it can live there, or with none picked, a
-newcomer suited to the spot.
+so you can watch the flood come down. Seed drops a species where you tap:
+pick Plant or Animal for a newcomer suited to the spot (an animal only where
+there's something for it to eat), or Picked for the species chosen in the
+Life tab, if it can live there.
 
 The World sliders change the valley as a whole. Rain makes it wetter or
 drier (30% to 200% of natural); Meteors and Volcanoes set how often nature
@@ -150,6 +166,9 @@ is saved with the world.
 
 Pinch, double-tap, scroll or use the + and − buttons to zoom in; drag to
 move around once zoomed. Tap a spot to see what lives there.
+
+The switch at the bottom shows Land, Species or Ground; Layers adds colour
+maps of temperature, rainfall, river flow and erosion, each with its key.
 
 The 3D button stands the valley up, its heights exaggerated three times so
 the relief reads: drag to turn and tilt it, pinch or use + and − to move in,

@@ -138,7 +138,6 @@ export class Life {
     this.coverC = new Float32Array(NL);     // mean complexity of the plants there
     this.tmp = new Float32Array(NL);
     this.lutT = new Float32Array(LUT_T_N);
-    this.lutR = new Float32Array(LUT_R_N);
     this.pass = new Float32Array(NL);
     this.fit = new Float32Array(NL);
     this.queue = new Int32Array(NL);
@@ -419,11 +418,17 @@ export class Life {
       const sum = r.fresh + r.sea + r.land || 1;
       const wf = r.fresh / sum, ws = r.sea / sum, wl = r.land / sum;
       const N = sp.N;
-      this.forBox(sp, 0, (c) => {
-        const n = N[c];
-        if (n === 0) return;
-        bFresh[c] += n * wf; bSea[c] += n * ws; bLand[c] += n * wl;
-      });
+      {
+        const bx0 = Math.max(0, sp.x0), bx1 = Math.min(this.LW - 1, sp.x1);
+        const by0 = Math.max(0, sp.y0), by1 = Math.min(this.LH - 1, sp.y1);
+        for (let by = by0; by <= by1; by++) {
+          for (let c = by * this.LW + bx0, ce = by * this.LW + bx1; c <= ce; c++) {
+            const n = N[c];
+            if (n === 0) continue;
+            bFresh[c] += n * wf; bSea[c] += n * ws; bLand[c] += n * wl;
+          }
+        }
+      }
     }
     for (let tier = 0; tier < 2; tier++) {
       this.grazeOf(this.gFresh[tier], this.eatFresh[tier], this.bFresh[tier], grazers);
@@ -453,15 +458,21 @@ export class Life {
     const { eatPFresh, eatPSea, eatPLand } = this;
     const [eF0, eF1] = this.eatFresh, [eS0, eS1] = this.eatSea, [eL0, eL1] = this.eatLand;
     const N = sp.N;
-    this.forBox(sp, 0, (c) => {
-      const n = N[c];
-      if (n === 0) return;
-      aFresh[c] += n * wf; aSea[c] += n * ws; aLand[c] += n * wl;
-      if (hunter) { eatPFresh[c] += n * wf * meat; eatPSea[c] += n * ws * meat; eatPLand[c] += n * wl * meat; }
-      eF0[c] += n * wf * small; eF1[c] += n * wf * big;
-      eS0[c] += n * ws * small; eS1[c] += n * ws * big;
-      eL0[c] += n * wl * small; eL1[c] += n * wl * big;
-    });
+    {
+      const bx0 = Math.max(0, sp.x0), bx1 = Math.min(this.LW - 1, sp.x1);
+      const by0 = Math.max(0, sp.y0), by1 = Math.min(this.LH - 1, sp.y1);
+      for (let by = by0; by <= by1; by++) {
+        for (let c = by * this.LW + bx0, ce = by * this.LW + bx1; c <= ce; c++) {
+          const n = N[c];
+          if (n === 0) continue;
+          aFresh[c] += n * wf; aSea[c] += n * ws; aLand[c] += n * wl;
+          if (hunter) { eatPFresh[c] += n * wf * meat; eatPSea[c] += n * ws * meat; eatPLand[c] += n * wl * meat; }
+          eF0[c] += n * wf * small; eF1[c] += n * wf * big;
+          eS0[c] += n * ws * small; eS1[c] += n * ws * big;
+          eL0[c] += n * wl * small; eL1[c] += n * wl * big;
+        }
+      }
+    }
   }
 
   // How much of a plant's room the grazers take, in one realm and size class.
@@ -492,11 +503,18 @@ export class Life {
     const r = realms(t);
     const kMult = 0.7 + 0.6 * t.complexity;
     const rExp = 0.6 + 1.6 * t.complexity;
-    const { sea, fresh, landF, ice, tempMean, nutFresh, nutSea, nutLand, lutR, damp } = this;
+    const { sea, fresh, landF, ice, tempMean, nutFresh, nutSea, nutLand, damp } = this;
     const lutT = this.tempFit(t);
     // Spores need damp ground; seeds free a plant from it.
     const freed = clamp01((t.seeds - 0.15) / (SEEDED + 0.1 - 0.15));
-    for (let k = 0; k < LUT_R_N; k++) lutR[k] = Math.pow(k / LUT_R_STEP, rExp);
+    // How it uses richer ground, as a table: kept with the species, and only
+    // rebuilt when its complexity has changed.
+    if (sp.rExp !== rExp) {
+      if (!sp.lutR) sp.lutR = new Float32Array(LUT_R_N);
+      for (let k = 0; k < LUT_R_N; k++) sp.lutR[k] = Math.pow(k / LUT_R_STEP, rExp);
+      sp.rExp = rExp;
+    }
+    const lutR = sp.lutR;
     const tier = tierOf(t);
     const kmFresh = this.kmFresh[tier], kmSea = this.kmSea[tier], kmLand = this.kmLand[tier];
     const N = sp.N, K = sp.K;
@@ -566,25 +584,31 @@ export class Life {
       : (landDom ? kmALand : seaDom ? kmASea : kmAFresh);
     sp.dom = dom;
     const rsum = r.fresh + r.sea + r.land || 1;
-    this.forBox(sp, MAX_SUBSTEPS + 1, (c) => {
-      const water = fresh[c] + sea[c];
-      const margin = Math.min(1, 4 * water * landF[c]);
-      const inWater = r.fresh * ((1 - d) * bF0[c] + d * bF1[c]) + r.sea * ((1 - d) * bS0[c] + d * bS1[c]);
-      const onLand = r.land * ((1 - d) * bL0[c] + d * bL1[c]) * (freed + (1 - freed) * damp[c]);
-      let food = (inWater * (1 - finCost * (1 - margin)) + onLand) * plants;
-      // Hunters eat the plant-eaters around them; plant-eaters lose what the hunters take.
-      if (t.prey > 0) food += t.prey * (r.fresh * aFresh[c] + r.sea * aSea[c] + r.land * aLand[c] * (freed + (1 - freed) * damp[c]));
-      if (!hunter) food *= 1 - (r.fresh * huntFresh[c] + r.sea * huntSea[c] + r.land * huntLand[c]) / rsum;
-      if (food <= 0) { K[c] = 0; return; }
-      const T = tempMean[c];
-      // Warm shallows run short of oxygen, so a gulp of air helps there;
-      // a fin that can prop and push helps through the weed.
-      const warm = Math.max(0, Math.min(1, (T - 8) / 14));
-      const edge = 1 + margin * (0.35 * t.lungs * warm + 0.35 * t.limbs);
-      const k = food * kMult * edge * lutT[tempIndex(T)] * (1 - ice[c]);
-      K[c] = k;
-      if (N[c] > RANGE_DENSITY && k > dom[c]) dom[c] = k;
-    });
+    {
+      const bx0 = Math.max(0, sp.x0 - (MAX_SUBSTEPS + 1)), bx1 = Math.min(this.LW - 1, sp.x1 + MAX_SUBSTEPS + 1);
+      const by0 = Math.max(0, sp.y0 - (MAX_SUBSTEPS + 1)), by1 = Math.min(this.LH - 1, sp.y1 + MAX_SUBSTEPS + 1);
+      for (let by = by0; by <= by1; by++) {
+        for (let c = by * this.LW + bx0, ce = by * this.LW + bx1; c <= ce; c++) {
+          const water = fresh[c] + sea[c];
+          const margin = Math.min(1, 4 * water * landF[c]);
+          const inWater = r.fresh * ((1 - d) * bF0[c] + d * bF1[c]) + r.sea * ((1 - d) * bS0[c] + d * bS1[c]);
+          const onLand = r.land * ((1 - d) * bL0[c] + d * bL1[c]) * (freed + (1 - freed) * damp[c]);
+          let food = (inWater * (1 - finCost * (1 - margin)) + onLand) * plants;
+          // Hunters eat the plant-eaters around them; plant-eaters lose what the hunters take.
+          if (t.prey > 0) food += t.prey * (r.fresh * aFresh[c] + r.sea * aSea[c] + r.land * aLand[c] * (freed + (1 - freed) * damp[c]));
+          if (!hunter) food *= 1 - (r.fresh * huntFresh[c] + r.sea * huntSea[c] + r.land * huntLand[c]) / rsum;
+          if (food <= 0) { K[c] = 0; continue; }
+          const T = tempMean[c];
+          // Warm shallows run short of oxygen, so a gulp of air helps there;
+          // a fin that can prop and push helps through the weed.
+          const warm = Math.max(0, Math.min(1, (T - 8) / 14));
+          const edge = 1 + margin * (0.35 * t.lungs * warm + 0.35 * t.limbs);
+          const k = food * kMult * edge * lutT[tempIndex(T)] * (1 - ice[c]);
+          K[c] = k;
+          if (N[c] > RANGE_DENSITY && k > dom[c]) dom[c] = k;
+        }
+      }
+    }
   }
 
   // Exact logistic step toward what the cell can hold for this species,
@@ -688,16 +712,22 @@ export class Life {
     const N = sp.N;
     let total = 0, range = 0, tw = 0;
     let x0 = Infinity, x1 = -1, y0 = Infinity, y1 = -1;
-    this.forBox(sp, MAX_SUBSTEPS + 1, (c) => {
-      const n = N[c];
-      if (n === 0) return;
-      total += n;
-      tw += n * tempMean[c];
-      if (n > RANGE_DENSITY) range++;
-      const x = c % LW, y = (c / LW) | 0;
-      if (x < x0) x0 = x; if (x > x1) x1 = x;
-      if (y < y0) y0 = y; if (y > y1) y1 = y;
-    });
+    {
+      const bx0 = Math.max(0, sp.x0 - (MAX_SUBSTEPS + 1)), bx1 = Math.min(this.LW - 1, sp.x1 + MAX_SUBSTEPS + 1);
+      const by0 = Math.max(0, sp.y0 - (MAX_SUBSTEPS + 1)), by1 = Math.min(this.LH - 1, sp.y1 + MAX_SUBSTEPS + 1);
+      for (let by = by0; by <= by1; by++) {
+        for (let c = by * this.LW + bx0, ce = by * this.LW + bx1; c <= ce; c++) {
+          const n = N[c];
+          if (n === 0) continue;
+          total += n;
+          tw += n * tempMean[c];
+          if (n > RANGE_DENSITY) range++;
+          const x = c % LW, y = (c / LW) | 0;
+          if (x < x0) x0 = x; if (x > x1) x1 = x;
+          if (y < y0) y0 = y; if (y > y1) y1 = y;
+        }
+      }
+    }
     if (x1 >= 0) { sp.x0 = x0; sp.x1 = x1; sp.y0 = y0; sp.y1 = y1; }
     sp.total = total;
     sp.range = range;

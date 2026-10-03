@@ -899,8 +899,13 @@ renderer.setEffectsCanvas($('fx-canvas'));
 function onEvent(ev) {
   eventLog.push({ ...ev, cells: ev.cells ? ev.cells.length : 0 });
   if (eventLog.length > 50) eventLog.shift();
-  renderer.addEffect(ev, ev.quiet);
-  startEffects();
+  // Quiet events (nature's fires, floods, the bombardment) only animate
+  // when time runs slowly enough to watch one: at a year a tick or more,
+  // they'd keep the effects layer redrawing for nothing anyone could follow.
+  if (!ev.quiet || !(last && last.tickYears > 1)) {
+    renderer.addEffect(ev, ev.quiet);
+    startEffects();
+  }
   if (!ev.quiet) {
     pendingNotes.push(ev);
     pumpNotes();

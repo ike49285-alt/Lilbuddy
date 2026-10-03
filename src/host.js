@@ -19,12 +19,18 @@ const DAY = 1 / 365.25;
 const MINUTE = DAY / 1440;
 const MIN_RATE = 10 * MINUTE;      // sim-years per second: ten minutes a second
 const TICKS_PER_SECOND = 10;
+const GEOLOGIC_RATE = 100;  // sim-years per second from which ticks are halved
 const BUDGET_MS = 12;       // longest a single slice may run before yielding
 const LOOP_MS = 16;
 
 export function tickFor(rate) {
   if (!Number.isFinite(rate)) return MAX_STEP_YEARS;
-  return Math.max(MINUTE, Math.min(MAX_STEP_YEARS, rate / TICKS_PER_SECOND));
+  // At geologic speeds, fewer and longer ticks: a step costs about the same
+  // whatever its length, and frames wait while one runs, so halving them
+  // keeps the picture smooth. Nothing that needs short ticks (seasons,
+  // weather) runs this fast.
+  const perSecond = rate >= GEOLOGIC_RATE ? TICKS_PER_SECOND / 2 : TICKS_PER_SECOND;
+  return Math.max(MINUTE, Math.min(MAX_STEP_YEARS, rate / perSecond));
 }
 
 export function createHost(post) {

@@ -57,6 +57,7 @@ const NB = [
   [1, 0, 1], [-1, 0, 1], [0, 1, 1], [0, -1, 1],
   [1, 1, Math.SQRT2], [-1, 1, Math.SQRT2], [1, -1, Math.SQRT2], [-1, -1, Math.SQRT2],
 ];
+const NB_INV = NB.map((d) => 1 / d[2]);
 
 export class Landscape {
   constructor(terrain) {
@@ -115,6 +116,15 @@ export class Landscape {
     // Priority-flood heap.
     this.heap = new Int32Array(N);
     this.heapKey = new Float64Array(N);
+    // Each cell's eight neighbours (-1 off the map), in NB order.
+    this.nbr = new Int32Array(N * 8);
+    for (let i = 0; i < N; i++) {
+      const x = i % W, y = (i / W) | 0;
+      for (let k = 0; k < 8; k++) {
+        const nx = x + NB[k][0], ny = y + NB[k][1];
+        this.nbr[i * 8 + k] = nx < 0 || nx >= W || ny < 0 || ny >= H ? -1 : ny * W + nx;
+      }
+    }
     this.heapSize = 0;
     this.seen = new Uint8Array(N);
 
@@ -208,41 +218,41 @@ export class Landscape {
     for (let i = 0; i < N; i++) surf[i] = ocean[i] ? z[i] : z[i] + water[i];
     seen.fill(0);
     this.heapSize = 0;
-    for (let i = 0; i < N; i++) {
-      const edge = ((i / W) | 0) === H - 1;
-      if (ocean[i] || edge) {
-        seen[i] = 1;
-        filled[i] = ocean[i] ? sea : surf[i];
-        this.push(i, filled[i]);
-      }
-    }
+    const { nbr } = this;
     let n = 0;
+    const lastRow = (H - 1) * W;
+    for (let i = 0; i < N; i++) {
+      if (!ocean[i] && i < lastRow) continue;
+      seen[i] = 1;
+      filled[i] = ocean[i] ? sea : surf[i];
+      this.push(i, filled[i]);
+    }
+    // Every cell comes off the heap after the lower ones around it, so the
+    // flood order (stack) is a valid order for routing water down.
     while (this.heapSize > 0) {
       const c = this.pop();
       stack[n++] = c;
-      const cx = c % W, cy = (c / W) | 0;
       const kc = filled[c];
+      const o = c * 8;
       for (let k = 0; k < 8; k++) {
-        const nx = cx + NB[k][0], ny = cy + NB[k][1];
-        if (nx < 0 || nx >= W || ny < 0 || ny >= H) continue;
-        const j = ny * W + nx;
-        if (seen[j]) continue;
+        const j = nbr[o + k];
+        if (j < 0 || seen[j]) continue;
         seen[j] = 1;
-        filled[j] = Math.max(surf[j], kc + FILL_EPS);
-        this.push(j, filled[j]);
+        const f = Math.max(surf[j], kc + FILL_EPS);
+        filled[j] = f;
+        this.push(j, f);
       }
     }
     // Steepest descent on the filled surface.
-    for (let s = 0; s < N; s++) {
-      const i = stack[s];
-      const x = i % W, y = (i / W) | 0;
-      if (ocean[i] || y === H - 1) { rec[i] = i; continue; }
+    for (let i = 0; i < N; i++) {
+      if (ocean[i] || i >= lastRow) { rec[i] = i; continue; }
+      const fi = filled[i];
+      const o = i * 8;
       let best = i, bestSlope = 0;
       for (let k = 0; k < 8; k++) {
-        const nx = x + NB[k][0], ny = y + NB[k][1];
-        if (nx < 0 || nx >= W || ny < 0 || ny >= H) continue;
-        const j = ny * W + nx;
-        const slope = (filled[i] - filled[j]) / NB[k][2];
+        const j = nbr[o + k];
+        if (j < 0) continue;
+        const slope = (fi - filled[j]) * NB_INV[k];
         if (slope > bestSlope) { bestSlope = slope; best = j; }
       }
       rec[i] = best;
@@ -431,7 +441,7 @@ export class Landscape {
   // (when `hold` is given) keep their water for later.
   flowPass(hold) {
     const { N, Q, rec, stack, maxDonor, regions } = this;
-    const { W, H, filled, lake } = this;
+    const { filled, lake, nbr, share } = this;
     // Below the channel threshold, water spreads over every downhill
     // neighbour in proportion to slope (multiple flow direction), the way
     // sheetwash does on a real hillside. Once it's a channel it all follows
@@ -450,22 +460,22 @@ export class Landscape {
         if (d < 0 || Q[i] > Q[d]) maxDonor[r] = i;
         continue;
       }
-      const x = i % W, y = (i / W) | 0;
       const fi = filled[i];
+      const o = i * 8;
       let total = 0;
       for (let k = 0; k < 8; k++) {
-        const nx = x + NB[k][0], ny = y + NB[k][1];
-        if (nx < 0 || nx >= W || ny < 0 || ny >= H) { this.share[k] = 0; continue; }
-        const drop = fi - filled[ny * W + nx];
-        const w = drop > 0 ? drop / NB[k][2] : 0;
-        this.share[k] = w;
+        const j = nbr[o + k];
+        if (j < 0) { share[k] = 0; continue; }
+        const drop = fi - filled[j];
+        const w = drop > 0 ? drop * NB_INV[k] : 0;
+        share[k] = w;
         total += w;
       }
       if (total <= 0) { Q[r] += Q[i]; continue; }
       const q = Q[i] / total;
       for (let k = 0; k < 8; k++) {
-        const w = this.share[k];
-        if (w > 0) Q[(y + NB[k][1]) * W + x + NB[k][0]] += q * w;
+        const w = share[k];
+        if (w > 0) Q[nbr[o + k]] += q * w;
       }
       const d = maxDonor[r];
       if (d < 0 || Q[i] > Q[d]) maxDonor[r] = i;
@@ -825,37 +835,40 @@ export class Landscape {
 
   // --- binary min-heap keyed by heapKey -----------------------------------
 
+  // A binary min-heap of cells by key. Items move into a hole rather than
+  // being swapped, which halves the writes.
   push(i, key) {
     const { heap, heapKey } = this;
     let n = this.heapSize++;
-    heap[n] = i;
-    heapKey[n] = key;
     while (n > 0) {
       const p = (n - 1) >> 1;
-      if (heapKey[p] <= heapKey[n]) break;
-      const ti = heap[p]; heap[p] = heap[n]; heap[n] = ti;
-      const tk = heapKey[p]; heapKey[p] = heapKey[n]; heapKey[n] = tk;
+      if (heapKey[p] <= key) break;
+      heap[n] = heap[p];
+      heapKey[n] = heapKey[p];
       n = p;
     }
+    heap[n] = i;
+    heapKey[n] = key;
   }
 
   pop() {
     const { heap, heapKey } = this;
     const top = heap[0];
     const last = --this.heapSize;
-    heap[0] = heap[last];
-    heapKey[0] = heapKey[last];
+    const item = heap[last], key = heapKey[last];
     let n = 0;
     for (;;) {
-      const l = 2 * n + 1, r = l + 1;
-      let m = n;
-      if (l < last && heapKey[l] < heapKey[m]) m = l;
-      if (r < last && heapKey[r] < heapKey[m]) m = r;
-      if (m === n) break;
-      const ti = heap[m]; heap[m] = heap[n]; heap[n] = ti;
-      const tk = heapKey[m]; heapKey[m] = heapKey[n]; heapKey[n] = tk;
+      const l = 2 * n + 1;
+      if (l >= last) break;
+      const r = l + 1;
+      const m = r < last && heapKey[r] < heapKey[l] ? r : l;
+      if (heapKey[m] >= key) break;
+      heap[n] = heap[m];
+      heapKey[n] = heapKey[m];
       n = m;
     }
+    heap[n] = item;
+    heapKey[n] = key;
     return top;
   }
 }
