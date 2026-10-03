@@ -43,9 +43,6 @@ const LAKE_MIN_DEPTH = 0.75;    // metres of standing water before a cell counts
 const SHELF_SPILL_HOPS = 48;
 const MAX_UPLIFT_Z = 3600;       // uplift fades out as a range approaches this height
 const LOOSE_K = 5000;            // loose cover erodes this many times the base rate (≈ 20,000 × granite)
-const LOOSE_Q = CHANNEL_Q / 4; // m³/yr: in deep loose sand, smaller flows already cut a gully
-const DEEP_LOOSE_M = 3;          // cover deeper than this is sand laid by water, not hillside soil
-const SQRT_LOOSE_Q = Math.sqrt(LOOSE_Q);
 const SOIL_DEPTH_M = 0.5;        // soil production falls off with depth on this scale
 const MOUTH_SETTLE = 0.55;      // fraction of sediment reaching the sea that settles near the mouth; the fines go offshore
 
@@ -346,9 +343,10 @@ export class Landscape {
         // Loose cover goes as fast as the water can take it: limited by how
         // quickly the flow scours it, how much there is, and how much more
         // the water can carry. Roots hold it.
-        // Thin soil on a hillside stays put under sheetwash, as rock does;
-        // only a channel takes it. Deep sand gullies at smaller flows.
-        const power = ice[i] ? sq : sq - (loose[i] > DEEP_LOOSE_M ? SQRT_LOOSE_Q : SQRT_CHANNEL_Q);
+        // Cover on a hillside stays put under sheetwash, as rock does; only a
+        // channel takes it. (Letting sand gully at smaller flows splits the
+        // plain into parallel streams at short ticks but not long ones.)
+        const power = ice[i] ? sq : sq - SQRT_CHANNEL_Q;
         if (power > 0 && loose[i] > 0 && cap > qs[i]) {
           const scour = LOOSE_K * K_FLUVIAL * power * slope * dt * (1 - 0.8 * this.cover[i]);
           // Never below the next cell down (or the water in it): scouring

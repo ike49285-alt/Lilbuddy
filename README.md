@@ -34,6 +34,20 @@ then open http://localhost:8000/.
 - `src/host.js`, `src/worker.js` — runs the sim off the main thread
 - `src/render.js`, `src/app.js` — the page
 
+## Ground
+
+The ground is bedrock under loose cover. A granite core runs along the top
+of the range; below it, bands of sandstone, shale and limestone cross the
+valley, so the river cuts gorges through the hard bands and opens out
+across the soft; volcanoes add basalt. Each rock wears at its own rate,
+granite slowest and shale fastest. Loose cover (soil on the slopes, sand
+and silt on the plain and delta, scree on steep ground) goes as fast as the
+water can carry it: a sandy river bed cuts tens of centimetres a century
+where a granite one moves about a millimetre. Hillside soil rides on the
+slope as it creeps and goes with landslides; bare rock weathers back into
+soil, faster for shale than granite; rivers, lakes and floods lay down
+new cover. Plants do poorly on bare rock. The Ground map mode shows it all.
+
 ## Life
 
 Life starts in the sea: plankton, seaweed and microbial mats, with freshwater
