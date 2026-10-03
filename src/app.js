@@ -1014,6 +1014,16 @@ function setArmed(kind) {
   $('tools-toggle').textContent = kind ? label[kind] : 'Tools';
   canvas.classList.toggle('armed', !!kind);
   glCanvas.classList.toggle('armed', !!kind);
+  // Safari decides whether a touch scrolls the page as it starts, so a map
+  // that's about to be shaped has to say so before the finger comes down.
+  canvas.classList.toggle('shaping', SHAPERS.has(kind));
+  glCanvas.classList.toggle('shaping', SHAPERS.has(kind));
+}
+
+// And while a stroke is under way, no touch on the map scrolls the page.
+for (const c of [canvas, glCanvas]) {
+  c.addEventListener('touchstart', (e) => { if (armed && SHAPERS.has(armed)) e.preventDefault(); }, { passive: false });
+  c.addEventListener('touchmove', (e) => { if (shaping || (armed && SHAPERS.has(armed) && e.touches.length === 1)) e.preventDefault(); }, { passive: false });
 }
 
 // --- shaping by hand ---------------------------------------------------------
