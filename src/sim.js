@@ -8,12 +8,24 @@ import { Life } from './life.js';
 import { Disasters, BOMBARD_YEARS } from './disasters.js';
 import { Weather, WEATHER_TICK } from './weather.js';
 import { sculpt, dig, lineCells, parkStorm, BRUSH } from './tools.js';
+import { formOf } from './species.js';
 
 export { MAX_STEP_YEARS };
 
 export const HISTORY_LEN = 240;       // samples kept for the sparklines
 export const HISTORY_EVERY = 5000;    // years between samples (240 × 5 kyr = 1.2 Myr)
 const STORM_R_CELLS = 12;             // a parked storm's size on the map, for its note
+
+// The world's settings, as set on the page: [natural, least, most].
+export const SETTINGS = {
+  wetness: [1, 0.3, 2],       // rain, as a multiple of natural
+  meteor: [1, 0, 5],          // how often meteors strike, the bombardment included
+  volcano: [1, 0, 5],         // and volcanoes erupt
+  uplift: [1, 0, 3],          // how fast the mountains rise
+  warmth: [0, -8, 8],         // degrees warmer (or colder) than natural
+  sea: [0, -150, 150],        // metres higher (or lower) sea
+  hardness: [1, 0.25, 4],     // how hard the rock is: it wears at 1/hardness
+};
 
 export class Simulation {
   constructor(seed) {
@@ -39,7 +51,7 @@ export class Simulation {
     this.weather = new Weather(this.rng, this.life.LW, this.life.LH);
     this.land.toLife = this.life.toLife;
     this.sentEvent = 0;       // the last event id handed to the page
-    this.activity = { meteor: 1, volcano: 1 };   // natural impacts and eruptions, as multiples of natural
+    this.settings = Object.fromEntries(Object.entries(SETTINGS).map(([k, r]) => [k, r[0]]));
     this.sample();
   }
 
@@ -116,17 +128,41 @@ export class Simulation {
     return this.disasters.note(this, 'dig', mid, `A channel is cut, ${(n * CELL_M / 1000).toFixed(1)} km long`, 2);
   }
 
-  // How often meteors strike and volcanoes erupt, from none to five times
-  // natural, the bombardment included.
-  setActivity(kind, v) {
-    if (kind !== 'meteor' && kind !== 'volcano') return;
-    this.activity[kind] = Math.max(0, Math.min(5, Number(v) || 0));
+  // Changes one of the world's settings, within its range, and puts it to
+  // work at once: a higher sea floods the coast even while paused.
+  set(key, v) {
+    const r = SETTINGS[key];
+    if (!r) return;
+    const x = Number(v);
+    this.settings[key] = Math.max(r[1], Math.min(r[2], Number.isFinite(x) ? x : r[0]));
+    const sea = this.climate.seaLevel;
+    this.applySettings();
+    if (this.climate.seaLevel !== sea) this.land.refresh(this.climate);
   }
 
-  // How wet the climate is, from 30% to 200% of natural.
-  setWetness(v) {
-    this.climate.wetness = Math.max(0.3, Math.min(2, Number(v) || 1));
-    this.climate.set(this.years, this.climate.seasonal);
+  applySettings() {
+    const { settings: s, climate, land } = this;
+    climate.wetness = s.wetness;
+    climate.warmth = s.warmth;
+    climate.seaShift = s.sea;
+    land.upliftScale = s.uplift;
+    land.hardness = s.hardness;
+    climate.set(this.years, climate.seasonal);
+  }
+
+  // Seeds a species by hand where the page tapped: the one picked (id), or
+  // with none, a newcomer suited to the spot. Returns a note.
+  seedSpecies(i, id) {
+    if (!(i >= 0 && i < this.land.N)) return null;
+    const r = this.life.seedAt(this.life.toLife[i], id || null, this.years);
+    this.syncCover();
+    let label;
+    const where = { land: 'on land', fresh: 'in fresh water', sea: 'in the sea' };
+    if (!r) label = 'Nothing could be seeded here';
+    else if (!r.ok && !r.sp) label = `Nothing has made it ${where[r.realm]} yet to seed here`;
+    else if (!r.ok) label = `${r.sp.name} can\u2019t live here`;
+    else label = `Seeded ${r.sp.name} (${formOf(r.sp.traits)}) here`;
+    return this.disasters.note(this, 'seed', i, label, 3);
   }
 
   // A heavy storm parks over a cell for a day and a half.
@@ -190,8 +226,7 @@ export class Simulation {
       life: life.saveState(),
       disasters: this.disasters.saveState(),
       weather: this.weather.saveState(),
-      wetness: this.climate.wetness,
-      activity: { ...this.activity },
+      settings: { ...this.settings },
     };
   }
 
@@ -225,8 +260,12 @@ export class Simulation {
       for (let i = 0; i < land.N; i++) land.kfac[i] = ROCKS[land.rock[i]].k;
     }
     sim.disasters.restoreState(state.disasters);
-    sim.climate.wetness = state.wetness || 1;
-    if (state.activity) sim.activity = { ...state.activity };
+    // Worlds saved before the settings object kept rain and activity apart.
+    const old = { wetness: state.wetness, meteor: state.activity && state.activity.meteor, volcano: state.activity && state.activity.volcano };
+    for (const k of Object.keys(SETTINGS)) {
+      const v = state.settings ? state.settings[k] : old[k];
+      if (v != null) sim.settings[k] = v;
+    }
     sim.weather.restoreState(state.weather);
     if (land.lastDt <= WEATHER_TICK) {
       sim.weather.update(sim.years);
@@ -235,6 +274,7 @@ export class Simulation {
     sim.sentEvent = sim.disasters.nextId - 1;
     sim.climate.cooling = sim.disasters.coolingAt(sim.years);
     sim.climate.winter = sim.disasters.winterName();
+    sim.applySettings();
     sim.climate.set(sim.years, false);
     land.prime(sim.climate);
     sim.life.restoreState(state.life);
@@ -344,9 +384,7 @@ export class Simulation {
         seaT: climate.seaT,
         precip: climate.precip,
         cooling: climate.cooling,
-        wetness: climate.wetness,
-        meteors: this.activity.meteor,
-        volcanoes: this.activity.volcano,
+        settings: { ...this.settings },
         yearFrac: climate.yearFrac,
       },
       stats: { ...land.stats },

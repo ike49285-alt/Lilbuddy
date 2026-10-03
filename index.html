@@ -59,14 +59,20 @@
           <button type="button" class="tool" data-kind="lower" aria-pressed="false">Lower</button>
           <button type="button" class="tool" data-kind="dig" aria-pressed="false">Dig</button>
           <button type="button" class="tool" data-kind="storm" aria-pressed="false">Storm</button>
+          <button type="button" class="tool" data-kind="seed" aria-pressed="false">Seed</button>
         </div>
         <div class="size-row brush-row" id="brush-row" role="group" aria-label="Brush size" hidden>
           <button type="button" data-brush="small" aria-pressed="false">Small brush</button>
           <button type="button" data-brush="big" aria-pressed="true">Big brush</button>
         </div>
+        <p class="tray-head">World</p>
         <label class="wet-row" for="wetness"><span>Rain</span><input type="range" id="wetness" min="30" max="200" step="5" value="100"><output id="wetness-out" for="wetness">100%</output></label>
         <label class="wet-row" for="meteors"><span>Meteors</span><input type="range" id="meteors" min="0" max="500" step="10" value="100"><output id="meteors-out" for="meteors">100%</output></label>
         <label class="wet-row" for="volcanoes"><span>Volcanoes</span><input type="range" id="volcanoes" min="0" max="500" step="10" value="100"><output id="volcanoes-out" for="volcanoes">100%</output></label>
+        <label class="wet-row" for="uplift"><span>Uplift</span><input type="range" id="uplift" min="0" max="300" step="10" value="100"><output id="uplift-out" for="uplift">100%</output></label>
+        <label class="wet-row" for="warmth"><span>Warmth</span><input type="range" id="warmth" min="-8" max="8" step="0.5" value="0"><output id="warmth-out" for="warmth">±0 °C</output></label>
+        <label class="wet-row" for="sea"><span>Sea level</span><input type="range" id="sea" min="-150" max="150" step="5" value="0"><output id="sea-out" for="sea">±0 m</output></label>
+        <label class="wet-row" for="hardness"><span>Rock</span><input type="range" id="hardness" min="25" max="400" step="5" value="100"><output id="hardness-out" for="hardness">100%</output></label>
         <div class="size-row" id="size-row" role="group" aria-label="Size" hidden>
           <button type="button" data-size="small" aria-pressed="false">Small</button>
           <button type="button" data-size="big" aria-pressed="true">Big</button>

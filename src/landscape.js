@@ -66,6 +66,8 @@ export class Landscape {
     this.z0 = Float32Array.from(terrain.z);
     this.uplift = terrain.uplift;
     this.kfac = terrain.kfac;             // bedrock erodibility, from the rock type
+    this.upliftScale = 1;                 // how fast the mountains rise, as set on the page (1 is natural)
+    this.hardness = 1;                    // how hard all the rock is, as set on the page: it wears at 1/hardness
     this.rock = terrain.rock;             // bedrock type, an index into ROCKS
     this.loose = terrain.loose;           // metres of loose cover; the bedrock top is z − loose
 
@@ -151,9 +153,10 @@ export class Landscape {
   // One step of dt years.
   step(climate, dt) {
     const { N, z, uplift } = this;
+    const lift = this.upliftScale;
     for (let i = 0; i < N; i++) {
       const u = uplift[i];
-      z[i] += u > 0 ? u * dt * Math.max(0, 1 - z[i] / MAX_UPLIFT_Z) : u * dt;
+      z[i] += u > 0 ? u * lift * dt * Math.max(0, 1 - z[i] / MAX_UPLIFT_Z) : u * dt;
     }
 
     this.lastDt = dt;
@@ -595,7 +598,7 @@ export class Landscape {
       const dist = (dx && dy ? Math.SQRT2 : 1) * CELL_M;
       const zr = ocean[r] ? sea : this.lake[r] ? surf[r] : z[r];
       if (z[i] <= zr) continue;
-      const K = K_FLUVIAL * kfac[i] * (ice[i] ? ICE_EROSION : 1) * (1 - VEG_HOLD * this.cover[i]);
+      const K = (K_FLUVIAL * kfac[i] / this.hardness) * (ice[i] ? ICE_EROSION : 1) * (1 - VEG_HOLD * this.cover[i]);
       const power = ice[i] ? Math.sqrt(Q[i]) : Math.sqrt(Q[i]) - SQRT_CHANNEL_Q;
       if (power <= 0) continue;
       const F = K * power * dt / dist;
@@ -759,7 +762,7 @@ export class Landscape {
     for (let i = 0; i < N; i++) {
       // Under more than a few metres, nothing reaches the rock to weather it.
       if (ocean[i] || ice[i] || loose[i] > 16 * SOIL_DEPTH_M) continue;
-      const P = ROCKS[rock[i]].soil;
+      const P = ROCKS[rock[i]].soil / this.hardness;
       loose[i] = SOIL_DEPTH_M * Math.log(Math.exp(loose[i] / SOIL_DEPTH_M) + (P * dt) / SOIL_DEPTH_M);
     }
   }

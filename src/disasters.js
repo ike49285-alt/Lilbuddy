@@ -102,8 +102,8 @@ export class Disasters {
     }
 
     // How active the sky and the ground are, as set on the page (1 is natural).
-    const meteors = sim.activity ? sim.activity.meteor : 1;
-    const volcanoes = sim.activity ? sim.activity.volcano : 1;
+    const meteors = sim.settings ? sim.settings.meteor : 1;
+    const volcanoes = sim.settings ? sim.settings.volcano : 1;
 
     // Eruptions, in the rising mountains.
     for (let k = poisson(rng, (dt / ERUPT_EVERY) * volcanoes); k > 0; k--) {

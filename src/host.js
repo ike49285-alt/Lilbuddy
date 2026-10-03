@@ -187,13 +187,24 @@ export function createHost(post) {
         dirty = true;
         urgent = true;
         break;
+      case 'setting':
+        sim.set(msg.key, msg.value);
+        dirty = true;
+        urgent = true;
+        break;
+      // Older pages' names for two of the settings.
       case 'wetness':
-        sim.setWetness(msg.value);
+        sim.set('wetness', msg.value);
         dirty = true;
         urgent = true;
         break;
       case 'activity':
-        sim.setActivity(msg.kind, msg.value);
+        sim.set(msg.kind, msg.value);
+        dirty = true;
+        urgent = true;
+        break;
+      case 'seed':
+        sim.seedSpecies(msg.i, msg.id);
         dirty = true;
         urgent = true;
         break;

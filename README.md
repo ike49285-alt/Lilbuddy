@@ -124,17 +124,25 @@ the animals once there's something for them to eat.
 
 ## Shaping it yourself
 
-The Tools tray holds the disasters and four tools of your own. Raise and
+The Tools tray holds the disasters, five tools of your own and the World sliders. Raise and
 Lower work like a brush: hold a finger on the map and the ground rises or
 falls under it, about 50 m a second, with a soft edge (lowering takes the
 loose cover first). Dig cuts a channel along a line you draw, its bed
 falling steadily from the higher end to the lower and kept below the ground
 either side, so a river that finds it follows it. Storm parks a heavy storm
 for a day and a half where you tap; it slows the clock to an hour a second
-so you can watch the flood come down. The Rain slider makes the whole valley
-wetter or drier, from 30% to 200% of its natural rain; the Meteors and
-Volcanoes sliders set how often nature strikes and erupts, from none to
-five times natural (the bombardment included). With a tool armed
+so you can watch the flood come down. Seed drops a species where you tap: the one
+picked in the Life tab, if it can live there, or with none picked, a
+newcomer suited to the spot.
+
+The World sliders change the valley as a whole. Rain makes it wetter or
+drier (30% to 200% of natural); Meteors and Volcanoes set how often nature
+strikes and erupts (none to five times natural, the bombardment included);
+Uplift sets how fast the mountains rise (none to three times); Warmth shifts
+the climate up to 8 °C either way, so glaciers, snow and life follow; Sea
+level raises or drops the sea by up to 150 m, and the coast moves at once;
+Rock sets how hard all the rock is (a quarter to four times), so it wears
+faster or slower. With a tool armed
 one finger shapes; two fingers still move and zoom. Everything you change
 is saved with the world.
 

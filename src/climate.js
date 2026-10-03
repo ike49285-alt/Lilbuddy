@@ -32,6 +32,9 @@ export class Climate {
     this.winter = '';
     // How wet the valley is, as set by hand: a multiple of the natural rain.
     this.wetness = 1;
+    // Degrees warmer (or colder) and metres higher (or lower) sea, as set by hand.
+    this.warmth = 0;
+    this.seaShift = 0;
     this.set(0, false);
   }
 
@@ -52,8 +55,8 @@ export class Climate {
     this.t = t;
     this.era = era;
     this.glacial = glacial;
-    this.meanSeaT = BASE_T - 4 * (era - 0.5) - GLACIAL_COOLING * glacial - this.cooling;
-    this.seaLevel = -GLACIAL_SEA_DROP * glacial + 12 * (0.5 - era);
+    this.meanSeaT = BASE_T - 4 * (era - 0.5) - GLACIAL_COOLING * glacial - this.cooling + this.warmth;
+    this.seaLevel = -GLACIAL_SEA_DROP * glacial + 12 * (0.5 - era) + this.seaShift;
     // Ice ages are dry; long wet and dry spells come from their own noise.
     const spell = this.wet(t / 6e5, 0.81);
     // A young world starts nearly dry; the rains build over the first

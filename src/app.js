@@ -344,10 +344,11 @@ function draw(f, force) {
 
 function drawSlow(f) {
   const st = f.stats;
-  for (const [id, value] of [['wetness', f.climate.wetness], ['meteors', f.climate.meteors], ['volcanoes', f.climate.volcanoes]]) {
+  for (const [id, [key, scale, label]] of Object.entries(SLIDERS)) {
+    const value = f.climate.settings && f.climate.settings[key];
     if (document.activeElement === $(id) || value == null) continue;
-    const v = Math.round(value * 100);
-    if (Number($(id).value) !== v) { $(id).value = v; $(`${id}-out`).textContent = `${v}%`; }
+    const v = Math.round(value * scale * 100) / 100;
+    if (Number($(id).value) !== v) { $(id).value = v; $(`${id}-out`).textContent = label(v); }
   }
   drawLife(f);
 
@@ -520,7 +521,7 @@ function renderCard(card, sp, byId) {
   const h = el('h3');
   h.append(swatch(sp.hue), el('span', '', sp.name));
   card.append(h);
-  card.append(el('p', '', `${sp.form} · appeared ${when(sp.born)}${parent ? ` from ${parent.name}` : sp.arrivedAt != null ? ', arriving from beyond the valley' : ', seeded at the start'}. Lives over ${n0.format(sp.range)} km².`));
+  card.append(el('p', '', `${sp.form} · appeared ${when(sp.born)}${parent ? ` from ${parent.name}` : sp.arrivedAt != null ? ', arriving from beyond the valley' : sp.seededAt != null ? ', seeded by hand' : ', seeded at the start'}. Lives over ${n0.format(sp.range)} km².`));
   const dl = el('dl', 'traits');
   const row = (label, v, text) => {
     const d = el('div');
@@ -945,6 +946,10 @@ function dropAt(wx, wy) {
   if (!last || !armed) return;
   const i = cellAt(wx, wy);
   if (i < 0) return;
+  if (armed === 'seed') {
+    worker.postMessage({ type: 'seed', i, id: selectedId || null });
+    return;
+  }
   if (armed === 'storm') {
     // A storm only shows where there's weather: at a day a second or
     // slower. Faster than that, slow down to an hour a second to watch it.
@@ -972,10 +977,11 @@ function setArmed(kind) {
     flood: 'Tap the map to flood a river.', lightning: 'Tap the map to strike with lightning.', volcano: 'Tap the map to raise a volcano.',
     meteor: 'Tap the map to drop a meteor.', raise: 'Hold a finger on the map to raise the ground.', lower: 'Hold a finger on the map to lower the ground.',
     dig: 'Draw a line on the map to dig a channel.', storm: 'Tap the map to park a storm there.',
+    seed: selectedId ? 'Tap the map to seed the species picked in the Life tab.' : 'Tap the map to seed a newcomer there (or pick a species in the Life tab first).',
   };
   $('tools-hint').textContent = kind ? names[kind] : 'Pick a tool, then use it on the map.';
   const label = { flood: 'Tap map: Flood', lightning: 'Tap map: Lightning', volcano: 'Tap map: Volcano', meteor: 'Tap map: Meteor',
-    raise: 'Brush: Raise', lower: 'Brush: Lower', dig: 'Draw: Dig', storm: 'Tap map: Storm' };
+    raise: 'Brush: Raise', lower: 'Brush: Lower', dig: 'Draw: Dig', storm: 'Tap map: Storm', seed: 'Tap map: Seed' };
   $('tools-toggle').textContent = kind ? label[kind] : 'Tools';
   canvas.classList.toggle('armed', !!kind);
   glCanvas.classList.toggle('armed', !!kind);
@@ -1041,16 +1047,23 @@ function endShaping(cancelled) {
   startEffects();
 }
 
-// The climate and ground sliders: rain, meteors and volcanoes, as a share of
-// natural. Each is sent when let go, and saved with the world.
+// The world sliders: each sets one of the world's settings, is sent when
+// let go, and is saved with the world. [slider id]: [setting, slider units
+// per setting unit, label].
+const pct = (v) => `${Math.round(v)}%`;
+const signed = (v, unit) => (v === 0 ? `±0 ${unit}` : `${v > 0 ? '+' : '−'}${Math.abs(v)} ${unit}`);
 const SLIDERS = {
-  wetness: (v) => ({ type: 'wetness', value: v }),
-  meteors: (v) => ({ type: 'activity', kind: 'meteor', value: v }),
-  volcanoes: (v) => ({ type: 'activity', kind: 'volcano', value: v }),
+  wetness: ['wetness', 100, pct],
+  meteors: ['meteor', 100, pct],
+  volcanoes: ['volcano', 100, pct],
+  uplift: ['uplift', 100, pct],
+  warmth: ['warmth', 1, (v) => signed(v, '°C')],
+  sea: ['sea', 1, (v) => signed(v, 'm')],
+  hardness: ['hardness', 100, pct],
 };
-for (const [id, msg] of Object.entries(SLIDERS)) {
-  $(id).addEventListener('input', () => { $(`${id}-out`).textContent = `${$(id).value}%`; });
-  $(id).addEventListener('change', () => { if (worker) worker.postMessage(msg(Number($(id).value) / 100)); });
+for (const [id, [key, scale, label]] of Object.entries(SLIDERS)) {
+  $(id).addEventListener('input', () => { $(`${id}-out`).textContent = label(Number($(id).value)); });
+  $(id).addEventListener('change', () => { if (worker) worker.postMessage({ type: 'setting', key, value: Number($(id).value) / scale }); });
 }
 for (const b of document.querySelectorAll('#brush-row button')) {
   b.addEventListener('click', () => {

@@ -32,6 +32,7 @@ const ARRIVE_CELLS = 6;             // the edge band widens until it has this ma
 const ARRIVE_FOOD = 0.1;            // an animal lands only where its food is at least this dense
 const ARRIVE_LAG = 5000;            // years animals wait, if there's no food for them yet, before trying again
 const ARRIVE_TRIES = 5;
+const SEED_DENSITY = 0.1;           // a species seeded by hand starts this dense
 const FRONTIER_RANGE = 10;          // km²: a species this widespread counts toward the frontier
 
 const R_MAX = 3;                    // growth per year of the simplest, fastest species
@@ -696,7 +697,7 @@ export class Life {
       const byRealm = new Map();
       for (const sp of this.species) {
         // New species and newcomers from beyond the valley get a chance to settle.
-        if (sp.born >= years || !isKind(sp) || years - (sp.arrivedAt ?? -Infinity) < ARRIVE_SETTLE) continue;
+        if (sp.born >= years || !isKind(sp) || years - Math.max(sp.arrivedAt ?? -Infinity, sp.seededAt ?? -Infinity) < ARRIVE_SETTLE) continue;
         const k = realmOf(sp.traits);
         if (!byRealm.has(k)) byRealm.set(k, []);
         byRealm.get(k).push(sp);
@@ -941,7 +942,9 @@ export class Life {
     this.arrived.push({ names, plants: count.plant, animals: count.animal, at, trickle });
   }
 
-  newcomer(kind, realm, years) {
+  // A newcomer of a kind, in a realm, landing along the edges, or with
+  // `only`, in just those cells (seeding by hand).
+  newcomer(kind, realm, years, only = null) {
     const { NL, LW, LH, sea, fresh, landF, tempMean, rng } = this;
     const f = this.frontier[kind][realm];
     const edge = (c, w, sides) => {
@@ -963,7 +966,11 @@ export class Life {
     }
     // The band along the edges widens until there's room to land.
     let cells = [];
-    for (let w = 1; w <= 8 && cells.length < ARRIVE_CELLS; w *= 2) {
+    if (only) {
+      cells = only.filter((c) => (!food || food[c] >= ARRIVE_FOOD) && inRealm(this, realm, c));
+      if (!cells.length) return null;
+    }
+    for (let w = 1; !only && w <= 8 && cells.length < ARRIVE_CELLS; w *= 2) {
       cells = [];
       for (let c = 0; c < NL; c++) {
         if (food && food[c] < ARRIVE_FOOD) continue;
@@ -972,7 +979,7 @@ export class Life {
             : landF[c] > 0.5 && edge(c, w + 1, { top: true })) cells.push(c);
       }
     }
-    if (!cells.length && realm === 'fresh') {
+    if (!only && !cells.length && realm === 'fresh') {
       for (let c = 0; c < NL; c++) if (fresh[c] > 0.2 && (sea[c] > 0 || this.coastal(c))) cells.push(c);
     }
     if (!cells.length) return null;
@@ -993,6 +1000,49 @@ export class Life {
     sp.arrivedAt = years;
     sp.landedAt = cells[cells.length >> 1];
     return sp;
+  }
+
+  // Seeds a species by hand within 3 km of a life cell: the species picked,
+  // where it can live, or with none picked, a newcomer at the frontier for
+  // what's there (a plant, or an animal if its food is already there).
+  // Returns { sp, ok }.
+  seedAt(c, id, years) {
+    const { LW, LH } = this;
+    const near = [];
+    const x0 = c % LW, y0 = (c / LW) | 0;
+    for (let dy = -3; dy <= 3; dy++) {
+      for (let dx = -3; dx <= 3; dx++) {
+        const x = x0 + dx, y = y0 + dy;
+        if (x >= 0 && y >= 0 && x < LW && y < LH && dx * dx + dy * dy <= 9) near.push(y * LW + x);
+      }
+    }
+    if (id) {
+      const sp = this.registry.get(id);
+      if (!sp || sp.died !== null) return null;
+      const realm = realmOf(sp.traits);
+      const cells = near.filter((j) => inRealm(this, realm, j));
+      if (!cells.length) return { sp, ok: false };
+      for (const j of cells) sp.N[j] = Math.max(sp.N[j], SEED_DENSITY);
+      sp.seededAt = years;
+      return { sp, ok: true };
+    }
+    // What's under the finger, or failing that, nearby.
+    const order = [c, ...near];
+    let realm = null;
+    for (const j of order) {
+      realm = this.sea[j] > 0.5 ? 'sea' : this.fresh[j] > 0.1 ? 'fresh' : this.landF[j] > 0.5 ? 'land' : null;
+      if (realm) break;
+    }
+    if (!realm) return null;
+    let sp = null;
+    if (this.frontier.animal[realm]) sp = this.newcomer('animal', realm, years, near);
+    if (!sp && this.frontier.plant[realm]) sp = this.newcomer('plant', realm, years, near);
+    if (!sp) return { ok: false, realm };
+    sp.arrivedAt = null;
+    sp.seededAt = years;
+    this.species.sort((a, b) => a.id - b.id);
+    this.updateStats(years);
+    return { sp, ok: true };
   }
 
   // Plant cover per life cell, 0..1, and the plants' mean complexity.
@@ -1033,6 +1083,7 @@ export class Life {
       total: sp.total, range: sp.range, peakRange: sp.peakRange, lastRange: sp.lastRange, trend: sp.trend,
       nextSplit: sp.nextSplit, nextTrend: sp.nextTrend,
       arrivedAt: sp.arrivedAt ?? null,
+      seededAt: sp.seededAt ?? null,
     });
     return {
       rng: this.rng.getState(),
@@ -1153,6 +1204,7 @@ export class Life {
       out.push({
         id: sp.id, parent: sp.parent, name: sp.name, form: formOf(sp.traits), hue: sp.traits.hue, animal: !!sp.traits.animal,
         arrivedAt: sp.arrivedAt ?? null,
+        seededAt: sp.seededAt ?? null,
         born: sp.born, died: sp.died, range: sp.range, peakRange: sp.peakRange, trend: sp.trend,
         traits: { ...sp.traits, tempOptC: tempOptC(sp.traits.tempOpt), tempWidthC: tempWidthC(sp.traits.tempTol) },
       });
@@ -1199,6 +1251,12 @@ function advance(t) {
 }
 
 const REALM_RANK = { land: 2, fresh: 1, sea: 0 };
+
+// Whether a life cell has room for a realm's life: open sea, fresh water,
+// or dry ground.
+function inRealm(life, realm, c) {
+  return realm === 'sea' ? life.sea[c] > 0.5 : realm === 'fresh' ? life.fresh[c] > 0.1 : life.landF[c] > 0.5;
+}
 
 function realmOf(t) {
   const r = realms(t);

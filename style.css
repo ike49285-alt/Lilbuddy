@@ -315,12 +315,13 @@ body {
 }
 .tool-row { grid-template-columns: 1fr 1.25fr 1.15fr 1.05fr; }
 .size-row { grid-template-columns: 1fr 1fr 1.7fr; }
-.tool-row.shape-row { grid-template-columns: 1fr 1fr 1fr 1fr; }
+.tool-row.shape-row { grid-template-columns: repeat(5, 1fr); }
+.tray-head { margin: 4px 0 0; color: var(--muted); font: 600 11px/1 var(--font-display); letter-spacing: 0.08em; text-transform: uppercase; }
 .tools .shape-row .tool[aria-pressed="true"] { background: #2b6c9e; }
 .size-row.brush-row { grid-template-columns: 1fr 1fr; }
 .wet-row {
   display: grid;
-  grid-template-columns: 5.6em 1fr 3.4em;
+  grid-template-columns: 7em 1fr 4em;
   align-items: center;
   gap: 8px;
   min-height: 40px;
@@ -334,6 +335,7 @@ body {
   text-transform: uppercase;
 }
 .wet-row input { width: 100%; min-width: 0; margin: 0; accent-color: #2b6c9e; }
+.wet-row span { white-space: nowrap; }
 .wet-row output { text-align: right; font-variant-numeric: tabular-nums; }
 .tools[hidden], .size-row[hidden] { display: none; }
 .tools button { min-height: 40px; padding: 0 3px; font-size: 12px; letter-spacing: 0.03em; }
