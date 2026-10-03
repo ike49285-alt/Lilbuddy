@@ -542,6 +542,10 @@ function renderCard(card, sp, byId) {
     row('Food: tiny ↔ plants', t.diet, t.diet < 0.35 ? 'filters plankton' : t.diet < 0.65 ? 'a bit of both' : 'grazes plants');
     row('Fins ↔ legs', t.limbs, t.limbs < 0.25 ? 'fins' : t.limbs < 0.6 ? 'fleshy fins' : 'legs');
     row('Gills ↔ lungs', t.lungs, t.lungs < 0.25 ? 'gills' : t.lungs < 0.6 ? 'gulps air' : 'lungs');
+    row('Eggs: water ↔ land', t.eggs || 0, (t.eggs || 0) < 0.3 ? 'in water' : (t.eggs || 0) < 0.6 ? 'damp places' : 'shelled, on land');
+    row('Blood: cold ↔ warm', t.warm || 0, (t.warm || 0) < 0.3 ? 'cold' : (t.warm || 0) < 0.5 ? 'warming' : 'warm');
+  } else {
+    row('Spores ↔ seeds', t.seeds || 0, (t.seeds || 0) < 0.4 ? 'spores' : (t.seeds || 0) < 0.75 ? 'seeds' : 'flowers');
   }
   card.append(dl);
 }

@@ -73,6 +73,7 @@ export class Simulation {
     this.land.step(this.climate, d);
     if (this.layer === 'erode') this.trackErosion();
     const ashore = this.life.stats.firstLandAnimal;
+    const firsts = { ...(this.life.stats.firsts || {}) };
     // Nothing comes in from beyond the valley through the bombardment.
     this.life.hold = this.years < BOMBARD_YEARS;
     this.life.step(this.land, this.climate, d, this.years);
@@ -87,6 +88,16 @@ export class Simulation {
       if (a.animals) kinds.push(`${a.animals} ${a.animals === 1 ? 'animal' : 'animals'}`);
       const names = a.names.slice(0, 3).join(', ') + (a.names.length > 3 ? '…' : '');
       this.disasters.milestone(this, `${kinds.join(' and ')} ${a.names.length === 1 ? 'arrives' : 'arrive'} from beyond the valley: ${names}`, a.at);
+    }
+    // The first of each new kind of life.
+    const FIRSTS = {
+      reptile: (n) => `The first reptiles: ${n} lays shelled eggs on dry land`,
+      warm: (n) => `The first warm-blooded animal: ${n}`,
+      seed: (n) => `The first seed plants: ${n}`,
+      flower: (n) => `The first flowers: ${n}`,
+    };
+    for (const [k, f] of Object.entries(st.firsts || {})) {
+      if (!firsts[k] && FIRSTS[k]) this.disasters.milestone(this, FIRSTS[k](f.name), f.at);
     }
     if (ashore === null && st.firstLandAnimal !== null) {
       this.disasters.milestone(this, `The first animal walks out of the water: ${st.firstLandAnimalName}`, st.firstLandAnimalAt);

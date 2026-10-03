@@ -9,15 +9,29 @@
 //   dispersal   how fast it spreads, and how easily it crosses a big river
 //   hue         a neutral marker that drifts — its colour on the map
 //
-// Animals carry three more:
+// Animals carry more:
 //   diet        0 filters the tiny stuff (plankton, microbes) … 1 grazes the
 //               larger plants (seaweed, waterweed, and on land, everything)
 //   limbs       0 fins … 1 legs that carry the body on land
 //   lungs       0 gills only … 1 breathes air
+//   eggs        0 eggs laid in water … 1 shelled eggs laid on dry land
+//   warm        0 cold-blooded … 1 warm-blooded
+//
+// and plants one:
+//   seeds       0 spores, which need damp ground … 1 seeds and flowers
 
 export const TRAITS = ['habitat', 'salinity', 'tempOpt', 'tempTol', 'complexity', 'dispersal', 'hue'];
 
-export const ANIMAL_TRAITS = ['diet', 'limbs', 'lungs'];
+export const ANIMAL_TRAITS = ['diet', 'limbs', 'lungs', 'eggs', 'warm'];
+export const PLANT_TRAITS = ['seeds'];
+export const SHELLED = 0.6;              // eggs this far along can be laid on dry land
+export const SEEDED = 0.4;               // seeds this far along free a plant from damp ground
+
+// Fills in traits a species from before they existed lacks.
+export function withDefaults(t) {
+  for (const k of t.animal ? ANIMAL_TRAITS : PLANT_TRAITS) if (t[k] == null) t[k] = 0;
+  return t;
+}
 
 export const LAND_COMPLEXITY = 0.3;      // roots and a waxy skin: nothing below this lives out of water
 export const WALK = 0.6;                 // limbs and lungs both about here: an animal can live out of water
@@ -26,7 +40,7 @@ export const tempOptC = (t) => -10 + 45 * t;
 export const tempWidthC = (t) => 5 + 13 * t;
 export const toTempTrait = (c) => Math.max(0, Math.min(1, (c + 10) / 45));
 
-const clamp01 = (v) => Math.max(0, Math.min(1, v));
+export const clamp01 = (v) => Math.max(0, Math.min(1, v));
 // Reflect off the walls rather than pile up against them. With a floor at
 // zero this is what gives complexity its slow, passive upward drift.
 const reflect01 = (v) => {
@@ -57,39 +71,51 @@ export function mutate(rng, traits, sd, innovate) {
   }
   t.hue = (traits.hue + rng.normal(0, sd * 1.5) + 1) % 1;
   if (traits.animal) {
-    for (const k of ANIMAL_TRAITS) t[k] = reflect01(t[k] + rng.normal(0, sd));
+    for (const k of ANIMAL_TRAITS) t[k] = reflect01((t[k] || 0) + rng.normal(0, sd));
     if (innovate) {
       // A key innovation for an animal: toward the shore, between fresh and
-      // salt water, a bigger, more complex body, a change of food, or a
-      // step toward legs or lungs.
-      const which = rng.int(6);
+      // salt water, a bigger, more complex body, a change of food, a step
+      // toward legs or lungs, eggs that can be laid on land, or warm blood.
+      const which = rng.int(8);
       if (which === 0) t.habitat = clamp01(t.habitat + rng.range(0.1, 0.3));
       else if (which === 1) t.salinity = clamp01(t.salinity + rng.range(-0.5, 0.5));
       else if (which === 2) t.complexity = clamp01(t.complexity + rng.range(0.05, 0.15));
       else if (which === 3) t.diet = clamp01(t.diet + rng.range(-0.4, 0.4));
       else if (which === 4) t.limbs = clamp01(t.limbs + rng.range(0.1, 0.25));
-      else t.lungs = clamp01(t.lungs + rng.range(0.1, 0.25));
+      else if (which === 5) t.lungs = clamp01(t.lungs + rng.range(0.1, 0.25));
+      else if (which === 6) t.eggs = clamp01(t.eggs + rng.range(0.15, 0.3));
+      else t.warm = clamp01(t.warm + rng.range(0.15, 0.3));
       t.hue = (t.hue + rng.range(0.12, 0.3)) % 1;
     }
+    // They come in order: eggs for dry land only once an animal can walk,
+    // warm blood only once it lays them.
+    const walks = Math.min(t.limbs, t.lungs) >= WALK;
+    if (!walks) t.eggs = Math.min(t.eggs, traits.eggs || 0);
+    if (t.eggs < SHELLED) t.warm = Math.min(t.warm, traits.warm || 0);
     return t;
   }
+  t.seeds = reflect01((t.seeds || 0) + rng.normal(0, sd));
   if (innovate) {
     // A key innovation: one big step that opens a new way of life — toward
     // land, between fresh and salt water, or toward a more complex body.
-    const which = rng.int(3);
+    const which = rng.int(4);
     if (which === 0) t.habitat = clamp01(t.habitat + rng.range(0.15, 0.4));
     else if (which === 1) t.salinity = clamp01(t.salinity + rng.range(-0.5, 0.5));
-    else t.complexity = clamp01(t.complexity + rng.range(0.03, 0.09));
+    else if (which === 2) t.complexity = clamp01(t.complexity + rng.range(0.03, 0.09));
+    else t.seeds = clamp01(t.seeds + rng.range(0.1, 0.25));
     t.hue = (t.hue + rng.range(0.12, 0.3)) % 1;
   }
+  // Seeds only matter, and only evolve, in plants already on land.
+  if (realms(traits).land <= 0.05) t.seeds = Math.min(t.seeds, traits.seeds || 0);
   return t;
 }
 
 export function traitDistance(a, b) {
   const base = Math.hypot(a.habitat - b.habitat, a.salinity - b.salinity,
     a.tempOpt - b.tempOpt, a.complexity - b.complexity);
-  if (!a.animal || !b.animal) return base;
-  return Math.hypot(base, a.diet - b.diet, a.limbs - b.limbs, a.lungs - b.lungs);
+  if (!a.animal || !b.animal) return Math.hypot(base, (a.seeds || 0) - (b.seeds || 0));
+  return Math.hypot(base, a.diet - b.diet, a.limbs - b.limbs, a.lungs - b.lungs,
+    (a.eggs || 0) - (b.eggs || 0), (a.warm || 0) - (b.warm || 0));
 }
 
 // --- names -----------------------------------------------------------------
@@ -123,13 +149,22 @@ export function formOf(t) {
   const r = realms(t);
   if (t.animal) {
     const onLand = r.land / (r.fresh + r.sea + r.land || 1);
-    if (onLand > 0.5) return 'early tetrapods';
+    if (onLand > 0.5) {
+      if ((t.eggs || 0) < SHELLED) return 'amphibians';
+      if ((t.warm || 0) < 0.5) return 'reptiles';
+      return t.dispersal >= 0.7 ? 'birds' : 'mammals';
+    }
     if (onLand > 0.05) return 'fishapods';
     if (t.limbs > 0.3) return 'lobe-finned fish';
     return c < 0.3 ? 'jawless fish' : c < 0.45 ? 'armored fish' : 'ray-finned fish';
   }
   if (r.land > 0.05 && t.habitat < 0.6) return 'marsh plants';
-  if (r.land > 0.05) return c < 0.42 ? 'mosses' : c < 0.55 ? 'ferns' : c < 0.7 ? 'shrubland' : 'forest';
+  if (r.land > 0.05) {
+    const s = t.seeds || 0;
+    if (s >= 0.75) return c < 0.55 ? 'flowering meadows' : 'broadleaf forest';
+    if (s >= SEEDED) return c < 0.55 ? 'shrubland' : 'conifer forest';
+    return c < 0.42 ? 'mosses' : 'ferns';
+  }
   const marine = t.salinity > 0.5;
   if (c < 0.12) return marine ? 'plankton' : 'microbial mats';
   if (c < 0.24) return marine ? 'seaweed' : 'algae';

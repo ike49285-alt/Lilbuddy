@@ -17,7 +17,7 @@ import { CELL_M } from './terrain.js';
 import { CHANNEL_Q } from './landscape.js';
 import {
   realms, mutate, genusName, epithet, formOf, isLandPlant, isLandAnimal,
-  tempOptC, tempWidthC, toTempTrait, traitDistance,
+  tempOptC, tempWidthC, toTempTrait, traitDistance, withDefaults, clamp01, SHELLED, SEEDED,
 } from './species.js';
 
 export const LIFE_SCALE = 2;
@@ -92,6 +92,7 @@ export class Life {
     this.fertSum = new Float32Array(NL);
     this.erodeSum = new Float32Array(NL);
     this.soilSum = new Float32Array(NL);    // loose cover on dry land, metres, capped
+    this.damp = new Float32Array(NL);       // how damp the ground is, 0..1: near water, or rainy
     // Realm biomass totals per size class, for crowding.
     this.bFresh = [new Float32Array(NL), new Float32Array(NL)];
     this.bSea = [new Float32Array(NL), new Float32Array(NL)];
@@ -208,6 +209,14 @@ export class Life {
       }
     }
     for (let c = 0; c < NL; c++) nutLand[c] *= 0.75 + 0.5 * Math.min(1, tmp[c] * 2);
+    // Damp ground, for spores and for eggs laid in water: by streams and
+    // lakes, or where the rain is heavy.
+    const damp = this.damp;
+    for (let c = 0; c < NL; c++) {
+      const above = Math.max(0, zSum[c] / count[c] - climate.seaLevel);
+      const rain = Math.min(1, climate.meanPrecip * (1 + above / 1400) / 1.6);
+      damp[c] = Math.min(1, 0.35 * rain + 1.2 * Math.min(1, tmp[c] * 3));
+    }
     // Day length: short winter days, long summer ones.
     if (climate.seasonal) {
       const phase = Math.cos(2 * Math.PI * (climate.yearFrac - 0.04));
@@ -317,8 +326,8 @@ export class Life {
       name: `${genus} ${epithet(rng)}`,
       born: years,
       died: null,
-      traits: { ...traits },
-      founder: { ...traits },
+      traits: withDefaults({ ...traits }),
+      founder: withDefaults({ ...traits }),
       N: new Float32Array(this.NL),
       K: new Float32Array(this.NL),
       x0: 0, x1: this.LW - 1, y0: 0, y1: this.LH - 1,   // occupied box
@@ -452,8 +461,10 @@ export class Life {
     const r = realms(t);
     const kMult = 0.7 + 0.6 * t.complexity;
     const rExp = 0.6 + 1.6 * t.complexity;
-    const { sea, fresh, landF, ice, tempMean, nutFresh, nutSea, nutLand, lutR } = this;
+    const { sea, fresh, landF, ice, tempMean, nutFresh, nutSea, nutLand, lutR, damp } = this;
     const lutT = this.tempFit(t);
+    // Spores need damp ground; seeds free a plant from it.
+    const freed = clamp01((t.seeds - 0.15) / (SEEDED + 0.1 - 0.15));
     for (let k = 0; k < LUT_R_N; k++) lutR[k] = Math.pow(k / LUT_R_STEP, rExp);
     const tier = tierOf(t);
     const kmFresh = this.kmFresh[tier], kmSea = this.kmSea[tier], kmLand = this.kmLand[tier];
@@ -468,7 +479,7 @@ export class Life {
     const y0 = Math.max(0, sp.y0 - m), y1 = Math.min(LH - 1, sp.y1 + m);
     for (let y = y0; y <= y1; y++) {
       for (let c = y * LW + x0, end = y * LW + x1; c <= end; c++) {
-        const hf = rf * fresh[c], hs = rs * sea[c], hl = rl * landF[c];
+        const hf = rf * fresh[c], hs = rs * sea[c], hl = rl * landF[c] * (freed + (1 - freed) * damp[c]);
         const habitat = hf + hs + hl;
         if (habitat <= 0) { K[c] = 0; continue; }
         const resource = (hf * nutFresh[c] + hs * nutSea[c] + hl * nutLand[c]) / habitat;
@@ -488,8 +499,10 @@ export class Life {
   tempFit(t) {
     const opt = tempOptC(t.tempOpt), width = tempWidthC(t.tempTol);
     const lut = this.lutT;
+    const cold = width * (1 + 1.5 * (t.warm || 0));   // warm blood takes the cold better
     for (let k = 0; k < LUT_T_N; k++) {
-      const dT = (LUT_T_MIN + k / LUT_T_STEP - opt) / width;
+      const off = LUT_T_MIN + k / LUT_T_STEP - opt;
+      const dT = off / (off < 0 ? cold : width);
       lut[k] = Math.exp(-0.5 * dT * dT);
     }
     return lut;
@@ -504,10 +517,13 @@ export class Life {
     const t = sp.traits;
     const r = realms(t);
     const lutT = this.tempFit(t);
-    const kMult = EAT * (0.8 + 0.4 * t.complexity);
+    // Warm blood keeps an animal going in the cold but takes more food.
+    const kMult = EAT * (0.8 + 0.4 * t.complexity) * (1 - 0.3 * t.warm);
     const d = t.diet;
     const finCost = 0.3 * t.limbs;
-    const { sea, fresh, landF, ice, tempMean, kmAFresh, kmASea, kmALand } = this;
+    // Eggs laid in water tie an animal on land to damp ground; shelled eggs free it.
+    const freed = clamp01((t.eggs - 0.3) / (SHELLED - 0.3));
+    const { sea, fresh, landF, ice, tempMean, kmAFresh, kmASea, kmALand, damp } = this;
     const [bF0, bF1] = this.bFresh, [bS0, bS1] = this.bSea, [bL0, bL1] = this.bLand;
     const N = sp.N, K = sp.K;
     const dom = r.land >= r.fresh && r.land >= r.sea ? kmALand : r.sea > r.fresh ? kmASea : kmAFresh;
@@ -516,7 +532,7 @@ export class Life {
       const water = fresh[c] + sea[c];
       const margin = Math.min(1, 4 * water * landF[c]);
       const inWater = r.fresh * ((1 - d) * bF0[c] + d * bF1[c]) + r.sea * ((1 - d) * bS0[c] + d * bS1[c]);
-      const onLand = r.land * ((1 - d) * bL0[c] + d * bL1[c]);
+      const onLand = r.land * ((1 - d) * bL0[c] + d * bL1[c]) * (freed + (1 - freed) * damp[c]);
       const food = inWater * (1 - finCost * (1 - margin)) + onLand;
       if (food <= 0) { K[c] = 0; return; }
       const T = tempMean[c];
@@ -540,7 +556,8 @@ export class Life {
     const rsum = r.fresh + r.sea + r.land || 1;
     const rf = r.fresh / rsum, rs = r.sea / rsum, rl = r.land / rsum;
     const animal = !!t.animal;
-    const rate = animal ? A_RATE * (1 - 0.5 * t.complexity) : R_MAX * (1 - 0.6 * t.complexity);
+    const rate = animal ? A_RATE * (1 - 0.5 * t.complexity) : R_MAX * (1 - 0.6 * t.complexity) * (t.seeds >= 0.75 ? 1.25 : 1);
+    const coldGrowth = animal ? 0.25 + 0.6 * t.warm : 0;
     const { snow, temp, landF, LW } = this;
     const tier = tierOf(t);
     const bFresh = animal ? this.aFresh : this.bFresh[tier];
@@ -564,7 +581,7 @@ export class Life {
         // Animals don't need the light, and only slow down in the cold.
         let g;
         const T = temp[c];
-        if (animal) g = T < 0 ? 0.25 : T < 8 ? 0.25 + (0.75 * T) / 8 : 1;
+        if (animal) g = T < 0 ? coldGrowth : T < 8 ? coldGrowth + ((1 - coldGrowth) * T) / 8 : 1;
         else g = T < 2 ? 0 : T < 10 ? (light * (T - 2)) / 8 : light;
         if (landy && landF[c] > 0 && snow[c] > 0.5) g *= 1 - snow[c];
         const rgdt = rate * g * dt;
@@ -587,7 +604,7 @@ export class Life {
     const r = realms(t);
     const { LW, LH, NL, pass, sea, fresh, landF, barrier, tmp } = this;
     const N = sp.N;
-    const D = t.animal ? 0.1 + 1.2 * t.dispersal : 0.03 + 0.6 * t.dispersal;   // cells² per year
+    const D = t.animal ? 0.1 + 1.2 * t.dispersal : (0.03 + 0.6 * t.dispersal) * (t.seeds >= 0.75 ? 1.4 : 1);   // cells² per year
     const want = D * dt;
     const steps = Math.min(MAX_SUBSTEPS, Math.max(1, Math.ceil(want / 0.2)));
     const f = Math.min(0.2, want / steps);
@@ -859,7 +876,13 @@ export class Life {
     let animals = 0, landAnimals = 0;
     for (const sp of this.species) {
       if (sp.range >= FRONTIER_RANGE) this.reach(sp.traits);
-      if (isLandPlant(sp.traits)) land++;
+      if (isLandPlant(sp.traits)) {
+        land++;
+        if (sp.range >= FRONTIER_RANGE) {
+          if (sp.traits.seeds >= SEEDED) this.first('seed', sp, years);
+          if (sp.traits.seeds >= 0.75) this.first('flower', sp, years);
+        }
+      }
       if (!sp.traits.animal) continue;
       animals++;
       if (!isLandAnimal(sp.traits)) continue;
@@ -869,6 +892,8 @@ export class Life {
       if (ashore.cells < 4) continue;
       const best = ashore.best;
       landAnimals++;
+      if (sp.traits.eggs >= SHELLED) this.first('reptile', sp, years, best);
+      if (sp.traits.eggs >= SHELLED && sp.traits.warm >= 0.5) this.first('warm', sp, years, best);
       if (this.stats.firstLandAnimal === null) {
         this.stats.firstLandAnimal = years;
         this.stats.firstLandAnimalAt = best;
@@ -881,6 +906,15 @@ export class Life {
     this.stats.landPlants = land;
     this.stats.everLived = this.nextId - 1;
     if (land > 0 && this.stats.firstLandPlant === null) this.stats.firstLandPlant = years;
+  }
+
+  // The first of a new kind of life, for its milestone: when, who, and a
+  // life cell where it lives.
+  first(kind, sp, years, at = -1) {
+    const f = this.stats.firsts || (this.stats.firsts = {});
+    if (f[kind]) return;
+    if (at < 0) { let b = 0; for (let c = 0; c < this.NL; c++) if (sp.N[c] > b) { b = sp.N[c]; at = c; } }
+    f[kind] = { years, name: sp.name, at };
   }
 
   // Records a species on the frontier if it's the most advanced of its kind
@@ -1120,7 +1154,7 @@ export class Life {
     this.registry = new Map();
     this.species = [];
     for (const r of s.species) {
-      const sp = { ...r, traits: { ...r.traits }, founder: { ...r.founder } };
+      const sp = { ...r, traits: withDefaults({ ...r.traits }), founder: withDefaults({ ...r.founder }) };
       if (sp.arrivedAt == null && r.returnedAt != null) sp.arrivedAt = r.returnedAt;
       delete sp.returnedAt;
       delete sp.sheltered;
@@ -1245,9 +1279,9 @@ function tierOf(t) {
 // How advanced a species is within its kind: plants by complexity; animals
 // by how far out of the water they've come, then legs, lungs and body.
 function advance(t) {
-  if (!t.animal) return t.complexity;
+  if (!t.animal) return t.complexity + (t.seeds || 0);
   const r = realms(t);
-  return (2 * r.land) / (r.fresh + r.sea + r.land || 1) + t.limbs + t.lungs + t.complexity;
+  return (2 * r.land) / (r.fresh + r.sea + r.land || 1) + t.limbs + t.lungs + t.complexity + (t.eggs || 0) + (t.warm || 0);
 }
 
 const REALM_RANK = { land: 2, fresh: 1, sea: 0 };
