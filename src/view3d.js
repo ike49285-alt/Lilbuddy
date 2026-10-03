@@ -6,7 +6,7 @@
 // the flat map's cell image, so every map mode works, with the rivers drawn
 // sharper on a layer of their own; the sea and lakes are flat water.
 
-import { sunlight } from './render.js';
+import { sunlight, nightTint } from './render.js';
 
 const EXAG = 3;
 const UNIT = EXAG / 500;               // metres of height to cells (500 m), exaggerated
@@ -501,15 +501,6 @@ export class View3D {
       gl.depthMask(true);
     }
   }
-}
-
-// The colour the night lays over everything, glowing at dawn and dusk; the
-// same as the flat map's.
-export function nightTint(sun) {
-  if (sun.day >= 1) return [1, 1, 1];
-  const c = [38 + (255 - 38) * sun.day, 52 + (255 - 52) * sun.day, 105 + (255 - 105) * sun.day];
-  const wm = sun.warm * 0.75;
-  return [(c[0] + (255 - c[0]) * wm * 0.4) / 255, (c[1] + (186 - c[1]) * wm) / 255, (c[2] + (140 - c[2]) * wm) / 255];
 }
 
 // --- small WebGL and vector helpers --------------------------------------------

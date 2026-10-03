@@ -78,6 +78,17 @@ export function sunlight(years, yearFrac, tickYears) {
   return { day, warm, height: s, shadowX: -2.5 * Math.max(-1, Math.min(1, along)), shadowY: 1.4 + 1.5 * (1 - Math.max(0, s)) };
 }
 
+// The colour the night lays over everything (a multiply, 0–1 per channel):
+// moonlit blue, dark enough to read as night but light enough to see the
+// valley by, glowing warm at dawn and dusk. Used by the flat map and 3D.
+const NIGHT = [118, 132, 182];
+export function nightTint(sun) {
+  if (sun.day >= 1) return [1, 1, 1];
+  const c = NIGHT.map((v) => v + (255 - v) * sun.day);
+  const wm = sun.warm * 0.75;
+  return [(c[0] + (255 - c[0]) * wm * 0.4) / 255, (c[1] + (196 - c[1]) * wm) / 255, (c[2] + (150 - c[2]) * wm) / 255];
+}
+
 export function elevationColor(m) {
   const c = ramp(LAND, m);
   return `rgb(${c[1] | 0}, ${c[2] | 0}, ${c[3] | 0})`;
@@ -413,11 +424,10 @@ export class MapRenderer {
       const sun = sunlight(f.years, f.climate.yearFrac || 0, f.tickYears);
       if (f.cloud) this.drawClouds(f, ctx, w, h, sun);
       if (sun.day < 1) {
-        // Night: everything takes the dark blue of the sky; dusk and dawn glow.
-        const c = [38 + (255 - 38) * sun.day, 52 + (255 - 52) * sun.day, 105 + (255 - 105) * sun.day];
-        const wm = sun.warm * 0.75;
+        // Night: everything takes the blue of moonlight; dusk and dawn glow.
+        const c = nightTint(sun);
         ctx.globalCompositeOperation = 'multiply';
-        ctx.fillStyle = `rgb(${c[0] + (255 - c[0]) * wm * 0.4 | 0}, ${c[1] + (186 - c[1]) * wm | 0}, ${c[2] + (140 - c[2]) * wm | 0})`;
+        ctx.fillStyle = `rgb(${c[0] * 255 | 0}, ${c[1] * 255 | 0}, ${c[2] * 255 | 0})`;
         ctx.fillRect(0, 0, w, h);
         ctx.globalCompositeOperation = 'source-over';
       }
