@@ -18,6 +18,8 @@ const FIRE_EVERY = 30;          // a lightning fire, on a well-vegetated valley
 const FLOOD_EVERY = 50;         // a big flood on the trunk river
 const ERUPT_EVERY = 400000;
 const IMPACT_EVERY = 3000000;
+const BOMBARD_YEARS = 1e6;      // the heavy bombardment: the world's first million years
+const BOMBARD_EVERY = 4000;     // years between catastrophes at its height; it tapers to nothing
 const MAX_FIRES = 3;            // per tick, so long ticks don't burn the world down
 const MAX_FLOODS = 1;
 const KEEP_EVENTS = 30;
@@ -43,6 +45,7 @@ export class Disasters {
     this.events = [];
     this.shock = null;      // { dT, start, years, name }: a volcanic or impact winter
     this.epoch = 0;         // goes up whenever the ground is reshaped
+    this.bombard = 'ahead'; // the heavy bombardment: 'ahead', 'on', then 'over'
   }
 
   // Degrees of cooling at year t from the latest big event.
@@ -112,6 +115,29 @@ export class Disasters {
       const r = Math.min(8, Math.max(1, Math.pow(rng.next(), -0.6)));
       this.apply(sim, 'meteor', i, r >= 4 ? 2 : r >= 2 ? 1 : 0, 1, r);
     }
+
+    // The heavy bombardment: through the first million years, one
+    // catastrophic impact or eruption after another, easing off as it goes.
+    // Each is too much like the last for a note of its own; the map shows
+    // them, and notes mark the start and the end.
+    const centre = (life.LH >> 1) * life.LW + (life.LW >> 1);
+    if (sim.years < BOMBARD_YEARS) {
+      if (this.bombard === 'ahead') {
+        this.bombard = 'on';
+        this.milestone(sim, 'The heavy bombardment begins: impact after impact, eruption after eruption', centre);
+      }
+      const left = 1 - sim.years / BOMBARD_YEARS;
+      for (let k = poisson(rng, (dt / BOMBARD_EVERY) * left * left); k > 0; k--) {
+        const meteor = rng.next() < 0.6;
+        const i = meteor ? rng.int(land.N) : this.findCell(land, 200, (j) => !land.ocean[j]);
+        if (i < 0) continue;
+        const ev = this.apply(sim, meteor ? 'meteor' : 'volcano', i, 2);
+        ev.quiet = true;
+      }
+    } else if (this.bombard !== 'over') {
+      this.bombard = 'over';
+      this.milestone(sim, 'The heavy bombardment ends; the impacts and eruptions grow rare', centre);
+    }
     this.batch = false;
     if (this.unsettled) {
       life.settle(sim.years);
@@ -166,18 +192,14 @@ export class Disasters {
       this.unsettled = true;
     } else if (ev.hurt) {
       const lost = sim.life.settle(sim.years);
-      const away = ev.sheltered ? sim.life.shelter(ev.sheltered, ev.returnAt) : 0;
-      ev.lost = (ev.lost || 0) + lost - away;
-      ev.fled = away;
+      ev.lost = (ev.lost || 0) + lost;
       if (ev.winter) {
-        const gone = lost - away;
-        const parts = [gone ? `${gone} species lost` : away ? 'none lost for good' : 'every species hangs on'];
-        if (away) parts.push(`${away} sheltering at sea`);
-        ev.label += `; ${ev.winter}: ${parts.join(', ')}`;
+        ev.label += `; ${ev.winter}: ${lost ? `${lost} species lost` : 'every species hangs on'}`;
+        // When it's over, newcomers come in from beyond the valley.
+        if (lost) sim.life.arrivals.push(ev.returnAt);
       }
       sim.syncCover();
     }
-    delete ev.sheltered;
     delete ev.returnAt;
     delete ev.hurt;
     delete ev.terrain;
@@ -403,15 +425,6 @@ export class Disasters {
       doomed.shift();
     }
     for (const sp of doomed) sp.N.fill(0);
-    // The sea buffers the cold. Established species able to get away, and
-    // hardy enough to ride it out, shelter offshore and along the coast and
-    // come back when the winter is over; the rest are lost for good.
-    ev.sheltered = [];
-    for (const sp of doomed) {
-      const established = sim.years - sp.born >= 20000 && sp.peakRange >= 25;
-      const p = established ? Math.pow(sp.traits.tempTol, 1.2) * (0.4 + 0.6 * sp.traits.dispersal) : 0;
-      if (rng.next() < p) ev.sheltered.push(sp.id);
-    }
     ev.returnAt = this.shock.start + this.shock.years;
     ev.winter = name;
     ev.catastrophic = true;
@@ -476,6 +489,7 @@ export class Disasters {
       nextId: this.nextId,
       epoch: this.epoch,
       shock: this.shock ? { ...this.shock } : null,
+      bombard: this.bombard,
       events: this.events.map((e) => ({ ...e, cells: e.cells ? e.cells.slice() : undefined })),
     };
   }
@@ -487,5 +501,8 @@ export class Disasters {
     this.epoch = s.epoch || 0;
     this.shock = s.shock ? { ...s.shock } : null;
     this.events = s.events.map((e) => ({ ...e }));
+    // Worlds saved before the bombardment existed get no notes for it; one
+    // still inside its first million years is bombarded all the same.
+    this.bombard = s.bombard || 'over';
   }
 }

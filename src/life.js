@@ -24,6 +24,12 @@ export const LIFE_SCALE = 2;
 export const MAX_LIVE_SPECIES = 32;     // plants and microbes
 export const MAX_LIVE_ANIMALS = 16;
 const KEEP_EXTINCT = 200;
+const ARRIVE_EVERY = 100000;        // mean years between newcomers drifting in from beyond the valley
+const ARRIVE_SETTLE = 20000;        // years a newcomer is spared the crowding cull
+const ARRIVE_DENSITY = 0.03;        // its numbers where it first lands
+const ARRIVE_TOTAL = 0.3;           // and at least this many in all
+const ARRIVE_CELLS = 6;             // the edge band widens until it has this many cells to land on
+const FRONTIER_RANGE = 10;          // km²: a species this widespread counts toward the frontier
 
 const R_MAX = 3;                    // growth per year of the simplest, fastest species
 const MORTALITY = 0.6;              // per year where a species can't make a living
@@ -116,8 +122,14 @@ export class Life {
     this.comp = new Int32Array(NL);
 
     this.species = [];      // living, in id order
-    this.refuge = [];       // { id, at }: wiped out here by a winter, sheltering at sea until year `at`
-    this.returned = [];     // { name, at }: species that came back from the sea this step, and a life cell they landed in
+    // The most advanced plant and animal ever established in each realm
+    // (sea, fresh, land): { score, traits }. It never goes back, so after an
+    // extinction it still knows what lived here before.
+    this.frontier = { plant: {}, animal: {} };
+    this.arrivals = [];     // years when newcomers come in, after a winter that killed species
+    this.nextArrive = null; // the next lone newcomer, any time
+    this.trickleKind = 'animal';
+    this.arrived = [];      // this step's newcomers: { names, plants, animals, at, trickle }
     this.registry = new Map();
     this.nextId = 1;
     this.light = 0.8;
@@ -327,8 +339,17 @@ export class Life {
     this.sense(land, climate);
     this.seedFreshwater(climate, years);
     if (!this.fishSeeded) { this.meanSeaT = climate.meanSeaT; this.seedFish(years); }
-    this.returned = [];
-    if (this.refuge.length) this.comeBack(years);
+    this.arrived = [];
+    if (this.arrivals.some((a) => a <= years)) {
+      this.arrivals = this.arrivals.filter((a) => a > years);
+      this.arrive(years, ['plant', 'animal'], false);
+    }
+    if (this.nextArrive === null) this.nextArrive = years + ARRIVE_EVERY;
+    if (years >= this.nextArrive) {
+      this.nextArrive = years + ARRIVE_EVERY * (0.25 + 1.5 * this.rng.next());
+      this.trickleKind = this.trickleKind === 'plant' ? 'animal' : 'plant';
+      this.arrive(years, [this.trickleKind], true);
+    }
     this.tally();
     for (const a of [...this.kmFresh, ...this.kmSea, ...this.kmLand, this.kmAFresh, this.kmASea, this.kmALand]) a.fill(0);
     for (const sp of this.species) this.capacity(sp);
@@ -658,8 +679,8 @@ export class Life {
     while (this.species.filter(isKind).length > cap) {
       const byRealm = new Map();
       for (const sp of this.species) {
-        // Newcomers and species just back from the sea get a chance to settle.
-        if (sp.born >= years || !isKind(sp) || years - (sp.returnedAt ?? -Infinity) < 20000) continue;
+        // New species and newcomers from beyond the valley get a chance to settle.
+        if (sp.born >= years || !isKind(sp) || years - (sp.arrivedAt ?? -Infinity) < ARRIVE_SETTLE) continue;
         const k = realmOf(sp.traits);
         if (!byRealm.has(k)) byRealm.set(k, []);
         byRealm.get(k).push(sp);
@@ -751,8 +772,7 @@ export class Life {
   // recently extinct.
   prune() {
     const keep = new Set();
-    const sheltering = this.refuge.map((r) => this.registry.get(r.id)).filter(Boolean);
-    for (const sp of [...this.species, ...sheltering]) {
+    for (const sp of this.species) {
       let a = sp;
       while (a && !keep.has(a.id)) {
         keep.add(a.id);
@@ -762,67 +782,6 @@ export class Life {
     const extinct = [...this.registry.values()].filter((s) => s.died !== null && !keep.has(s.id));
     extinct.sort((a, b) => b.died - a.died);
     for (const s of extinct.slice(KEEP_EXTINCT)) this.registry.delete(s.id);
-  }
-
-  // Species wiped out by a winter that rode it out at sea. They're out of
-  // the valley until year `at`. Returns how many.
-  shelter(ids, at) {
-    let n = 0;
-    for (const id of ids) {
-      const sp = this.registry.get(id);
-      if (!sp || sp.died === null) continue;
-      sp.sheltered = true;
-      this.refuge.push({ id, at });
-      n++;
-    }
-    return n;
-  }
-
-  // When the winter is over, sheltering species come back in from the sea:
-  // sea life onto the shelf, freshwater life at the river mouths, land life
-  // on the coastal strip. From there they spread back inland on their own.
-  comeBack(years) {
-    const { NL, LW, LH, sea, fresh, landF } = this;
-    const nearSea = (c) => {
-      const x = c % LW, y = (c / LW) | 0;
-      for (let dy = -1; dy <= 1; dy++) {
-        for (let dx = -1; dx <= 1; dx++) {
-          const nx = x + dx, ny = y + dy;
-          if (nx >= 0 && nx < LW && ny >= 0 && ny < LH && sea[ny * LW + nx] > 0.5) return true;
-        }
-      }
-      return false;
-    };
-    const waiting = [];
-    for (const r of this.refuge) {
-      const sp = this.registry.get(r.id);
-      if (!sp || sp.died === null) continue;
-      if (years < r.at) { waiting.push(r); continue; }
-      const where = realmOf(sp.traits);
-      const N = new Float32Array(NL);
-      let cells = 0, first = -1;
-      for (let c = 0; c < NL; c++) {
-        const here = where === 'sea' ? sea[c] > 0.5 && this.coastal(c)
-          : where === 'fresh' ? fresh[c] > 0.1 && (sea[c] > 0 || this.coastal(c))
-            : landF[c] > 0.5 && nearSea(c);
-        if (here) { N[c] = 0.03; cells++; if (first < 0) first = c; }
-      }
-      sp.sheltered = false;
-      if (!cells) continue;     // nowhere to land: lost after all
-      sp.died = null;
-      sp.N = N;
-      sp.K = new Float32Array(NL);
-      sp.x0 = 0; sp.x1 = LW - 1; sp.y0 = 0; sp.y1 = LH - 1;
-      sp.isolated = false;
-      sp.returnedAt = years;
-      this.species.push(sp);
-      this.returned.push({ name: sp.name, at: first });
-    }
-    this.refuge = waiting;
-    if (this.returned.length) {
-      this.species.sort((a, b) => a.id - b.id);
-      this.updateStats(years);
-    }
   }
 
   // How much of a species lives out of the water: in each cell, the share of
@@ -882,6 +841,7 @@ export class Life {
     let land = 0;
     let animals = 0, landAnimals = 0;
     for (const sp of this.species) {
+      if (sp.range >= FRONTIER_RANGE) this.reach(sp.traits);
       if (isLandPlant(sp.traits)) land++;
       if (!sp.traits.animal) continue;
       animals++;
@@ -904,6 +864,113 @@ export class Life {
     this.stats.landPlants = land;
     this.stats.everLived = this.nextId - 1;
     if (land > 0 && this.stats.firstLandPlant === null) this.stats.firstLandPlant = years;
+  }
+
+  // Records a species on the frontier if it's the most advanced of its kind
+  // in its realm so far.
+  reach(t) {
+    const kind = t.animal ? 'animal' : 'plant';
+    const realm = realmOf(t);
+    const score = advance(t);
+    const f = this.frontier[kind][realm];
+    if (!f || score > f.score + 1e-9) this.frontier[kind][realm] = { score, traits: { ...t } };
+  }
+
+  // --- newcomers ------------------------------------------------------------------
+
+  // Species from beyond the valley come in at its edges: sea life along the
+  // seaward and side edges, land life along the sides and the mountain
+  // crest, freshwater life where a river crosses an edge (or at the river
+  // mouths). Each is new, at the most advanced level its kind has reached in
+  // that realm, and suited to the climate where it lands. After a deadly
+  // winter, two or three of each kind; in the trickle, one at a time.
+  arrive(years, kinds, trickle) {
+    const rng = this.rng;
+    const names = [];
+    const count = { plant: 0, animal: 0 };
+    let at = -1;
+    for (const kind of kinds) {
+      // Animals only come where there's something they eat: filter feeders
+      // where there's plankton or algae, grazers where there are bigger
+      // plants (plants go first).
+      const fed = new Set(this.species.filter((p) => !p.traits.animal).map((p) => `${realmOf(p.traits)}:${tierOf(p.traits)}`));
+      const eats = (r) => {
+        const diet = this.frontier.animal[r].traits.diet;
+        return (diet < 0.65 && fed.has(`${r}:0`)) || (diet > 0.35 && fed.has(`${r}:1`));
+      };
+      const known = Object.keys(this.frontier[kind])
+        .filter((r) => kind === 'plant' || eats(r))
+        .sort((a, b) => REALM_RANK[b] - REALM_RANK[a]);
+      if (!known.length) continue;
+      let realms;
+      if (trickle) realms = [known[rng.int(known.length)]];
+      else realms = known.length >= 2 ? known.slice(0, 3) : [known[0], known[0]];
+      for (const realm of realms) {
+        const sp = this.newcomer(kind, realm, years);
+        if (!sp) continue;
+        count[kind]++;
+        names.push(sp.name);
+        if (at < 0) at = sp.landedAt;
+      }
+    }
+    if (!names.length) return;
+    this.species.sort((a, b) => a.id - b.id);
+    this.updateStats(years);
+    this.arrived.push({ names, plants: count.plant, animals: count.animal, at, trickle });
+  }
+
+  newcomer(kind, realm, years) {
+    const { NL, LW, LH, sea, fresh, landF, tempMean, rng } = this;
+    const f = this.frontier[kind][realm];
+    const edge = (c, w, sides) => {
+      const x = c % LW, y = (c / LW) | 0;
+      return x < w || x >= LW - w || (sides.top && y < w) || (sides.bottom && y >= LH - w);
+    };
+    // An animal lands only where there's something it eats.
+    let food = null;
+    if (kind === 'animal') {
+      food = this.tmp;
+      food.fill(0);
+      const diet = f.traits.diet;
+      for (const p of this.species) {
+        if (p.traits.animal || realmOf(p.traits) !== realm) continue;
+        const tier = tierOf(p.traits);
+        if ((tier === 0 && diet >= 0.65) || (tier === 1 && diet <= 0.35)) continue;
+        for (let c = 0; c < NL; c++) food[c] += p.N[c];
+      }
+    }
+    // The band along the edges widens until there's room to land.
+    let cells = [];
+    for (let w = 1; w <= 8 && cells.length < ARRIVE_CELLS; w *= 2) {
+      cells = [];
+      for (let c = 0; c < NL; c++) {
+        if (food && food[c] < 0.02) continue;
+        if (realm === 'sea' ? sea[c] > 0.5 && edge(c, w, { bottom: true })
+          : realm === 'fresh' ? fresh[c] > 0.1 && edge(c, w + 2, { top: true, bottom: true })
+            : landF[c] > 0.5 && edge(c, w + 1, { top: true })) cells.push(c);
+      }
+    }
+    if (!cells.length && realm === 'fresh') {
+      for (let c = 0; c < NL; c++) if (fresh[c] > 0.2 && (sea[c] > 0 || this.coastal(c))) cells.push(c);
+    }
+    if (!cells.length) return null;
+    // At the frontier's level, with its own colour and a little variety.
+    const traits = { ...f.traits };
+    traits.hue = rng.next();
+    traits.complexity = Math.max(0, Math.min(1, traits.complexity + rng.normal(0, 0.02)));
+    if (traits.animal) traits.diet = Math.max(0, Math.min(1, traits.diet + rng.normal(0, 0.1)));
+    traits.tempTol = Math.max(0.4, traits.tempTol);
+    traits.dispersal = Math.max(0.5, traits.dispersal);
+    let T = 0;
+    for (const c of cells) T += tempMean[c];
+    traits.tempOpt = toTempTrait(T / cells.length);
+    const sp = this.addSpecies(traits, null, years);
+    // Enough of them in all to take hold, however few the cells.
+    const d = Math.min(0.5, Math.max(ARRIVE_DENSITY, ARRIVE_TOTAL / cells.length));
+    for (const c of cells) sp.N[c] = d;
+    sp.arrivedAt = years;
+    sp.landedAt = cells[cells.length >> 1];
+    return sp;
   }
 
   // Plant cover per life cell, 0..1, and the plants' mean complexity.
@@ -942,15 +1009,18 @@ export class Life {
       N: sp.N ? sp.N.slice() : null,
       x0: sp.x0, x1: sp.x1, y0: sp.y0, y1: sp.y1, isolated: sp.isolated,
       total: sp.total, range: sp.range, peakRange: sp.peakRange, lastRange: sp.lastRange, trend: sp.trend,
-      nextSplit: sp.nextSplit, nextTrend: sp.nextTrend, sheltered: !!sp.sheltered,
-      returnedAt: sp.returnedAt ?? null,
+      nextSplit: sp.nextSplit, nextTrend: sp.nextTrend,
+      arrivedAt: sp.arrivedAt ?? null,
     });
     return {
       rng: this.rng.getState(),
       nextId: this.nextId,
       freshSeeded: !!this.freshSeeded,
       fishSeeded: !!this.fishSeeded,
-      refuge: this.refuge.map((r) => ({ ...r })),
+      frontier: JSON.parse(JSON.stringify(this.frontier)),
+      arrivals: this.arrivals.slice(),
+      nextArrive: this.nextArrive,
+      trickleKind: this.trickleKind,
       lastDt: this.lastDt || 1,
       stats: { ...this.stats },
       // Registry order matters for pruning ties, so keep it.
@@ -963,13 +1033,21 @@ export class Life {
     this.nextId = s.nextId;
     this.freshSeeded = s.freshSeeded;
     this.fishSeeded = !!s.fishSeeded;
-    this.refuge = (s.refuge || []).map((r) => ({ ...r }));
+    this.frontier = s.frontier ? JSON.parse(JSON.stringify(s.frontier)) : { plant: {}, animal: {} };
+    // Worlds saved with species sheltering at sea (before newcomers): when
+    // they would have come back, newcomers arrive instead.
+    this.arrivals = s.arrivals ? s.arrivals.slice() : [...new Set((s.refuge || []).map((r) => r.at))];
+    this.nextArrive = s.nextArrive ?? null;
+    this.trickleKind = s.trickleKind || 'animal';
     this.lastDt = s.lastDt;
     this.stats = { ...this.stats, ...s.stats };
     this.registry = new Map();
     this.species = [];
     for (const r of s.species) {
       const sp = { ...r, traits: { ...r.traits }, founder: { ...r.founder } };
+      if (sp.arrivedAt == null && r.returnedAt != null) sp.arrivedAt = r.returnedAt;
+      delete sp.returnedAt;
+      delete sp.sheltered;
       if (sp.died === null) {
         sp.N = Float32Array.from(r.N);
         sp.K = new Float32Array(this.NL);
@@ -1049,7 +1127,7 @@ export class Life {
     for (const sp of this.registry.values()) {
       out.push({
         id: sp.id, parent: sp.parent, name: sp.name, form: formOf(sp.traits), hue: sp.traits.hue, animal: !!sp.traits.animal,
-        sheltered: !!sp.sheltered,
+        arrivedAt: sp.arrivedAt ?? null,
         born: sp.born, died: sp.died, range: sp.range, peakRange: sp.peakRange, trend: sp.trend,
         traits: { ...sp.traits, tempOptC: tempOptC(sp.traits.tempOpt), tempWidthC: tempWidthC(sp.traits.tempTol) },
       });
@@ -1086,6 +1164,16 @@ function tempIndex(T) {
 function tierOf(t) {
   return t.complexity < 0.22 ? 0 : 1;
 }
+
+// How advanced a species is within its kind: plants by complexity; animals
+// by how far out of the water they've come, then legs, lungs and body.
+function advance(t) {
+  if (!t.animal) return t.complexity;
+  const r = realms(t);
+  return (2 * r.land) / (r.fresh + r.sea + r.land || 1) + t.limbs + t.lungs + t.complexity;
+}
+
+const REALM_RANK = { land: 2, fresh: 1, sea: 0 };
 
 function realmOf(t) {
   const r = realms(t);

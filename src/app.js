@@ -519,7 +519,7 @@ function renderCard(card, sp, byId) {
   const h = el('h3');
   h.append(swatch(sp.hue), el('span', '', sp.name));
   card.append(h);
-  card.append(el('p', '', `${sp.form} · appeared ${when(sp.born)}${parent ? ` from ${parent.name}` : ', seeded at the start'}. Lives over ${n0.format(sp.range)} km².`));
+  card.append(el('p', '', `${sp.form} · appeared ${when(sp.born)}${parent ? ` from ${parent.name}` : sp.arrivedAt != null ? ', arriving from beyond the valley' : ', seeded at the start'}. Lives over ${n0.format(sp.range)} km².`));
   const dl = el('dl', 'traits');
   const row = (label, v, text) => {
     const d = el('div');

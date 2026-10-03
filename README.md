@@ -106,10 +106,19 @@ them at once: a cone across a valley dams a lake. Floods lay silt on the
 floodplain, and fires burn the plants but leave the soil richer. The biggest
 eruptions and impacts bring a volcanic or impact winter a few degrees colder
 for a few years, and the species least able to take the cold die out.
-The sea buffers the cold, though: established species hardy and mobile
-enough to get away shelter offshore and along the coast, and when the
-winter is over the same species come back from the sea and spread inland
-again.
+When the winter is over, newcomers come in from beyond the valley at the
+edges of the map: two or three plants and two or three animals, new species
+at the most advanced level their kind had reached here in each of the sea,
+fresh water and land (so if early tetrapods walked the valley before, early
+tetrapods walk in), suited to the climate where they land and only where
+there's something for them to eat. Now and then a lone newcomer drifts in
+too, a plant or an animal, about once every 100,000 years.
+
+The world's first million years are the heavy bombardment: catastrophic
+impacts and eruptions one after another, about one every 4,000 years at
+first and easing off to nothing by the million-year mark, leaving a
+cratered, volcanic valley. Life is there from the start and is knocked
+back again and again, and refilled by newcomers each time.
 
 ## Shaping it yourself
 

@@ -62,10 +62,15 @@ export class Simulation {
     this.life.step(this.land, this.climate, d, this.years);
     this.syncCover();
     const st = this.life.stats;
-    const back = this.life.returned;
-    if (back.length) {
-      const names = back.slice(0, 3).map((r) => r.name).join(', ') + (back.length > 3 ? '…' : '');
-      this.disasters.milestone(this, `${back.length === 1 ? 'A species returns' : `${back.length} species return`} from the sea: ${names}`, back[0].at);
+    // Newcomers after a deadly winter get a note, except in the thick of the
+    // bombardment, when they come too often; the lone ones are quiet.
+    for (const a of this.life.arrived) {
+      if (a.trickle || this.disasters.bombard === 'on') continue;
+      const kinds = [];
+      if (a.plants) kinds.push(`${a.plants} ${a.plants === 1 ? 'plant' : 'plants'}`);
+      if (a.animals) kinds.push(`${a.animals} ${a.animals === 1 ? 'animal' : 'animals'}`);
+      const names = a.names.slice(0, 3).join(', ') + (a.names.length > 3 ? '…' : '');
+      this.disasters.milestone(this, `${kinds.join(' and ')} ${a.names.length === 1 ? 'arrives' : 'arrive'} from beyond the valley: ${names}`, a.at);
     }
     if (ashore === null && st.firstLandAnimal !== null) {
       this.disasters.milestone(this, `The first animal walks out of the water: ${st.firstLandAnimalName}`, st.firstLandAnimalAt);
