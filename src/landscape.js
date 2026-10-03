@@ -43,6 +43,7 @@ const LAKE_MIN_DEPTH = 0.75;    // metres of standing water before a cell counts
 const SHELF_SPILL_HOPS = 48;
 const MAX_UPLIFT_Z = 3600;       // uplift fades out as a range approaches this height
 const LOOSE_K = 5000;            // loose cover erodes this many times the base rate (≈ 20,000 × granite)
+const SOIL_MANTLE_M = 1;         // the soil a creeping hillside keeps
 const SOIL_DEPTH_M = 0.5;        // soil production falls off with depth on this scale
 const MOUTH_SETTLE = 0.55;      // fraction of sediment reaching the sea that settles near the mouth; the fines go offshore
 
@@ -314,6 +315,8 @@ export class Landscape {
       const zn = (z[i] + F * zr) / (1 + F);
       eroded[i] = z[i] - zn;
       z[i] = zn;
+      // Whatever's on top goes first.
+      this.loose[i] = Math.max(0, this.loose[i] - eroded[i]);
     }
   }
 
@@ -441,15 +444,16 @@ export class Landscape {
         tmp[i] = z[i] + k * (sum / n - z[i]);
       }
     }
-    // What creeps in settles at the foot of the slope as cover. On a
-    // creeping slope the soil rides on top while the rock beneath wears down
-    // and turns into more soil, so the soil stays; where the slope fails,
-    // the slide takes the soil first. On the sea floor it's all sediment.
+    // What creeps in settles at the foot of the slope as cover. What creeps
+    // away is cover too, except a hillside's own soil mantle: that rides on
+    // top while the rock beneath wears down and turns into more soil. A
+    // slide takes everything; on the sea floor it's all sediment.
     const { loose } = this;
     for (let i = 0; i < z.length; i++) {
       const d = tmp[i] - z[i];
       if (d >= 0) loose[i] += d;
       else if (slid[i] || ocean[i]) loose[i] = Math.max(0, loose[i] + d);
+      else if (loose[i] > SOIL_MANTLE_M) loose[i] = Math.max(SOIL_MANTLE_M, loose[i] + d);
     }
     z.set(tmp);
   }
