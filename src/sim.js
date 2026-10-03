@@ -5,7 +5,7 @@ import { generateTerrain, ROCKS, CELL_M } from './terrain.js';
 import { Climate, SEASONAL_TICK } from './climate.js';
 import { Landscape, MAX_STEP_YEARS } from './landscape.js';
 import { Life } from './life.js';
-import { Disasters } from './disasters.js';
+import { Disasters, BOMBARD_YEARS } from './disasters.js';
 import { Weather, WEATHER_TICK } from './weather.js';
 import { sculpt, dig, lineCells, parkStorm, BRUSH } from './tools.js';
 
@@ -39,6 +39,7 @@ export class Simulation {
     this.weather = new Weather(this.rng, this.life.LW, this.life.LH);
     this.land.toLife = this.life.toLife;
     this.sentEvent = 0;       // the last event id handed to the page
+    this.activity = { meteor: 1, volcano: 1 };   // natural impacts and eruptions, as multiples of natural
     this.sample();
   }
 
@@ -59,13 +60,15 @@ export class Simulation {
     }
     this.land.step(this.climate, d);
     const ashore = this.life.stats.firstLandAnimal;
+    // Nothing comes in from beyond the valley through the bombardment.
+    this.life.hold = this.years < BOMBARD_YEARS;
     this.life.step(this.land, this.climate, d, this.years);
     this.syncCover();
     const st = this.life.stats;
-    // Newcomers after a deadly winter get a note, except in the thick of the
-    // bombardment, when they come too often; the lone ones are quiet.
+    // Newcomers after a deadly winter, or after the bombardment, get a note;
+    // the lone ones are quiet.
     for (const a of this.life.arrived) {
-      if (a.trickle || this.disasters.bombard === 'on') continue;
+      if (a.trickle) continue;
       const kinds = [];
       if (a.plants) kinds.push(`${a.plants} ${a.plants === 1 ? 'plant' : 'plants'}`);
       if (a.animals) kinds.push(`${a.animals} ${a.animals === 1 ? 'animal' : 'animals'}`);
@@ -111,6 +114,13 @@ export class Simulation {
     this.reshaped();
     const mid = cells[cells.length >> 1];
     return this.disasters.note(this, 'dig', mid, `A channel is cut, ${(n * CELL_M / 1000).toFixed(1)} km long`, 2);
+  }
+
+  // How often meteors strike and volcanoes erupt, from none to five times
+  // natural, the bombardment included.
+  setActivity(kind, v) {
+    if (kind !== 'meteor' && kind !== 'volcano') return;
+    this.activity[kind] = Math.max(0, Math.min(5, Number(v) || 0));
   }
 
   // How wet the climate is, from 30% to 200% of natural.
@@ -181,6 +191,7 @@ export class Simulation {
       disasters: this.disasters.saveState(),
       weather: this.weather.saveState(),
       wetness: this.climate.wetness,
+      activity: { ...this.activity },
     };
   }
 
@@ -215,6 +226,7 @@ export class Simulation {
     }
     sim.disasters.restoreState(state.disasters);
     sim.climate.wetness = state.wetness || 1;
+    if (state.activity) sim.activity = { ...state.activity };
     sim.weather.restoreState(state.weather);
     if (land.lastDt <= WEATHER_TICK) {
       sim.weather.update(sim.years);
@@ -333,6 +345,8 @@ export class Simulation {
         precip: climate.precip,
         cooling: climate.cooling,
         wetness: climate.wetness,
+        meteors: this.activity.meteor,
+        volcanoes: this.activity.volcano,
         yearFrac: climate.yearFrac,
       },
       stats: { ...land.stats },

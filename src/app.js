@@ -344,9 +344,10 @@ function draw(f, force) {
 
 function drawSlow(f) {
   const st = f.stats;
-  if (document.activeElement !== $('wetness') && f.climate.wetness) {
-    const v = Math.round(f.climate.wetness * 100);
-    if (Number($('wetness').value) !== v) { $('wetness').value = v; $('wetness-out').textContent = `${v}%`; }
+  for (const [id, value] of [['wetness', f.climate.wetness], ['meteors', f.climate.meteors], ['volcanoes', f.climate.volcanoes]]) {
+    if (document.activeElement === $(id) || value == null) continue;
+    const v = Math.round(value * 100);
+    if (Number($(id).value) !== v) { $(id).value = v; $(`${id}-out`).textContent = `${v}%`; }
   }
   drawLife(f);
 
@@ -1040,10 +1041,17 @@ function endShaping(cancelled) {
   startEffects();
 }
 
-$('wetness').addEventListener('input', () => { $('wetness-out').textContent = `${$('wetness').value}%`; });
-$('wetness').addEventListener('change', () => {
-  if (worker) worker.postMessage({ type: 'wetness', value: Number($('wetness').value) / 100 });
-});
+// The climate and ground sliders: rain, meteors and volcanoes, as a share of
+// natural. Each is sent when let go, and saved with the world.
+const SLIDERS = {
+  wetness: (v) => ({ type: 'wetness', value: v }),
+  meteors: (v) => ({ type: 'activity', kind: 'meteor', value: v }),
+  volcanoes: (v) => ({ type: 'activity', kind: 'volcano', value: v }),
+};
+for (const [id, msg] of Object.entries(SLIDERS)) {
+  $(id).addEventListener('input', () => { $(`${id}-out`).textContent = `${$(id).value}%`; });
+  $(id).addEventListener('change', () => { if (worker) worker.postMessage(msg(Number($(id).value) / 100)); });
+}
 for (const b of document.querySelectorAll('#brush-row button')) {
   b.addEventListener('click', () => {
     brushSize = b.dataset.brush;

@@ -192,6 +192,11 @@ export function createHost(post) {
         dirty = true;
         urgent = true;
         break;
+      case 'activity':
+        sim.setActivity(msg.kind, msg.value);
+        dirty = true;
+        urgent = true;
+        break;
       case 'storm':
         sim.storm(msg.i);
         dirty = true;

@@ -340,12 +340,22 @@ export class Life {
     this.seedFreshwater(climate, years);
     if (!this.fishSeeded) { this.meanSeaT = climate.meanSeaT; this.seedFish(years); }
     this.arrived = [];
-    if (this.arrivals.some((a) => a <= years)) {
+    // Through the heavy bombardment nobody comes in: there'd be nothing to
+    // gain. When it's over, the valley is restocked from beyond.
+    if (this.hold) {
+      this.held = true;
+      this.arrivals = [];
+      this.nextArrive = null;
+    } else if (this.held) {
+      this.held = false;
+      this.arrive(years, ['plant', 'animal'], false);
+    }
+    if (!this.hold && this.arrivals.some((a) => a <= years)) {
       this.arrivals = this.arrivals.filter((a) => a > years);
       this.arrive(years, ['plant', 'animal'], false);
     }
-    if (this.nextArrive === null) this.nextArrive = years + ARRIVE_EVERY;
-    if (years >= this.nextArrive) {
+    if (this.nextArrive === null && !this.hold) this.nextArrive = years + ARRIVE_EVERY;
+    if (!this.hold && years >= this.nextArrive) {
       this.nextArrive = years + ARRIVE_EVERY * (0.25 + 1.5 * this.rng.next());
       this.trickleKind = this.trickleKind === 'plant' ? 'animal' : 'plant';
       this.arrive(years, [this.trickleKind], true);
@@ -1021,6 +1031,7 @@ export class Life {
       arrivals: this.arrivals.slice(),
       nextArrive: this.nextArrive,
       trickleKind: this.trickleKind,
+      held: !!this.held,
       lastDt: this.lastDt || 1,
       stats: { ...this.stats },
       // Registry order matters for pruning ties, so keep it.
@@ -1039,6 +1050,7 @@ export class Life {
     this.arrivals = s.arrivals ? s.arrivals.slice() : [...new Set((s.refuge || []).map((r) => r.at))];
     this.nextArrive = s.nextArrive ?? null;
     this.trickleKind = s.trickleKind || 'animal';
+    this.held = !!s.held;
     this.lastDt = s.lastDt;
     this.stats = { ...this.stats, ...s.stats };
     this.registry = new Map();

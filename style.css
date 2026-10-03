@@ -320,7 +320,7 @@ body {
 .size-row.brush-row { grid-template-columns: 1fr 1fr; }
 .wet-row {
   display: grid;
-  grid-template-columns: auto 1fr 3.4em;
+  grid-template-columns: 5.6em 1fr 3.4em;
   align-items: center;
   gap: 8px;
   min-height: 40px;

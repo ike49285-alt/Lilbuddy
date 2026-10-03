@@ -18,8 +18,8 @@ const FIRE_EVERY = 30;          // a lightning fire, on a well-vegetated valley
 const FLOOD_EVERY = 50;         // a big flood on the trunk river
 const ERUPT_EVERY = 400000;
 const IMPACT_EVERY = 3000000;
-const BOMBARD_YEARS = 1e6;      // the heavy bombardment: the world's first million years
-const BOMBARD_EVERY = 4000;     // years between catastrophes at its height; it tapers to nothing
+export const BOMBARD_YEARS = 1e6;   // the heavy bombardment: the world's first million years
+const BOMBARD_EVERY = 500;      // years between impacts or eruptions at its height; it tapers to nothing
 const MAX_FIRES = 3;            // per tick, so long ticks don't burn the world down
 const MAX_FLOODS = 1;
 const KEEP_EVENTS = 30;
@@ -101,25 +101,32 @@ export class Disasters {
       }
     }
 
+    // How active the sky and the ground are, as set on the page (1 is natural).
+    const meteors = sim.activity ? sim.activity.meteor : 1;
+    const volcanoes = sim.activity ? sim.activity.volcano : 1;
+
     // Eruptions, in the rising mountains.
-    for (let k = poisson(rng, dt / ERUPT_EVERY); k > 0; k--) {
+    for (let k = poisson(rng, (dt / ERUPT_EVERY) * volcanoes); k > 0; k--) {
       const i = this.findCell(land, 200, (j) => !land.ocean[j] && land.uplift[j] > 0.0002);
       if (i < 0) break;
       const u = rng.next();
-      this.apply(sim, 'volcano', i, u < 0.1 ? 2 : u < 0.45 ? 1 : 0);
+      const ev = this.apply(sim, 'volcano', i, u < 0.1 ? 2 : u < 0.45 ? 1 : 0);
+      if (sim.years < BOMBARD_YEARS) ev.quiet = true;    // lost in the bombardment's din
     }
 
     // Impacts, anywhere: most small, a few huge.
-    for (let k = poisson(rng, dt / IMPACT_EVERY); k > 0; k--) {
+    for (let k = poisson(rng, (dt / IMPACT_EVERY) * meteors); k > 0; k--) {
       const i = rng.int(land.N);
       const r = Math.min(8, Math.max(1, Math.pow(rng.next(), -0.6)));
-      this.apply(sim, 'meteor', i, r >= 4 ? 2 : r >= 2 ? 1 : 0, 1, r);
+      const ev = this.apply(sim, 'meteor', i, r >= 4 ? 2 : r >= 2 ? 1 : 0, 1, r);
+      if (sim.years < BOMBARD_YEARS) ev.quiet = true;
     }
 
-    // The heavy bombardment: through the first million years, one
-    // catastrophic impact or eruption after another, easing off as it goes.
-    // Each is too much like the last for a note of its own; the map shows
-    // them, and notes mark the start and the end.
+    // The heavy bombardment: through the first million years, impact after
+    // impact and eruption after eruption, most of them small, a few of them
+    // catastrophic, easing off as it goes. Each is too much like the last
+    // for a note of its own; the map shows them, and notes mark the start
+    // and the end.
     const centre = (life.LH >> 1) * life.LW + (life.LW >> 1);
     if (sim.years < BOMBARD_YEARS) {
       if (this.bombard === 'ahead') {
@@ -127,11 +134,13 @@ export class Disasters {
         this.milestone(sim, 'The heavy bombardment begins: impact after impact, eruption after eruption', centre);
       }
       const left = 1 - sim.years / BOMBARD_YEARS;
-      for (let k = poisson(rng, (dt / BOMBARD_EVERY) * left * left); k > 0; k--) {
-        const meteor = rng.next() < 0.6;
+      const mix = 0.6 * meteors + 0.4 * volcanoes;
+      for (let k = poisson(rng, (dt / BOMBARD_EVERY) * left * left * mix); k > 0; k--) {
+        const meteor = rng.next() * mix < 0.6 * meteors;
         const i = meteor ? rng.int(land.N) : this.findCell(land, 200, (j) => !land.ocean[j]);
         if (i < 0) continue;
-        const ev = this.apply(sim, meteor ? 'meteor' : 'volcano', i, 2);
+        const u = rng.next();
+        const ev = this.apply(sim, meteor ? 'meteor' : 'volcano', i, u < 0.03 ? 2 : u < 0.3 ? 1 : 0);
         ev.quiet = true;
       }
     } else if (this.bombard !== 'over') {
@@ -139,6 +148,11 @@ export class Disasters {
       this.milestone(sim, 'The heavy bombardment ends; the impacts and eruptions grow rare', centre);
     }
     this.batch = false;
+    // The ground reshaped by this step's events: the water re-routes once.
+    if (this.reshaped) {
+      this.reshaped = false;
+      land.refresh(sim.climate);
+    }
     if (this.unsettled) {
       life.settle(sim.years);
       sim.syncCover();
@@ -185,7 +199,8 @@ export class Disasters {
     ev.years = sim.years;
     if (ev.terrain) {
       this.epoch++;
-      sim.land.refresh(sim.climate);
+      if (this.batch) this.reshaped = true;
+      else sim.land.refresh(sim.climate);
     }
     if (size === 2 && (kind === 'volcano' || kind === 'meteor')) this.winter(sim, kind, ev);
     if (ev.hurt && this.batch && !ev.winter) {
