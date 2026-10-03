@@ -3,7 +3,7 @@
 A river starts as a trickle on a young mountain front and carves its valley to
 the sea over millions of years, while ice ages come and go.
 
-Time runs at a chosen rate, from a day to 100,000 years per second; each tick adapts from a day up to 1,000 years. The landscape is a standard landscape-evolution
+Time runs at a chosen rate, from ten minutes to 100,000 years per second; each tick adapts from a minute up to 1,000 years. The landscape is a standard landscape-evolution
 model: depressions are filled into lakes (priority-flood), water is routed
 downhill (D8), channels cut by the stream-power law solved implicitly
 (Braun & Willett 2013), sediment is carried downstream and dropped on fans,
@@ -33,6 +33,17 @@ then open http://localhost:8000/.
 - `src/save.js` — the continue slot in IndexedDB
 - `src/host.js`, `src/worker.js` — runs the sim off the main thread
 - `src/render.js`, `src/app.js` — the page
+
+## Water
+
+The world starts dry. Rain pools in hollows (the young foothills and
+plain are hummocky) and only spills on once a hollow is full, so the
+first network of streams has to find its way to the sea. Lakes evaporate:
+one that gets less than it loses shrinks, and if its outlet is cut down it
+drains. A crater fills over the years before it overflows, and a cone
+across the river stops it below until the lake behind it spills. Below a
+day per tick, water also takes time to travel, at river speeds, so at an
+hour a second you can watch a flood come down the valley.
 
 ## Ground
 

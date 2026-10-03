@@ -133,10 +133,11 @@ function formatTime(years, tickYears) {
   if (tickYears < 1) {
     const days = (years - year) * 365.25 + 1e-6;
     const day = Math.min(365, Math.floor(days) + 1);
-    if (tickYears >= DAY) return `${n0.format(year)} yr · day ${day}`;
+    // Two lines, so it fits beside the controls on a phone.
+    if (tickYears >= DAY) return `${n0.format(year)} yr\nday ${day}`;
     const mins = Math.floor((days - Math.floor(days)) * 1440);
     const hh = String(Math.floor(mins / 60)).padStart(2, '0'), mm = String(mins % 60).padStart(2, '0');
-    return `${n0.format(year)} yr · day ${day} · ${hh}:${mm}`;
+    return `${n0.format(year)} yr\nday ${day} ${hh}:${mm}`;
   }
   if (years < 10000) return `${n0.format(year)} yr`;
   if (years < 1e6) return `${(years / 1000).toFixed(1)} kyr`;
@@ -307,7 +308,9 @@ function draw(f, force) {
     for (const ev of f.events) onEvent(ev, f);
     f.events = [];
   }
-  $('time').textContent = formatTime(f.years, f.tickYears);
+  const clock = formatTime(f.years, f.tickYears);
+  $('time').textContent = clock;
+  $('time').classList.toggle('two', clock.includes('\n'));
   $('tick').textContent = `tick ${formatSpan(f.tickYears)}`;
   const lag = $('lag');
   if (f.paused) {

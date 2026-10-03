@@ -529,6 +529,7 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.time.two { font-size: 15px; line-height: 1.2; white-space: pre; }
 .timebar button, .timebar select {
   min-height: 44px;
   border: 1px solid var(--line);
