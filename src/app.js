@@ -1,6 +1,6 @@
 // app.js — the page: starts the worker, draws what it sends, wires the controls.
 
-import { MapRenderer, drawSpark, elevationColor, ROCK_RGB, COVER_RGB } from './render.js';
+import { MapRenderer, drawSpark, elevationColor, ROCK_RGB, COVER_RGB, LAYERS } from './render.js';
 import { saveWorld, loadWorld } from './save.js';
 import { View3D, webglAvailable } from './view3d.js';
 
@@ -88,6 +88,7 @@ function afterStart(seed) {
   paused = false;
   setPausedUI();
   sendRate();
+  worker.postMessage({ type: 'mode', mode: renderer.mode });
 }
 
 function onMessage(e) {
@@ -564,11 +565,34 @@ function showTab(name) {
 }
 for (const t of ['river', 'life']) $(`tab-${t}`).addEventListener('click', () => showTab(t));
 
+const LAYER_NAMES = { heat: 'Temperature', rain: 'Rainfall', flow: 'River flow', erode: 'Erosion' };
+const LAYER_SHORT = { heat: 'Heat', rain: 'Rain', flow: 'Flow', erode: 'Erosion' };   // fits the mode switch
 function setMode(mode) {
   renderer.mode = mode;
+  const layer = LAYERS[mode] ? mode : null;
   for (const m of ['landscape', 'species', 'ground']) $(`mode-${m}`).setAttribute('aria-pressed', mode === m ? 'true' : 'false');
+  $('mode-layers').setAttribute('aria-pressed', layer ? 'true' : 'false');
+  $('mode-layers').textContent = layer ? LAYER_SHORT[layer] : 'Layers';
+  $('mode-layers').setAttribute('aria-label', layer ? `Layer: ${LAYER_NAMES[layer]}` : 'Layers');
+  for (const b of document.querySelectorAll('#layer-menu button')) b.setAttribute('aria-checked', b.dataset.layer === layer ? 'true' : 'false');
+  // The layer's key, in the same colours.
+  $('layer-key').hidden = !layer;
+  if (layer) {
+    const L = LAYERS[layer];
+    $('layer-name').textContent = LAYER_NAMES[layer];
+    $('layer-ramp').style.background = `linear-gradient(to right, ${L.stops.map((s) => `rgb(${s[1]}, ${s[2]}, ${s[3]}) ${s[0] * 100}%`).join(', ')})`;
+    $('layer-ticks').replaceChildren(...L.ticks.map((t) => el('span', '', t)));
+  }
+  setLayerMenu(false);
+  if (worker) worker.postMessage({ type: 'mode', mode });
   if (last) draw(last, true);
 }
+function setLayerMenu(open) {
+  $('layer-menu').hidden = !open;
+  $('mode-layers').setAttribute('aria-expanded', open ? 'true' : 'false');
+}
+$('mode-layers').addEventListener('click', () => setLayerMenu($('layer-menu').hidden));
+for (const b of document.querySelectorAll('#layer-menu button')) b.addEventListener('click', () => setMode(b.dataset.layer));
 $('mode-landscape').addEventListener('click', () => setMode('landscape'));
 $('mode-species').addEventListener('click', () => setMode('species'));
 $('mode-ground').addEventListener('click', () => setMode('ground'));

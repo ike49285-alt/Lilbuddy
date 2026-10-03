@@ -203,6 +203,12 @@ export function createHost(post) {
         dirty = true;
         urgent = true;
         break;
+      case 'mode':
+        // Which colour layer the map shows, if any: only that one is sent.
+        sim.layer = ['heat', 'rain', 'flow', 'erode'].includes(msg.mode) ? msg.mode : null;
+        dirty = true;
+        urgent = true;
+        break;
       case 'seed':
         sim.seedSpecies(msg.i, msg.id, msg.kind);
         dirty = true;

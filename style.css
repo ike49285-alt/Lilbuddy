@@ -269,9 +269,38 @@ body {
   font: 600 12px/1 var(--font-display);
   letter-spacing: 0.08em;
   text-transform: uppercase;
+  white-space: nowrap;
   cursor: pointer;
 }
 .map-mode button[aria-pressed="true"] { background: #1d2827; color: #f7f8f5; }
+/* The layers menu opens above the mode switch. */
+.layer-menu {
+  position: absolute;
+  right: 8px;
+  bottom: 52px;
+  display: grid;
+  border-radius: 6px;
+  overflow: hidden;
+  box-shadow: 0 0 0 1px rgba(29, 40, 39, 0.25), 0 4px 14px rgba(0, 0, 0, 0.18);
+}
+.layer-menu[hidden] { display: none; }
+.layer-menu button {
+  min-height: 40px;
+  padding: 0 16px;
+  border: 0;
+  border-top: 1px solid rgba(29, 40, 39, 0.12);
+  background: rgba(247, 248, 245, 0.96);
+  color: #1d2827;
+  font: 600 12px/1 var(--font-display);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  text-align: left;
+  cursor: pointer;
+}
+.layer-menu button:first-child { border-top: 0; }
+.layer-menu button[aria-checked="true"] { background: #1d2827; color: #f7f8f5; }
+.layer-key[hidden] { display: none; }
+.layer-key .layer-name { margin: 0 0 6px; font: 600 12px/1 var(--font-display); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
 .map canvas { cursor: crosshair; touch-action: pan-y; }
 .map canvas.zoomed { touch-action: none; }
 /* With a brush or Dig picked, the map keeps the finger: no page scroll. */

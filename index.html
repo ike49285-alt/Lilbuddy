@@ -22,9 +22,16 @@
       <span id="phase" class="chip on-map">interglacial</span>
       <div class="north" aria-hidden="true">N<span id="north-arrow">↑</span></div>
       <div class="map-mode" role="group" aria-label="Map shows">
-        <button type="button" id="mode-landscape" aria-pressed="true">Landscape</button>
+        <button type="button" id="mode-landscape" aria-pressed="true">Land</button>
         <button type="button" id="mode-species" aria-pressed="false">Species</button>
         <button type="button" id="mode-ground" aria-pressed="false">Ground</button>
+        <button type="button" id="mode-layers" aria-pressed="false" aria-haspopup="true" aria-expanded="false">Layers</button>
+      </div>
+      <div class="layer-menu" id="layer-menu" role="menu" aria-label="Map layers" hidden>
+        <button type="button" role="menuitem" data-layer="heat">Temperature</button>
+        <button type="button" role="menuitem" data-layer="rain">Rainfall</button>
+        <button type="button" role="menuitem" data-layer="flow">River flow</button>
+        <button type="button" role="menuitem" data-layer="erode">Erosion</button>
       </div>
       <div class="zoom" role="group" aria-label="Zoom">
         <button type="button" id="zoom-in" aria-label="Zoom in" title="Zoom in">+</button>
@@ -123,6 +130,11 @@
         <div class="ticks"><span>0</span><span>500</span><span>1,000</span><span>2,000</span><span>2,900 m</span></div>
       </div>
       <ul class="ground-key" id="ground-key" aria-label="Ground key"></ul>
+      <div class="key layer-key" id="layer-key" hidden>
+        <p class="layer-name" id="layer-name"></p>
+        <div class="ramp" id="layer-ramp"></div>
+        <div class="ticks" id="layer-ticks"></div>
+      </div>
 
       <form class="seed" id="seed-form">
         <label for="seed">Seed</label>

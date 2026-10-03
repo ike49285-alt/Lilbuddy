@@ -71,6 +71,7 @@ export class Simulation {
       this.land.rainField = null;
     }
     this.land.step(this.climate, d);
+    if (this.layer === 'erode') this.trackErosion();
     const ashore = this.life.stats.firstLandAnimal;
     // Nothing comes in from beyond the valley through the bombardment.
     this.life.hold = this.years < BOMBARD_YEARS;
@@ -359,9 +360,46 @@ export class Simulation {
   }
 
   // Everything the page needs to draw one frame, as fresh transferable copies.
+  // One colour layer for the map, when the page shows one, as a byte per
+  // cell: temperature, rainfall, river flow, or how fast the ground wears.
+  layerBytes() {
+    const { land, climate } = this;
+    const { N, z, Q } = land;
+    const out = new Uint8Array(N);
+    const sea = climate.seaLevel;
+    const put = (i, v) => { out[i] = v <= 0 ? 0 : v >= 1 ? 255 : Math.round(v * 255); };
+    if (this.layer === 'heat') {
+      for (let i = 0; i < N; i++) put(i, (climate.tempAt(z[i] - sea) + 20) / 55);
+    } else if (this.layer === 'rain') {
+      const rf = land.rainField, toLife = land.toLife;
+      for (let i = 0; i < N; i++) {
+        const P = climate.precipAt(z[i]) * (rf ? rf[toLife[i]] : 1);
+        put(i, P > 0 ? Math.log10(P / 0.05) / Math.log10(60) : 0);
+      }
+    } else if (this.layer === 'flow') {
+      for (let i = 0; i < N; i++) put(i, Q[i] > 0 ? (Math.log10(Q[i]) - 5) / 5 : 0);
+    } else if (this.layer === 'erode') {
+      if (!this.erodeAvg) this.trackErosion();
+      const avg = this.erodeAvg;
+      for (let i = 0; i < N; i++) { const mm = avg[i] * 1000; put(i, mm > 0 ? (Math.log10(mm) + 2) / 3 : 0); }
+    } else return null;
+    return out;
+  }
+
+  // A running average of how fast each cell wears, in metres a year, kept
+  // while the erosion layer is showing.
+  trackErosion() {
+    const { eroded, N, lastDt } = this.land;
+    if (!this.erodeAvg) this.erodeAvg = new Float32Array(N);
+    const avg = this.erodeAvg;
+    const dt = lastDt || 1;
+    for (let i = 0; i < N; i++) avg[i] += (Math.max(0, eroded[i]) / dt - avg[i]) * 0.15;
+  }
+
   frame(selectedId) {
     const { land, climate } = this;
     return {
+      layer: this.layer ? this.layerBytes() : null,
       W: land.W,
       H: land.H,
       years: this.years,
@@ -422,6 +460,7 @@ export function transferList(frame) {
   const L = frame.life;
   const list = [frame.z.buffer, frame.Q.buffer, frame.rec.buffer, frame.ocean.buffer, frame.rock.buffer, frame.ground.buffer,
     ...(frame.cloud ? [frame.cloud.buffer] : []),
+    ...(frame.layer ? [frame.layer.buffer] : []),
     frame.lake.buffer, frame.ice.buffer, frame.snow.buffer, frame.history.sea.buffer, frame.history.mouthQ.buffer,
     L.aqua.buffer, L.veg.buffer, L.vegC.buffer, L.rgb.buffer, L.fishes.buffer, L.herds.buffer];
   if (L.selected) list.push(L.selected.buffer);

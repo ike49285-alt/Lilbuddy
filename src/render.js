@@ -24,6 +24,26 @@ const GOLD = [204, 150, 46], RUST = [178, 82, 40];
 // more the deeper it lies.
 export const ROCK_RGB = [[200, 168, 162], [198, 132, 96], [110, 120, 136], [228, 220, 194], [56, 54, 58]];
 export const COVER_RGB = [null, [232, 210, 154], [124, 92, 62], [158, 154, 148]];
+
+// Colour ramps for the map's layers, low to high: [position 0–1, r, g, b].
+export const LAYERS = {
+  heat: { stops: [[0, 40, 70, 160], [0.36, 120, 180, 230], [0.45, 240, 244, 246], [0.65, 250, 200, 110], [1, 190, 40, 30]], ticks: ['−20', '0', '15', '35 °C'] },
+  rain: { stops: [[0, 214, 190, 140], [0.4, 150, 200, 160], [0.7, 60, 150, 170], [1, 30, 50, 120]], ticks: ['0.05', '0.3', '1', '3 m/yr'] },
+  flow: { stops: [[0, 44, 48, 56], [0.35, 70, 90, 110], [0.6, 60, 160, 210], [1, 190, 250, 255]], ticks: ['0.003', '0.3', '30', '3,000 m³/s'] },
+  erode: { stops: [[0, 120, 124, 128], [0.4, 200, 170, 110], [0.75, 230, 110, 40], [1, 170, 20, 20]], ticks: ['0.01', '0.1', '1', '10 mm/yr'] },
+};
+const LAYER_LUT = {};
+for (const [k, L] of Object.entries(LAYERS)) {
+  const lut = new Uint8ClampedArray(256 * 3);
+  for (let v = 0; v < 256; v++) {
+    const t = v / 255, s = L.stops;
+    let a = s[0], b = s[s.length - 1];
+    for (let j = 0; j < s.length - 1; j++) if (t >= s[j][0] && t <= s[j + 1][0]) { a = s[j]; b = s[j + 1]; break; }
+    const u = b[0] > a[0] ? (t - a[0]) / (b[0] - a[0]) : 0;
+    for (let c = 0; c < 3; c++) lut[v * 3 + c] = a[c + 1] + (b[c + 1] - a[c + 1]) * u;
+  }
+  LAYER_LUT[k] = lut;
+}
 // Sea depth (metres below sea level).
 const SEA = [
   [0, 98, 156, 178], [40, 66, 124, 158], [140, 42, 94, 132], [600, 24, 60, 96], [1800, 14, 36, 64],
@@ -274,6 +294,8 @@ export class MapRenderer {
     const lf = f.life;
     const speciesMode = this.mode === 'species';
     const groundMode = this.mode === 'ground';
+    const layerLut = f.layer ? LAYER_LUT[this.mode] : null;
+    const layer = layerLut ? f.layer : null;
     const { rock, ground } = f;
     const sel = lf.selected;
     const selRgb = this.selectedRgb;
@@ -305,7 +327,10 @@ export class MapRenderer {
         r += (BLOOM[0] - r) * a; g += (BLOOM[1] - g) * a; b += (BLOOM[2] - b) * a;
       } else {
         const shade = SH[i];
-        if (groundMode && !lake[i]) {
+        if (layer) {
+          const v = layer[i] * 3;
+          r = layerLut[v] * shade; g = layerLut[v + 1] * shade; b = layerLut[v + 2] * shade;
+        } else if (groundMode && !lake[i]) {
           const rc = ROCK_RGB[rock[i]];
           r = rc[0]; g = rc[1]; b = rc[2];
           const gk = ground[i] >> 6;
