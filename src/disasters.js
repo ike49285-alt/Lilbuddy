@@ -87,8 +87,10 @@ export class Disasters {
       for (let k = 0; k < n; k++) {
         const i = this.findCell(land, 200, (j) => !land.ocean[j] && !land.lake[j] && land.Q[j] >= 4e7);
         if (i < 0) break;
+        // Floods are so common that a note for each would bury every other
+        // event; they show on the map only.
         const ev = this.apply(sim, 'flood', i, rng.chance(0.15) ? 1 : 0);
-        if (dt > 5 && ev.size === 'small') ev.quiet = true;
+        ev.quiet = true;
       }
     }
 
