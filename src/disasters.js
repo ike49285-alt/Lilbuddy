@@ -77,8 +77,9 @@ export class Disasters {
       for (let k = 0; k < n; k++) {
         const i = this.findCell(land, 30, (j) => !land.ocean[j] && !land.lake[j] && land.cover[j] > 0.25);
         if (i < 0) break;
+        // Like floods, fires are too common for a note each: map only.
         const ev = this.apply(sim, 'lightning', i, rng.chance(0.1) ? 1 : 0, dry);
-        if (ev && dt > 1 && (!ev.cells || ev.cells.length < 60)) ev.quiet = true;
+        ev.quiet = true;
       }
     }
 
