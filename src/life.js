@@ -81,6 +81,7 @@ export class Life {
     this.zMax = new Float32Array(NL);
     this.fertSum = new Float32Array(NL);
     this.erodeSum = new Float32Array(NL);
+    this.soilSum = new Float32Array(NL);    // loose cover on dry land, metres, capped
     // Realm biomass totals per size class, for crowding.
     this.bFresh = [new Float32Array(NL), new Float32Array(NL)];
     this.bSea = [new Float32Array(NL), new Float32Array(NL)];
@@ -116,7 +117,7 @@ export class Life {
 
     this.species = [];      // living, in id order
     this.refuge = [];       // { id, at }: wiped out here by a winter, sheltering at sea until year `at`
-    this.returned = [];     // species that came back from the sea this step
+    this.returned = [];     // { name, at }: species that came back from the sea this step, and a life cell they landed in
     this.registry = new Map();
     this.nextId = 1;
     this.light = 0.8;
@@ -129,9 +130,9 @@ export class Life {
   // --- environment ---------------------------------------------------------
 
   sense(land, climate) {
-    const { NL, toLife, count, zSum, zMin, zMax, fertSum, erodeSum } = this;
+    const { NL, toLife, count, zSum, zMin, zMax, fertSum, erodeSum, soilSum } = this;
     const { sea, fresh, landF, ice, snow, temp, tempMean, nutFresh, nutSea, nutLand, barrier } = this;
-    count.fill(0); zSum.fill(0); fertSum.fill(0); erodeSum.fill(0);
+    count.fill(0); zSum.fill(0); fertSum.fill(0); erodeSum.fill(0); soilSum.fill(0);
     sea.fill(0); fresh.fill(0); landF.fill(0); ice.fill(0); snow.fill(0); barrier.fill(0);
     zMin.fill(Infinity); zMax.fill(-Infinity);
     for (let i = 0; i < land.N; i++) {
@@ -143,7 +144,7 @@ export class Life {
       if (z > zMax[c]) zMax[c] = z;
       if (land.ocean[i]) { sea[c]++; continue; }
       if (land.lake[i] || land.Q[i] >= CHANNEL_Q) fresh[c]++;
-      else landF[c]++;
+      else { landF[c]++; soilSum[c] += Math.min(2, land.loose[i]); }
       if (land.Q[i] >= BIG_RIVER_Q) barrier[c] = 1;
       if (land.ice[i]) ice[c]++;
       if (land.snow[i] > 0.02) snow[c]++;
@@ -168,7 +169,10 @@ export class Life {
       // Land: wet and flat with fresh soil is best; steep, fast-eroding
       // slopes hold little.
       const relief = (zMax[c] - zMin[c]) / (2 * CELL_M);
-      const soil = Math.max(0.15, 1 - Math.min(1, relief / 0.35) * 0.7) * (1 + Math.min(0.4, fert * 3));
+      // Plants need something to root in: bare rock holds little.
+      const soilM = landF[c] > 0 ? soilSum[c] / (landF[c] * n) : 0;
+      const soil = Math.max(0.15, 1 - Math.min(1, relief / 0.35) * 0.7) * (1 + Math.min(0.4, fert * 3))
+        * (0.6 + 0.4 * Math.min(1, soilM / 0.8));
       const wet = Math.min(1, climate.meanPrecip * (1 + Math.max(0, above) / 1400) / 1.1);
       const erosionPerYr = erodeSum[c] / n / dtHint;
       const stable = 1 - Math.min(0.8, erosionPerYr * 400);
@@ -796,12 +800,12 @@ export class Life {
       if (years < r.at) { waiting.push(r); continue; }
       const where = realmOf(sp.traits);
       const N = new Float32Array(NL);
-      let cells = 0;
+      let cells = 0, first = -1;
       for (let c = 0; c < NL; c++) {
         const here = where === 'sea' ? sea[c] > 0.5 && this.coastal(c)
           : where === 'fresh' ? fresh[c] > 0.1 && (sea[c] > 0 || this.coastal(c))
             : landF[c] > 0.5 && nearSea(c);
-        if (here) { N[c] = 0.03; cells++; }
+        if (here) { N[c] = 0.03; cells++; if (first < 0) first = c; }
       }
       sp.sheltered = false;
       if (!cells) continue;     // nowhere to land: lost after all
@@ -812,7 +816,7 @@ export class Life {
       sp.isolated = false;
       sp.returnedAt = years;
       this.species.push(sp);
-      this.returned.push(sp);
+      this.returned.push({ name: sp.name, at: first });
     }
     this.refuge = waiting;
     if (this.returned.length) {

@@ -7,7 +7,7 @@
 // fertile ash. The biggest eruptions and impacts also chill the climate for a
 // few years and wipe out the species least able to take the cold.
 
-import { CELL_M } from './terrain.js';
+import { CELL_M, ROCKS, BASALT } from './terrain.js';
 import { realms } from './species.js';
 
 export const DISASTER_KINDS = ['flood', 'lightning', 'volcano', 'meteor'];
@@ -249,8 +249,9 @@ export class Disasters {
     }
     const silt = [0.05, 0.12, 0.3][size];
     const scour = [0.1, 0.3, 0.8][size];
-    for (const j of wet) { z[j] += silt; fert[j] += 0.05 + 0.03 * size; }
-    for (const ch of channel) z[ch] -= scour;
+    const { loose } = land;
+    for (const j of wet) { z[j] += silt; loose[j] += silt; fert[j] += 0.05 + 0.03 * size; }
+    for (const ch of channel) { z[ch] -= scour; loose[ch] = Math.max(0, loose[ch] - scour); }
     this.hurt(sim, wet, new Float32Array(wet.length).fill(0.7), true);
     const area = wet.length * CELL_KM2;
     const ev = this.place(land, wet.length ? wet : channel, wet.concat(channel));
@@ -299,14 +300,26 @@ export class Disasters {
   // further out, killing plants but leaving the soil richer.
   volcano(sim, i, size) {
     const { land, climate } = sim;
-    const { W, z, fert } = land;
+    const { W, z, fert, loose, rock, kfac } = land;
     const h = [150, 600, 1500][size] * this.rng.range(0.8, 1.2);
     const r = [2, 3.5, 6][size];
     const lava = [], ash = [], ashF = [];
     this.around(land, i, 3 * r, (j, d) => {
       const q = (d * d) / (r * r);
-      z[j] += h * Math.exp(-q) - 0.12 * h * Math.exp(-(d * d) / (0.35 * r) ** 2);
+      const dz = h * Math.exp(-q) - 0.12 * h * Math.exp(-(d * d) / (0.35 * r) ** 2);
+      z[j] += dz;
       fert[j] += 0.12 * Math.exp(-(d * d) / (1.5 * r) ** 2);
+      // Lava flows build the cone in basalt, burying whatever was there;
+      // further out, the ash falls as a fresh loose layer.
+      if (dz > 20) {
+        rock[j] = BASALT;
+        kfac[j] = ROCKS[BASALT].k;
+        loose[j] = 0;
+      } else {
+        const ashM = 2 * Math.exp(-(d * d) / (2 * r) ** 2);
+        z[j] += ashM;
+        loose[j] += ashM;
+      }
       if (d <= r) lava.push(j);
       else { ash.push(j); ashF.push(0.6 * Math.exp(-((d - r) * (d - r)) / (r * r))); }
     });
@@ -324,14 +337,18 @@ export class Disasters {
   // within twice its radius survives.
   meteor(sim, i, size, radius) {
     const { land } = sim;
-    const { W, z } = land;
+    const { W, z, loose } = land;
     const r = radius || [1.5, 3, 6][size];
     const D = 0.3 * r * CELL_M;
     const rim = 0.25 * D;
     const dead = [];
     this.around(land, i, 3 * r, (j, d) => {
       const q = d / r;
-      z[j] += q < 1 ? -D * (1 - q * q) + rim * q * q : rim * Math.exp(-(((d - r) / (0.5 * r)) ** 2));
+      const dz = q < 1 ? -D * (1 - q * q) + rim * q * q : rim * Math.exp(-(((d - r) / (0.5 * r)) ** 2));
+      z[j] += dz;
+      // The blast takes the cover first, then the rock; what it throws out
+      // lands as a rim of shattered rubble.
+      loose[j] = dz >= 0 ? loose[j] + dz : Math.max(0, loose[j] + dz);
       if (d <= 2 * r) dead.push(j);
     });
     this.hurt(sim, dead, new Float32Array(dead.length).fill(1), false);

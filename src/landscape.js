@@ -8,8 +8,16 @@
 // downstream and dropped where the river loses the power to carry it: on
 // fans at the mountain front, across the floodplain, in lakes, and at the
 // mouth, where it builds the delta.
+//
+// The ground is bedrock under a layer of loose cover (soil, sand, silt,
+// scree). Bedrock wears down at its own rate, slow for granite and faster
+// for shale. Loose cover is picked up as fast as the water can carry it, so
+// a sandy gully cuts in days while granite barely moves in a lifetime.
+// Whatever settles out adds to the cover, and bare rock slowly weathers into
+// new soil. (Cover doesn't shield the rock under it: a thin fresh deposit
+// would otherwise stall a river at short ticks but not long ones.)
 
-import { CELL_M } from './terrain.js';
+import { CELL_M, ROCKS } from './terrain.js';
 
 export const MAX_STEP_YEARS = 1000;   // the step the model was tuned at; the host never asks for more
 
@@ -34,6 +42,11 @@ const FILL_EPS = 1e-3;          // metres of gradient imposed across filled lake
 const LAKE_MIN_DEPTH = 0.75;    // metres of standing water before a cell counts as lake
 const SHELF_SPILL_HOPS = 48;
 const MAX_UPLIFT_Z = 3600;       // uplift fades out as a range approaches this height
+const LOOSE_K = 5000;            // loose cover erodes this many times the base rate (≈ 20,000 × granite)
+const LOOSE_Q = CHANNEL_Q / 4; // m³/yr: in deep loose sand, smaller flows already cut a gully
+const DEEP_LOOSE_M = 3;          // cover deeper than this is sand laid by water, not hillside soil
+const SQRT_LOOSE_Q = Math.sqrt(LOOSE_Q);
+const SOIL_DEPTH_M = 0.5;        // soil production falls off with depth on this scale
 const MOUTH_SETTLE = 0.55;      // fraction of sediment reaching the sea that settles near the mouth; the fines go offshore
 
 // Eight neighbours: dx, dy, distance factor.
@@ -49,7 +62,9 @@ export class Landscape {
     this.z = terrain.z;
     this.z0 = Float32Array.from(terrain.z);
     this.uplift = terrain.uplift;
-    this.kfac = terrain.kfac;
+    this.kfac = terrain.kfac;             // bedrock erodibility, from the rock type
+    this.rock = terrain.rock;             // bedrock type, an index into ROCKS
+    this.loose = terrain.loose;           // metres of loose cover; the bedrock top is z − loose
 
     this.filled = new Float64Array(N);
     this.rec = new Int32Array(N);
@@ -68,6 +83,7 @@ export class Landscape {
     this.share = new Float64Array(8);
     this.basin = new Int32Array(N);
     this.tmp = new Float64Array(N);
+    this.slid = new Uint8Array(N);        // cells where a slope failed this step
 
     // Priority-flood heap.
     this.heap = new Int32Array(N);
@@ -117,6 +133,7 @@ export class Landscape {
     this.erode(climate, dt);
     this.transport(climate.seaLevel, dt);
     this.diffuse(dt);
+    this.weather(dt);
     this.measure(climate);
   }
 
@@ -306,7 +323,7 @@ export class Landscape {
   // Carry the eroded rock downstream, upstream first. Drop what the river
   // can't carry; lakes trap nearly everything; the sea takes the rest.
   transport(sea, dt) {
-    const { W, N, z, filled, rec, stack, Q, qs, eroded, ocean, fert, kfac } = this;
+    const { W, N, z, filled, rec, stack, Q, qs, eroded, ocean, fert, loose, ice } = this;
     const area = CELL_M * CELL_M;
     qs.fill(0);
     const keep = Math.exp(-dt / FERT_MEMORY_YR);
@@ -324,11 +341,38 @@ export class Landscape {
         const dist = (dx && dy ? Math.SQRT2 : 1) * CELL_M;
         const zr = ocean[r] ? sea : z[r];
         const slope = Math.max(0, z[i] - zr) / dist;
-        const cap = TRANSPORT * K_FLUVIAL * kfac[i] * Math.sqrt(Q[i]) * slope * dt * area;
-        if (qs[i] > cap) dep = Math.min((qs[i] - cap) * DEPOSIT_RATE, MAX_DEPOSIT_PER_YR * dt * area);
+        const sq = Math.sqrt(Q[i]);
+        const cap = TRANSPORT * K_FLUVIAL * sq * slope * dt * area;
+        // Loose cover goes as fast as the water can take it: limited by how
+        // quickly the flow scours it, how much there is, and how much more
+        // the water can carry. Roots hold it.
+        // Thin soil on a hillside stays put under sheetwash, as rock does;
+        // only a channel takes it. Deep sand gullies at smaller flows.
+        const power = ice[i] ? sq : sq - (loose[i] > DEEP_LOOSE_M ? SQRT_LOOSE_Q : SQRT_CHANNEL_Q);
+        if (power > 0 && loose[i] > 0 && cap > qs[i]) {
+          const scour = LOOSE_K * K_FLUVIAL * power * slope * dt * (1 - 0.8 * this.cover[i]);
+          // Never below the next cell down (or the water in it): scouring
+          // sand doesn't dig pits.
+          const floor = this.lake[r] ? filled[r] : zr;
+          const pick = Math.min(loose[i], scour, (cap - qs[i]) / area, Math.max(0, z[i] - floor - FILL_EPS));
+          if (pick > 0) {
+            loose[i] -= pick;
+            z[i] -= pick;
+            eroded[i] += pick;
+            qs[i] += pick * area;
+          }
+        }
+        if (qs[i] > cap) {
+          dep = Math.min((qs[i] - cap) * DEPOSIT_RATE, MAX_DEPOSIT_PER_YR * dt * area);
+          // A deposit never builds above the channel feeding it, so the river
+          // doesn't dam itself into a string of ponds.
+          const d = this.maxDonor[i];
+          if (d >= 0) dep = Math.min(dep, Math.max(0, z[d] - z[i] - FILL_EPS) * area);
+        }
       }
       if (dep > 0) {
         z[i] += dep / area;
+        loose[i] += dep / area;
         eroded[i] -= dep / area;
         qs[i] -= dep;
       }
@@ -348,6 +392,7 @@ export class Landscape {
         if (room > 0) {
           const put = Math.min(room, remaining);
           z[c] += put / area;
+          loose[c] += put / area;
           remaining -= put;
         }
         if (remaining <= 0) break;
@@ -372,7 +417,7 @@ export class Landscape {
   // Hillslopes creep, over-steep slopes slide, and the sea floor smooths out
   // the delta front.
   diffuse(dt) {
-    const { W, H, z, ocean, tmp } = this;
+    const { W, H, z, ocean, tmp, slid } = this;
     const kHill = Math.min(MAX_SMOOTH, HILL_DIFF_PER_YR * dt);
     const kSea = Math.min(MAX_SMOOTH, MARINE_DIFF_PER_YR * dt);
     const kSlide = Math.min(MAX_SMOOTH, SLIDE_PER_YR * dt);
@@ -386,18 +431,42 @@ export class Landscape {
         if (y < H - 1) { sum += z[i + W]; n++; }
         const held = 1 - VEG_HOLD * this.cover[i];
         let k = ocean[i] ? kSea : kHill * held;
+        slid[i] = 0;
         if (!ocean[i]) {
           let steep = 0;
           if (x > 0) steep = Math.max(steep, Math.abs(z[i] - z[i - 1]));
           if (x < W - 1) steep = Math.max(steep, Math.abs(z[i] - z[i + 1]));
           if (y > 0) steep = Math.max(steep, Math.abs(z[i] - z[i - W]));
           if (y < H - 1) steep = Math.max(steep, Math.abs(z[i] - z[i + W]));
-          if (steep > SLIDE_SLOPE * (1 + 0.6 * this.cover[i]) * CELL_M) k = Math.max(k, kSlide);
+          if (steep > SLIDE_SLOPE * (1 + 0.6 * this.cover[i]) * CELL_M && kSlide > k) { k = kSlide; slid[i] = 1; }
         }
         tmp[i] = z[i] + k * (sum / n - z[i]);
       }
     }
+    // What creeps in settles at the foot of the slope as cover. On a
+    // creeping slope the soil rides on top while the rock beneath wears down
+    // and turns into more soil, so the soil stays; where the slope fails,
+    // the slide takes the soil first. On the sea floor it's all sediment.
+    const { loose } = this;
+    for (let i = 0; i < z.length; i++) {
+      const d = tmp[i] - z[i];
+      if (d >= 0) loose[i] += d;
+      else if (slid[i] || ocean[i]) loose[i] = Math.max(0, loose[i] + d);
+    }
     z.set(tmp);
+  }
+
+  // Bare rock weathers into soil, quickly at first and ever more slowly as
+  // the soil above it thickens: h grows as dh/dt = P·exp(−h/h0), integrated
+  // exactly over the step. Not under ice or the sea.
+  weather(dt) {
+    const { N, loose, rock, ocean, ice } = this;
+    for (let i = 0; i < N; i++) {
+      // Under more than a few metres, nothing reaches the rock to weather it.
+      if (ocean[i] || ice[i] || loose[i] > 16 * SOIL_DEPTH_M) continue;
+      const P = ROCKS[rock[i]].soil;
+      loose[i] = SOIL_DEPTH_M * Math.log(Math.exp(loose[i] / SOIL_DEPTH_M) + (P * dt) / SOIL_DEPTH_M);
+    }
   }
 
   measure(climate) {

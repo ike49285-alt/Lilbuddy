@@ -17,6 +17,11 @@ const LAND = [
 const MOSS = [150, 162, 88];
 const FOREST = [44, 92, 50];
 const BLOOM = [52, 138, 104];
+// Ground mode: bedrock (granite, sandstone, shale, limestone, basalt) and
+// loose cover (sand and silt, soil, scree), which veils the rock under it
+// more the deeper it lies.
+export const ROCK_RGB = [[200, 168, 162], [198, 132, 96], [110, 120, 136], [228, 220, 194], [56, 54, 58]];
+export const COVER_RGB = [null, [232, 210, 154], [124, 92, 62], [158, 154, 148]];
 // Sea depth (metres below sea level).
 const SEA = [
   [0, 98, 156, 178], [40, 66, 124, 158], [140, 42, 94, 132], [600, 24, 60, 96], [1800, 14, 36, 64],
@@ -228,6 +233,8 @@ export class MapRenderer {
     const seasonal = f.climate.seasonal;
     const lf = f.life;
     const speciesMode = this.mode === 'species';
+    const groundMode = this.mode === 'ground';
+    const { rock, ground } = f;
     const sel = lf.selected;
     const selRgb = this.selectedRgb;
     if (!this.image || this.image.width !== W || this.image.height !== H) {
@@ -256,7 +263,17 @@ export class MapRenderer {
         r += (BLOOM[0] - r) * a; g += (BLOOM[1] - g) * a; b += (BLOOM[2] - b) * a;
       } else {
         const shade = SH[i];
-        if (ice[i]) {
+        if (groundMode && !lake[i]) {
+          const rc = ROCK_RGB[rock[i]];
+          r = rc[0]; g = rc[1]; b = rc[2];
+          const gk = ground[i] >> 6;
+          if (gk) {
+            const cc = COVER_RGB[gk];
+            const a = Math.min(1, 0.45 + 0.15 * ((ground[i] & 63) / 4));
+            r += (cc[0] - r) * a; g += (cc[1] - g) * a; b += (cc[2] - b) * a;
+          }
+          r *= shade; g *= shade; b *= shade;
+        } else if (ice[i]) {
           r = 226 * shade; g = 234 * shade; b = 240 * shade;
         } else if (lake[i]) {
           // A lake freezes over when it's well below zero up there.
@@ -348,7 +365,7 @@ export class MapRenderer {
       const k = v.zoom / this.zoom;
       ctx.drawImage(this.rivers, (v.x0 - this.x0) * sx, (v.y0 - this.y0) * (h / vh), w * k, h * k);
     }
-    if (this.mode !== 'species' && f.life.fishes) this.drawSpecks(f, ctx, w);
+    if (this.mode === 'landscape' && f.life.fishes) this.drawSpecks(f, ctx, w);
   }
 
   // Animals as specks where they're dense: silver shoals in the water, dark

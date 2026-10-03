@@ -37,6 +37,7 @@
       <div class="map-mode" role="group" aria-label="Map shows">
         <button type="button" id="mode-landscape" aria-pressed="true">Landscape</button>
         <button type="button" id="mode-species" aria-pressed="false">Species</button>
+        <button type="button" id="mode-ground" aria-pressed="false">Ground</button>
       </div>
       <div class="zoom" role="group" aria-label="Zoom">
         <button type="button" id="zoom-in" aria-label="Zoom in" title="Zoom in">+</button>
@@ -51,6 +52,7 @@
           <span id="inspect-title">Here</span>
           <button type="button" id="inspect-close" class="close" aria-label="Close">×</button>
         </div>
+        <p id="inspect-ground" class="ground-line"></p>
         <dl id="inspect-facts" class="facts"></dl>
         <ul id="inspect-life" class="here-life"></ul>
       </div>
@@ -91,6 +93,7 @@
         <div class="ramp" id="ramp"></div>
         <div class="ticks"><span>0</span><span>500</span><span>1,000</span><span>2,000</span><span>2,900 m</span></div>
       </div>
+      <ul class="ground-key" id="ground-key" aria-label="Ground key"></ul>
 
       <form class="seed" id="seed-form">
         <label for="seed">Seed</label>

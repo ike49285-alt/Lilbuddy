@@ -1,6 +1,6 @@
 // app.js — the page: starts the worker, draws what it sends, wires the controls.
 
-import { MapRenderer, drawSpark, elevationColor } from './render.js';
+import { MapRenderer, drawSpark, elevationColor, ROCK_RGB, COVER_RGB } from './render.js';
 import { saveWorld, loadWorld } from './save.js';
 
 const CELL_KM2 = 0.25;
@@ -575,12 +575,26 @@ for (const t of ['river', 'life', 'tree']) $(`tab-${t}`).addEventListener('click
 
 function setMode(mode) {
   renderer.mode = mode;
-  $('mode-landscape').setAttribute('aria-pressed', mode === 'landscape' ? 'true' : 'false');
-  $('mode-species').setAttribute('aria-pressed', mode === 'species' ? 'true' : 'false');
+  for (const m of ['landscape', 'species', 'ground']) $(`mode-${m}`).setAttribute('aria-pressed', mode === m ? 'true' : 'false');
   if (last) draw(last, true);
 }
 $('mode-landscape').addEventListener('click', () => setMode('landscape'));
 $('mode-species').addEventListener('click', () => setMode('species'));
+$('mode-ground').addEventListener('click', () => setMode('ground'));
+
+// The ground key, in the map's own colours.
+{
+  const rgb = (c) => `rgb(${c[0]}, ${c[1]}, ${c[2]})`;
+  const items = [['Granite', ROCK_RGB[0]], ['Sandstone', ROCK_RGB[1]], ['Shale', ROCK_RGB[2]], ['Limestone', ROCK_RGB[3]],
+    ['Basalt', ROCK_RGB[4]], ['Sand & silt', COVER_RGB[1]], ['Soil', COVER_RGB[2]], ['Scree', COVER_RGB[3]]];
+  for (const [name, c] of items) {
+    const li = el('li');
+    const sw = el('span', 'swatch');
+    sw.style.background = rgb(c);
+    li.append(sw, el('span', '', name));
+    $('ground-key').append(li);
+  }
+}
 
 // --- zoom and pan -------------------------------------------------------------
 
@@ -870,6 +884,8 @@ function renderInspect(info) {
   $('inspect').hidden = false;
   const where = info.water === 'sea' ? 'Sea' : info.water === 'lake' ? 'Lake' : info.water === 'river' ? 'River' : 'Land';
   $('inspect-title').textContent = info.water === 'sea' ? `${where}, ${n0.format(-info.elevation)} m deep` : `${where}, ${n0.format(info.elevation)} m up`;
+  const gt = info.ground.text;
+  $('inspect-ground').textContent = info.water === 'sea' || info.water === 'lake' ? `Bed: ${gt}` : `Ground: ${gt}`;
   const facts = $('inspect-facts');
   facts.innerHTML = '';
   const fact = (k, v) => { const d = el('div'); d.append(el('dt', '', k), el('dd', '', v)); facts.append(d); };

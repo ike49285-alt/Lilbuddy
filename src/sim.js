@@ -1,7 +1,7 @@
 // sim.js — one world: a seed, a climate, a landscape, and a clock.
 
 import { makeRng, hashArrays } from './rng.js';
-import { generateTerrain } from './terrain.js';
+import { generateTerrain, ROCKS, CELL_M } from './terrain.js';
 import { Climate, SEASONAL_TICK } from './climate.js';
 import { Landscape, MAX_STEP_YEARS } from './landscape.js';
 import { Life } from './life.js';
@@ -52,9 +52,8 @@ export class Simulation {
     const st = this.life.stats;
     const back = this.life.returned;
     if (back.length) {
-      const names = back.slice(0, 3).map((sp) => sp.name).join(', ') + (back.length > 3 ? '…' : '');
-      const at = back[0].N.findIndex((n) => n > 0);
-      this.disasters.milestone(this, `${back.length === 1 ? 'A species returns' : `${back.length} species return`} from the sea: ${names}`, Math.max(0, at));
+      const names = back.slice(0, 3).map((r) => r.name).join(', ') + (back.length > 3 ? '…' : '');
+      this.disasters.milestone(this, `${back.length === 1 ? 'A species returns' : `${back.length} species return`} from the sea: ${names}`, back[0].at);
     }
     if (ashore === null && st.firstLandAnimal !== null) {
       this.disasters.milestone(this, `The first animal walks out of the water: ${st.firstLandAnimalName}`, st.firstLandAnimalAt);
@@ -113,7 +112,10 @@ export class Simulation {
         sea: this.history.sea.slice(), mouthQ: this.history.mouthQ.slice(),
         count: this.history.count, head: this.history.head,
       },
-      land: { z: land.z.slice(), fert: land.fert.slice(), snow: land.snow.slice(), cover: land.cover.slice() },
+      land: {
+        z: land.z.slice(), fert: land.fert.slice(), snow: land.snow.slice(), cover: land.cover.slice(),
+        loose: land.loose.slice(), rock: land.rock.slice(),
+      },
       life: life.saveState(),
       disasters: this.disasters.saveState(),
     };
@@ -133,6 +135,13 @@ export class Simulation {
     land.fert.set(state.land.fert);
     land.snow.set(state.land.snow);
     land.cover.set(state.land.cover);
+    // Worlds saved before ground types keep the cover and rock their seed
+    // starts with.
+    if (state.land.loose) land.loose.set(state.land.loose);
+    if (state.land.rock) {
+      land.rock.set(state.land.rock);
+      for (let i = 0; i < land.N; i++) land.kfac[i] = ROCKS[land.rock[i]].k;
+    }
     sim.disasters.restoreState(state.disasters);
     sim.sentEvent = sim.disasters.nextId - 1;
     sim.climate.cooling = sim.disasters.coolingAt(sim.years);
@@ -146,7 +155,7 @@ export class Simulation {
   // A digest of the evolving state, for checking that a restored world
   // carries on exactly as the original would have.
   stateHash() {
-    const arrays = [this.land.z, this.land.snow, this.land.cover];
+    const arrays = [this.land.z, this.land.snow, this.land.cover, this.land.loose];
     for (const sp of this.life.species) arrays.push(sp.N);
     return hashArrays(arrays);
   }
@@ -167,6 +176,7 @@ export class Simulation {
       snow: land.snow[i],
       ice: !!land.ice[i],
       cover: life.cover[c],
+      ground: this.groundAt(i),
       species: life.at(c),
     };
   }
@@ -176,6 +186,45 @@ export class Simulation {
     const evs = this.disasters.since(this.sentEvent);
     if (evs.length) this.sentEvent = evs[evs.length - 1].id;
     return evs.map((e) => ({ ...e, cells: e.cells ? e.cells.slice() : undefined }));
+  }
+
+  // What's on top at a landscape cell: 0 bare rock, 1 sand and silt laid by
+  // water, 2 soil weathered in place, 3 scree on steep ground.
+  groundKind(i) {
+    const { W, H, z, loose, fert } = this.land;
+    if (loose[i] < 0.3) return 0;
+    const x = i % W, y = (i / W) | 0;
+    let steep = 0;
+    if (x > 0) steep = Math.max(steep, Math.abs(z[i] - z[i - 1]));
+    if (x < W - 1) steep = Math.max(steep, Math.abs(z[i] - z[i + 1]));
+    if (y > 0) steep = Math.max(steep, Math.abs(z[i] - z[i - W]));
+    if (y < H - 1) steep = Math.max(steep, Math.abs(z[i] - z[i + W]));
+    if (steep / CELL_M > 0.3) return 3;
+    if (loose[i] > 3 || fert[i] > 0.003) return 1;
+    return 2;
+  }
+
+  groundAt(i) {
+    const { loose, rock } = this.land;
+    const kind = this.groundKind(i);
+    const rockName = ROCKS[rock[i]].name;
+    if (kind === 0) return { rock: rockName, loose: loose[i], kind: 'bare rock', text: `bare ${rockName}` };
+    const name = ['', 'sand and silt', 'soil', 'scree'][kind];
+    const m = loose[i];
+    const depth = m >= 10 ? `${Math.round(m)} m` : m >= 1 ? `${m.toFixed(1)} m` : `${Math.round(m * 100)} cm`;
+    return { rock: rockName, loose: m, kind: name, text: `${depth} of ${name} over ${rockName}` };
+  }
+
+  // Ground for drawing: the cover's kind in the top two bits and its depth
+  // in the rest, in quarter metres up to 15¾ m.
+  groundBytes() {
+    const { N, loose } = this.land;
+    const out = new Uint8Array(N);
+    for (let i = 0; i < N; i++) {
+      const d = Math.min(63, Math.round(loose[i] * 4));
+      out[i] = (this.groundKind(i) << 6) | d;
+    }
+    return out;
   }
 
   // Everything the page needs to draw one frame, as fresh transferable copies.
@@ -192,6 +241,8 @@ export class Simulation {
       lake: land.lake.slice(),
       ice: land.ice.slice(),
       snow: snowBytes(land.snow),
+      rock: land.rock.slice(),
+      ground: this.groundBytes(),
       seaLevel: climate.seaLevel,
       climate: {
         label: climate.label(),
@@ -225,14 +276,14 @@ function snowBytes(snow) {
 
 export function stateTransferList(state) {
   const list = [state.history.sea.buffer, state.history.mouthQ.buffer, state.land.z.buffer,
-    state.land.fert.buffer, state.land.snow.buffer, state.land.cover.buffer];
+    state.land.fert.buffer, state.land.snow.buffer, state.land.cover.buffer, state.land.loose.buffer, state.land.rock.buffer];
   for (const sp of state.life.species) if (sp.N) list.push(sp.N.buffer);
   return list;
 }
 
 export function transferList(frame) {
   const L = frame.life;
-  const list = [frame.z.buffer, frame.Q.buffer, frame.rec.buffer, frame.ocean.buffer,
+  const list = [frame.z.buffer, frame.Q.buffer, frame.rec.buffer, frame.ocean.buffer, frame.rock.buffer, frame.ground.buffer,
     frame.lake.buffer, frame.ice.buffer, frame.snow.buffer, frame.history.sea.buffer, frame.history.mouthQ.buffer,
     L.aqua.buffer, L.veg.buffer, L.vegC.buffer, L.rgb.buffer, L.fishes.buffer, L.herds.buffer];
   if (L.selected) list.push(L.selected.buffer);

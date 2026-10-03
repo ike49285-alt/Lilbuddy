@@ -10,11 +10,31 @@ export const CELL_M = 500;           // metres per cell side
 export const SHORE_ROW = 0.74;       // fraction of the height where the coast starts
 export const SHELF_EDGE = 0.9;       // where the continental shelf breaks into deep water
 
+// Bedrock. `k` is erodibility relative to the model's base rate (the mix
+// averages about 1, so the valley forms over the same time as before);
+// `soil` is how fast it weathers into loose cover, in metres per year on
+// bare rock.
+export const ROCKS = [
+  { name: 'granite', k: 0.25, soil: 2e-5 },
+  { name: 'sandstone', k: 1.1, soil: 6e-5 },
+  { name: 'shale', k: 1.7, soil: 1e-4 },
+  { name: 'limestone', k: 0.6, soil: 4e-5 },
+  { name: 'basalt', k: 0.4, soil: 8e-5 },
+];
+export const GRANITE = 0, SANDSTONE = 1, SHALE = 2, LIMESTONE = 3, BASALT = 4;
+// The foothill strata, in order: a rhythm of sand and mud with the odd
+// limestone, crossing the valley so the river meets hard and soft in turn.
+const STRATA = [SANDSTONE, SHALE, SANDSTONE, LIMESTONE, SHALE, SANDSTONE, SHALE];
+
 export function generateTerrain(rng) {
   const W = GRID_W, H = GRID_H, N = W * H;
   const z = new Float64Array(N);
   const uplift = new Float32Array(N);   // metres per year
   const kfac = new Float32Array(N);     // erodibility multiplier (rock hardness)
+  const rock = new Uint8Array(N);       // bedrock type, an index into ROCKS
+  const loose = new Float32Array(N);    // metres of loose cover over it
+  const cover = makeNoise2D(rng.fork('cover'));
+  const core = makeNoise2D(rng.fork('core'));
 
   const rough = makeNoise2D(rng.fork('rough'));
   const strata = makeNoise2D(rng.fork('strata'));
@@ -81,13 +101,31 @@ export function generateTerrain(rng) {
       const toSea = smooth((v - SHORE_ROW + 0.02) / 0.06);
       uplift[i] = Math.max(range, flank) * (1 - toSea) + sink * toSea;
 
-      // Patches of harder and softer rock: gorges where the river meets the
-      // hard stuff, wider reaches through the soft.
-      const rock = fbm(strata, u * 3 + strike, v * 5, 3);
-      kfac[i] = 0.7 + 0.6 * smooth(rock * 0.9 + 0.5);
+      // Bedrock: a granite core along the top of the range, its edge ragged;
+      // below it, bands of sedimentary rock crossing the valley, gently
+      // warped, so the river cuts gorges through the hard bands and opens
+      // out across the soft.
+      const coreEdge = 0.2 + 0.07 * fbm(core, u * 4, 1.3, 3);
+      if (v < coreEdge) rock[i] = GRANITE;
+      else {
+        const band = (v - coreEdge) * 9 + 0.9 * fbm(strata, u * 2.5 + strike, v * 3, 3);
+        rock[i] = STRATA[((Math.floor(band) % STRATA.length) + STRATA.length) % STRATA.length];
+      }
+      kfac[i] = ROCKS[rock[i]].k;
+
+      // Loose cover: thin soil on the young mountains, thickening down the
+      // slope to deep sand and silt on the coastal plain, and sediment on
+      // the sea floor, deepest in the basin.
+      const patch = 0.6 + 0.8 * (0.5 + 0.5 * fbm(cover, u * 6, v * 8, 3));
+      let depth;
+      if (v < 0.5) depth = 0.5 + 1.5 * (v / 0.5);
+      else if (v < SHORE_ROW) depth = 2 + 26 * smooth((v - 0.5) / (SHORE_ROW - 0.5));
+      else if (v < SHELF_EDGE) depth = 28;
+      else depth = 28 + 40 * (v - SHELF_EDGE) / (1 - SHELF_EDGE);
+      loose[i] = depth * patch;
     }
   }
-  return { W, H, N, z, uplift, kfac };
+  return { W, H, N, z, uplift, kfac, rock, loose };
 }
 
 function smooth(t) {
