@@ -75,7 +75,7 @@ export class Disasters {
       const dry = Math.max(0.4, Math.min(1.4, 1.6 - climate.meanPrecip));
       const n = Math.min(MAX_FIRES, poisson(rng, (dt / FIRE_EVERY) * veg * season * dry));
       for (let k = 0; k < n; k++) {
-        const i = this.findCell(land, 30, (j) => !land.ocean[j] && !land.lake[j] && land.cover[j] > 0.25);
+        const i = this.findCell(land, 60, (j) => !land.ocean[j] && !land.lake[j] && land.cover[j] > 0.25 && this.underStorm(land, j));
         if (i < 0) break;
         // Like floods, fires are too common for a note each: map only.
         const ev = this.apply(sim, 'lightning', i, rng.chance(0.1) ? 1 : 0, dry);
@@ -89,7 +89,7 @@ export class Disasters {
       if (climate.seasonal) season = { winter: 0.5, spring: 2.4, summer: 0.6, autumn: 0.5 }[climate.season()];
       const n = Math.min(MAX_FLOODS, poisson(rng, (dt / FLOOD_EVERY) * season));
       for (let k = 0; k < n; k++) {
-        const i = this.findCell(land, 200, (j) => !land.ocean[j] && !land.lake[j] && land.Q[j] >= 4e7);
+        const i = this.findCell(land, 200, (j) => !land.ocean[j] && !land.lake[j] && land.Q[j] >= 4e7 && this.underStorm(land, j));
         if (i < 0) break;
         // Floods are so common that a note for each would bury every other
         // event; they show on the map only.
@@ -117,6 +117,13 @@ export class Disasters {
       life.settle(sim.years);
       sim.syncCover();
     }
+  }
+
+  // When there's weather, fires and floods come with the storms: a cell
+  // passes with a chance that grows with the rain falling on it.
+  underStorm(land, j) {
+    if (!land.rainField) return true;
+    return this.rng.next() < Math.min(1, land.rainField[land.toLife[j]] / 3);
   }
 
   // A random cell that passes the test, or -1 after so many tries.
@@ -420,6 +427,18 @@ export class Disasters {
     const ev = {
       id: this.nextId++, kind: 'milestone', size: null, years: sim.years,
       x: (c % LW) * 2 + 1, y: Math.floor(c / LW) * 2 + 1, r: 3, label,
+    };
+    this.events.push(ev);
+    if (this.events.length > KEEP_EVENTS) this.events.shift();
+    return ev;
+  }
+
+  // A note for something done by hand with the shaping tools, at a cell.
+  note(sim, kind, i, label, r) {
+    const { W } = sim.land;
+    const ev = {
+      id: this.nextId++, kind, size: null, years: sim.years, byHand: true,
+      x: (i % W) + 0.5, y: ((i / W) | 0) + 0.5, r, label,
     };
     this.events.push(ev);
     if (this.events.length > KEEP_EVENTS) this.events.shift();

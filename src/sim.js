@@ -6,11 +6,14 @@ import { Climate, SEASONAL_TICK } from './climate.js';
 import { Landscape, MAX_STEP_YEARS } from './landscape.js';
 import { Life } from './life.js';
 import { Disasters } from './disasters.js';
+import { Weather, WEATHER_TICK } from './weather.js';
+import { sculpt, dig, lineCells, parkStorm, BRUSH } from './tools.js';
 
 export { MAX_STEP_YEARS };
 
 export const HISTORY_LEN = 240;       // samples kept for the sparklines
 export const HISTORY_EVERY = 5000;    // years between samples (240 × 5 kyr = 1.2 Myr)
+const STORM_R_CELLS = 12;             // a parked storm's size on the map, for its note
 
 export class Simulation {
   constructor(seed) {
@@ -33,6 +36,8 @@ export class Simulation {
     this.life = new Life(this.land, this.rng.fork('life'));
     this.life.seed(this.land, this.climate);
     this.disasters = new Disasters(this.rng.fork('disasters'));
+    this.weather = new Weather(this.rng, this.life.LW, this.life.LH);
+    this.land.toLife = this.life.toLife;
     this.sentEvent = 0;       // the last event id handed to the page
     this.sample();
   }
@@ -45,6 +50,13 @@ export class Simulation {
     this.climate.cooling = this.disasters.coolingAt(this.years);
     this.climate.winter = this.disasters.winterName();
     this.climate.set(this.years, d <= SEASONAL_TICK);
+    // At short ticks the rain falls where the clouds are.
+    if (d <= WEATHER_TICK) {
+      this.weather.update(this.years);
+      this.land.rainField = this.weather.rain;
+    } else {
+      this.land.rainField = null;
+    }
     this.land.step(this.climate, d);
     const ashore = this.life.stats.firstLandAnimal;
     this.life.step(this.land, this.climate, d, this.years);
@@ -74,6 +86,48 @@ export class Simulation {
     const ev = this.disasters.trigger(this, kind, i, size);
     this.climate.set(this.years, this.climate.seasonal);
     return ev;
+  }
+
+  // --- shaping by hand ------------------------------------------------------------
+
+  // Raises or lowers the ground under a brush; the water re-routes at once.
+  sculpt(i, size, dz) {
+    const r = BRUSH[size] || BRUSH.small;
+    if (!sculpt(this.land, i, r, Math.max(-50, Math.min(50, dz)))) return;
+    this.reshaped();
+  }
+
+  // Cuts a channel along a line of points (cells).
+  dig(points) {
+    const { W, H } = this.land;
+    const cells = lineCells(W, H, points);
+    const n = dig(this.land, cells);
+    if (!n) return null;
+    this.reshaped();
+    const mid = cells[cells.length >> 1];
+    return this.disasters.note(this, 'dig', mid, `A channel is cut, ${(n * CELL_M / 1000).toFixed(1)} km long`, 2);
+  }
+
+  // How wet the climate is, from 30% to 200% of natural.
+  setWetness(v) {
+    this.climate.wetness = Math.max(0.3, Math.min(2, Number(v) || 1));
+    this.climate.set(this.years, this.climate.seasonal);
+  }
+
+  // A heavy storm parks over a cell for a day and a half.
+  storm(i) {
+    if (!(i >= 0 && i < this.land.N)) return null;
+    parkStorm(this.weather, this.land.W, i, this.years);
+    if (this.land.rainField) {
+      this.weather.update(this.years);
+      this.land.rainField = this.weather.rain;
+    }
+    return this.disasters.note(this, 'storm', i, 'A storm parks over the valley', STORM_R_CELLS);
+  }
+
+  reshaped() {
+    this.disasters.epoch++;
+    this.land.refresh(this.climate);
   }
 
   sample() {
@@ -120,6 +174,8 @@ export class Simulation {
       },
       life: life.saveState(),
       disasters: this.disasters.saveState(),
+      weather: this.weather.saveState(),
+      wetness: this.climate.wetness,
     };
   }
 
@@ -153,6 +209,12 @@ export class Simulation {
       for (let i = 0; i < land.N; i++) land.kfac[i] = ROCKS[land.rock[i]].k;
     }
     sim.disasters.restoreState(state.disasters);
+    sim.climate.wetness = state.wetness || 1;
+    sim.weather.restoreState(state.weather);
+    if (land.lastDt <= WEATHER_TICK) {
+      sim.weather.update(sim.years);
+      land.rainField = sim.weather.rain;
+    }
     sim.sentEvent = sim.disasters.nextId - 1;
     sim.climate.cooling = sim.disasters.coolingAt(sim.years);
     sim.climate.winter = sim.disasters.winterName();
@@ -245,6 +307,7 @@ export class Simulation {
       H: land.H,
       years: this.years,
       z: new Float32Array(land.z),
+      water: new Float32Array(land.water),
       Q: land.Q.slice(),
       rec: land.rec.slice(),
       ocean: land.ocean.slice(),
@@ -253,6 +316,8 @@ export class Simulation {
       snow: snowBytes(land.snow),
       rock: land.rock.slice(),
       ground: this.groundBytes(),
+      // Clouds, at the ticks where weather means something.
+      cloud: land.rainField ? Uint8Array.from(this.weather.cloud, (v) => Math.round(v * 255)) : null,
       seaLevel: climate.seaLevel,
       climate: {
         label: climate.label(),
@@ -262,6 +327,8 @@ export class Simulation {
         seaT: climate.seaT,
         precip: climate.precip,
         cooling: climate.cooling,
+        wetness: climate.wetness,
+        yearFrac: climate.yearFrac,
       },
       stats: { ...land.stats },
       life: this.life.frameData(selectedId),
@@ -295,6 +362,7 @@ export function stateTransferList(state) {
 export function transferList(frame) {
   const L = frame.life;
   const list = [frame.z.buffer, frame.Q.buffer, frame.rec.buffer, frame.ocean.buffer, frame.rock.buffer, frame.ground.buffer,
+    ...(frame.cloud ? [frame.cloud.buffer] : []),
     frame.lake.buffer, frame.ice.buffer, frame.snow.buffer, frame.history.sea.buffer, frame.history.mouthQ.buffer,
     L.aqua.buffer, L.veg.buffer, L.vegC.buffer, L.rgb.buffer, L.fishes.buffer, L.herds.buffer];
   if (L.selected) list.push(L.selected.buffer);

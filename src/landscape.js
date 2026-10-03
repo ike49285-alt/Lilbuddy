@@ -107,6 +107,8 @@ export class Landscape {
     this.qAvg = new Float64Array(N);
     this.lagActive = false;
     this.lastDt = 1;
+    this.rainField = null;                // at short ticks: rain on each life cell as a multiple of the climate's
+    this.toLife = null;                   // landscape cell → life cell
 
     // Priority-flood heap.
     this.heap = new Int32Array(N);
@@ -346,7 +348,7 @@ export class Landscape {
     let iceCells = 0, snowCells = 0;
     for (let i = 0; i < N; i++) {
       if (ocean[i]) { Q[i] = 0; ice[i] = 0; snow[i] = 0; continue; }
-      const P = climate.precipAt(z[i]);
+      const P = climate.precipAt(z[i]) * (this.rainField ? this.rainField[this.toLife[i]] : 1);
       ice[i] = climate.iceAt(z[i]) ? 1 : 0;
       iceCells += ice[i];
       if (!seasonal) {

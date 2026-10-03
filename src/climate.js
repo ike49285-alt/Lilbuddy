@@ -30,6 +30,8 @@ export class Climate {
     // simulation before each set(): degrees of cooling and what caused it.
     this.cooling = 0;
     this.winter = '';
+    // How wet the valley is, as set by hand: a multiple of the natural rain.
+    this.wetness = 1;
     this.set(0, false);
   }
 
@@ -57,7 +59,7 @@ export class Climate {
     // A young world starts nearly dry; the rains build over the first
     // few hundred thousand years, so the river begins as a trickle.
     const youth = Math.min(1, 0.03 + t / 3.5e5);
-    this.meanPrecip = Math.max(0.02, (1.05 - 0.45 * glacial) * (1 + 0.35 * spell) * youth * youth);
+    this.meanPrecip = Math.max(0.02, (1.05 - 0.45 * glacial) * (1 + 0.35 * spell) * youth * youth) * this.wetness;
 
     // Time of year: 0 is the first of January. Coldest in mid-January,
     // warmest in mid-July; wettest in winter.

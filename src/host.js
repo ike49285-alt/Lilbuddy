@@ -177,6 +177,26 @@ export function createHost(post) {
         dirty = true;
         urgent = true;
         break;
+      case 'sculpt':
+        sim.sculpt(msg.i, msg.size, msg.dz);
+        dirty = true;
+        urgent = true;
+        break;
+      case 'dig':
+        sim.dig(msg.points || []);
+        dirty = true;
+        urgent = true;
+        break;
+      case 'wetness':
+        sim.setWetness(msg.value);
+        dirty = true;
+        urgent = true;
+        break;
+      case 'storm':
+        sim.storm(msg.i);
+        dirty = true;
+        urgent = true;
+        break;
       case 'inspect':
         post({ type: 'inspected', info: sim.inspect(msg.i) });
         break;

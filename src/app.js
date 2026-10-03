@@ -2,6 +2,7 @@
 
 import { MapRenderer, drawSpark, elevationColor, ROCK_RGB, COVER_RGB } from './render.js';
 import { saveWorld, loadWorld } from './save.js';
+import { View3D, webglAvailable } from './view3d.js';
 
 const CELL_KM2 = 0.25;
 const SEED_WORDS = ['alder', 'basalt', 'cedar', 'delta', 'eddy', 'fjord', 'gravel', 'heron', 'iron',
@@ -302,8 +303,13 @@ function draw(f, force) {
   const sel = selectedId && f.species.find((s) => s.id === selectedId && s.died === null);
   if (selectedId && !sel) selectSpecies(null);
   if (sel) renderer.selectedRgb = hslRgb(sel.hue);
-  renderer.draw(f);
-  composedKey = renderer.viewKey();
+  if (view3d && in3d) {
+    renderer.paint(f);
+    view3d.render(f);
+  } else {
+    renderer.draw(f);
+  }
+  composedKey = viewKey();
   if (f.events && f.events.length) {
     for (const ev of f.events) onEvent(ev, f);
     f.events = [];
@@ -339,6 +345,10 @@ function draw(f, force) {
 
 function drawSlow(f) {
   const st = f.stats;
+  if (document.activeElement !== $('wetness') && f.climate.wetness) {
+    const v = Math.round(f.climate.wetness * 100);
+    if (Number($('wetness').value) !== v) { $('wetness').value = v; $('wetness-out').textContent = `${v}%`; }
+  }
   drawLife(f);
 
   $('s-len').textContent = st.trunkLen > 0 ? `${n0.format(st.trunkLen / 1000)} km` : 'not yet';
@@ -623,16 +633,26 @@ let composedKey = '';
 // Redraws the map for the current view from the last frame, without waiting
 // for the worker, and again once the view has settled so the rivers sharpen.
 function viewChanged() {
-  canvas.classList.toggle('zoomed', renderer.zoom > 1.001);
-  $('zoom-out').disabled = renderer.zoom <= 1.001;
-  $('zoom-reset').disabled = renderer.zoom <= 1.001;
-  $('zoom-in').disabled = renderer.zoom >= 7.999;
-  updateScale();
+  if (in3d) {
+    const c = view3d.cam;
+    $('zoom-out').disabled = false;
+    $('zoom-reset').disabled = false;
+    $('zoom-in').disabled = false;
+    $('north-arrow').style.transform = `rotate(${c ? c.yaw : 0}rad)`;
+    startEffects();
+  } else {
+    canvas.classList.toggle('zoomed', renderer.zoom > 1.001);
+    $('zoom-out').disabled = renderer.zoom <= 1.001;
+    $('zoom-reset').disabled = renderer.zoom <= 1.001;
+    $('zoom-in').disabled = renderer.zoom >= 7.999;
+    $('north-arrow').style.transform = '';
+    updateScale();
+  }
   if (!viewDrawPending) {
     viewDrawPending = true;
     requestAnimationFrame(() => {
       viewDrawPending = false;
-      if (last && renderer.viewKey() !== composedKey) composeView();
+      if (last && viewKey() !== composedKey) composeView();
     });
   }
   clearTimeout(settleTimer);
@@ -640,9 +660,47 @@ function viewChanged() {
 }
 
 function composeView() {
-  renderer.compose(last);
-  composedKey = renderer.viewKey();
+  if (in3d) view3d.render(last);
+  else renderer.compose(last);
+  composedKey = viewKey();
 }
+
+function viewKey() {
+  if (!in3d) return renderer.viewKey();
+  const c = view3d.cam;
+  return c ? `3d,${c.tx},${c.ty},${c.yaw},${c.pitch},${c.dist},${glCanvas.clientWidth},${glCanvas.clientHeight}` : '3d';
+}
+
+// --- the 3D view ----------------------------------------------------------------
+
+const glCanvas = $('gl-canvas');
+let view3d = null;
+let in3d = false;
+if (webglAvailable()) $('view-3d').hidden = false;
+
+function set3d(on) {
+  if (on && !view3d) {
+    try {
+      view3d = new View3D(glCanvas, renderer);
+    } catch (err) {
+      console.warn('3D view unavailable', err);
+      $('view-3d').hidden = true;
+      return;
+    }
+  }
+  in3d = on;
+  renderer.flat = on;
+  renderer.projector = on ? (wx, wy, w, h) => view3d.project(wx, wy, w, h) : null;
+  glCanvas.hidden = !on;
+  canvas.hidden = on;
+  $('map').classList.toggle('in3d', on);
+  $('view-3d').setAttribute('aria-pressed', on ? 'true' : 'false');
+  $('view-3d').textContent = on ? '2D' : '3D';
+  $('view-3d').setAttribute('aria-label', on ? 'Show the flat map' : 'Show the valley in 3D');
+  if (last) draw(last, true);
+  viewChanged();
+}
+$('view-3d').addEventListener('click', () => set3d(!in3d));
 
 // A round distance whose bar fits the corner left of the map-mode switch.
 function updateScale() {
@@ -658,8 +716,18 @@ function updateScale() {
 }
 
 function fractions(clientX, clientY) {
-  const r = canvas.getBoundingClientRect();
+  const r = (in3d ? glCanvas : canvas).getBoundingClientRect();
   return [(clientX - r.left) / r.width, (clientY - r.top) / r.height];
+}
+
+// The world point (cells) under a point on screen, in either view; null for
+// the sky in 3D.
+function worldAt(clientX, clientY) {
+  if (in3d) {
+    const r = glCanvas.getBoundingClientRect();
+    return view3d.pick(clientX - r.left, clientY - r.top);
+  }
+  return renderer.toWorld(...fractions(clientX, clientY));
 }
 
 const pointers = new Map();
@@ -672,26 +740,58 @@ function pinchState() {
   return { dist: Math.hypot(a.x - b.x, a.y - b.y), mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2 };
 }
 
-canvas.addEventListener('pointerdown', (e) => {
+function onDown(e) {
   if (e.pointerType === 'mouse' && e.button !== 0) return;
-  try { canvas.setPointerCapture(e.pointerId); } catch { /* not every pointer can be captured */ }
+  try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* not every pointer can be captured */ }
   pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
   if (pointers.size === 1) {
     press = { x: e.clientX, y: e.clientY, lx: e.clientX, ly: e.clientY, moved: false };
     pinch = null;
+    if (armed && SHAPERS.has(armed)) startShaping(e);
   } else if (pointers.size === 2) {
+    // A second finger: it's a pinch, not a stroke.
+    endShaping(true);
     const p = pinchState();
     const [fx, fy] = fractions(p.mx, p.my);
-    pinch = { dist: Math.max(1, p.dist), zoom: renderer.zoom, world: renderer.toWorld(fx, fy) };
+    pinch = { dist: Math.max(1, p.dist), zoom: renderer.zoom, world: renderer.toWorld(fx, fy), mx: p.mx, my: p.my, camDist: view3d && view3d.cam ? view3d.cam.dist : 0 };
     press = null;
   }
-});
+}
+canvas.addEventListener('pointerdown', onDown);
+glCanvas.addEventListener('pointerdown', onDown);
 
-canvas.addEventListener('pointermove', (e) => {
+function onMove(e) {
   const pt = pointers.get(e.pointerId);
   if (!pt) return;
   pt.x = e.clientX;
   pt.y = e.clientY;
+  if (shaping && pointers.size === 1) {
+    moveShaping(e);
+    if (press) press.moved = true;
+    return;
+  }
+  if (in3d) {
+    // 3D: one finger turns and tilts, two pinch to zoom and slide the land.
+    if (pinch && pointers.size >= 2) {
+      const p = pinchState();
+      view3d.cam.dist = pinch.camDist;
+      view3d.zoomBy(p.dist / pinch.dist);
+      view3d.slide(p.mx - pinch.mx, p.my - pinch.my);
+      pinch.mx = p.mx;
+      pinch.my = p.my;
+      viewChanged();
+      return;
+    }
+    if (!press) return;
+    if (!press.moved && Math.hypot(e.clientX - press.x, e.clientY - press.y) < TAP_PX) return;
+    press.moved = true;
+    view3d.turn(e.clientX - press.lx, e.clientY - press.ly);
+    glCanvas.classList.add('dragging');
+    press.lx = e.clientX;
+    press.ly = e.clientY;
+    viewChanged();
+    return;
+  }
   if (pinch && pointers.size >= 2) {
     // Keep the world point that started under the fingers' midpoint under it.
     const p = pinchState();
@@ -712,12 +812,20 @@ canvas.addEventListener('pointermove', (e) => {
   }
   press.lx = e.clientX;
   press.ly = e.clientY;
-});
+}
+canvas.addEventListener('pointermove', onMove);
+glCanvas.addEventListener('pointermove', onMove);
 
 function release(e, cancelled) {
   if (!pointers.has(e.pointerId)) return;
   pointers.delete(e.pointerId);
   canvas.classList.remove('dragging');
+  glCanvas.classList.remove('dragging');
+  if (shaping) {
+    endShaping(cancelled);
+    press = null;
+    return;
+  }
   if (pinch) {
     // Lifting one finger of a pinch doesn't start a drag or count as a tap.
     if (pointers.size === 0) pinch = null;
@@ -726,24 +834,32 @@ function release(e, cancelled) {
   if (press && !press.moved && !cancelled) tap(e.clientX, e.clientY);
   press = null;
 }
-canvas.addEventListener('pointerup', (e) => release(e, false));
-canvas.addEventListener('pointercancel', (e) => release(e, true));
+for (const c of [canvas, glCanvas]) {
+  c.addEventListener('pointerup', (e) => release(e, false));
+  c.addEventListener('pointercancel', (e) => release(e, true));
+}
 
 function tap(clientX, clientY) {
   const now = performance.now();
   const [fx, fy] = fractions(clientX, clientY);
+  const world = worldAt(clientX, clientY);
   if (armed) {
-    dropAt(...renderer.toWorld(fx, fy));
+    if (world) dropAt(...world);
     return;
   }
   if (lastTap && now - lastTap.t < DOUBLE_TAP_MS && Math.hypot(clientX - lastTap.x, clientY - lastTap.y) < 30) {
     lastTap = null;
-    renderer.zoomAt(ZOOM_STEP, fx, fy);
+    if (in3d) {
+      // Double-tap in 3D: centre on that spot and move in.
+      if (world) { view3d.lookAt(...world); view3d.zoomBy(ZOOM_STEP); }
+    } else {
+      renderer.zoomAt(ZOOM_STEP, fx, fy);
+    }
     viewChanged();
     return;
   }
   lastTap = { t: now, x: clientX, y: clientY };
-  inspectCell(...renderer.toWorld(fx, fy));
+  if (world) inspectCell(...world);
 }
 
 // Wheel and trackpad zoom around the pointer. At the limits the wheel is left
@@ -757,10 +873,17 @@ canvas.addEventListener('wheel', (e) => {
   renderer.zoomAt(Math.exp(-dy * (e.ctrlKey ? 0.01 : 0.0015)), fx, fy);
   viewChanged();
 }, { passive: false });
+glCanvas.addEventListener('wheel', (e) => {
+  const dy = e.deltaY * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1);
+  if (!dy) return;
+  e.preventDefault();
+  view3d.zoomBy(Math.exp(-dy * (e.ctrlKey ? 0.01 : 0.0015)));
+  viewChanged();
+}, { passive: false });
 
-$('zoom-in').addEventListener('click', () => { renderer.zoomAt(ZOOM_STEP, 0.5, 0.5); viewChanged(); });
-$('zoom-out').addEventListener('click', () => { renderer.zoomAt(1 / ZOOM_STEP, 0.5, 0.5); viewChanged(); });
-$('zoom-reset').addEventListener('click', () => { renderer.resetView(); viewChanged(); });
+$('zoom-in').addEventListener('click', () => { if (in3d) view3d.zoomBy(ZOOM_STEP); else renderer.zoomAt(ZOOM_STEP, 0.5, 0.5); viewChanged(); });
+$('zoom-out').addEventListener('click', () => { if (in3d) view3d.zoomBy(1 / ZOOM_STEP); else renderer.zoomAt(1 / ZOOM_STEP, 0.5, 0.5); viewChanged(); });
+$('zoom-reset').addEventListener('click', () => { if (in3d) view3d.resetCamera(); else renderer.resetView(); viewChanged(); });
 
 // --- disasters ------------------------------------------------------------------
 
@@ -835,29 +958,123 @@ function hideNote() {
 $('event-note').addEventListener('click', () => {
   const ev = noteEv;
   if (!ev) return;
-  renderer.lookAt(ev.x, ev.y, Math.max(renderer.zoom, Math.min(6, renderer.W / Math.max(20, 5 * ev.r))));
+  if (in3d) {
+    view3d.lookAt(ev.x, ev.y);
+    view3d.cam.dist = Math.min(view3d.cam.dist, Math.max(40, 14 * ev.r));
+  } else {
+    renderer.lookAt(ev.x, ev.y, Math.max(renderer.zoom, Math.min(6, renderer.W / Math.max(20, 5 * ev.r))));
+  }
   viewChanged();
   if (!ev.missed) { renderer.addEffect({ ...ev, quiet: false }); startEffects(); }
   hideNote();
 });
 
+function cellAt(wx, wy) {
+  if (!last) return -1;
+  const x = Math.floor(wx), y = Math.floor(wy);
+  if (x < 0 || y < 0 || x >= last.W || y >= last.H) return -1;
+  return y * last.W + x;
+}
+
 function dropAt(wx, wy) {
   if (!last || !armed) return;
-  const x = Math.floor(wx), y = Math.floor(wy);
-  if (x < 0 || y < 0 || x >= last.W || y >= last.H) return;
+  const i = cellAt(wx, wy);
+  if (i < 0) return;
+  if (armed === 'storm') {
+    // A storm only shows where there's weather: at a day a second or
+    // slower. Faster than that, slow down to an hour a second to watch it.
+    if (rate === MAX_RATE || rate > DAY) setRate(HOUR);
+    worker.postMessage({ type: 'storm', i });
+    return;
+  }
+  if (SHAPERS.has(armed)) return;
   const sized = armed === 'volcano' || armed === 'meteor';
-  worker.postMessage({ type: 'disaster', kind: armed, i: y * last.W + x, size: sized ? toolSize : 'big' });
+  worker.postMessage({ type: 'disaster', kind: armed, i, size: sized ? toolSize : 'big' });
 }
+
+const SHAPERS = new Set(['raise', 'lower', 'dig']);
+const BRUSH_MS = 100;        // a held brush sends a nudge this often
+const BRUSH_M = 5;           // metres per nudge at the brush's centre: 50 m a second
+let brushSize = 'big';
+let shaping = null;          // a brush held down or a channel being drawn
 
 function setArmed(kind) {
   armed = kind;
   for (const b of document.querySelectorAll('.tools .tool')) b.setAttribute('aria-pressed', b.dataset.kind === kind ? 'true' : 'false');
   $('size-row').hidden = !(kind === 'volcano' || kind === 'meteor');
-  const names = { flood: 'flood a river', lightning: 'strike with lightning', volcano: 'raise a volcano', meteor: 'drop a meteor' };
-  $('tools-hint').textContent = kind ? `Tap the map to ${names[kind]}.` : 'Pick one, then tap the map.';
-  const label = { flood: 'Flood', lightning: 'Lightning', volcano: 'Volcano', meteor: 'Meteor' };
-  $('tools-toggle').textContent = kind ? `Tap map: ${label[kind]}` : 'Disasters';
+  $('brush-row').hidden = !(kind === 'raise' || kind === 'lower');
+  const names = {
+    flood: 'Tap the map to flood a river.', lightning: 'Tap the map to strike with lightning.', volcano: 'Tap the map to raise a volcano.',
+    meteor: 'Tap the map to drop a meteor.', raise: 'Hold a finger on the map to raise the ground.', lower: 'Hold a finger on the map to lower the ground.',
+    dig: 'Draw a line on the map to dig a channel.', storm: 'Tap the map to park a storm there.',
+  };
+  $('tools-hint').textContent = kind ? names[kind] : 'Pick a tool, then use it on the map.';
+  const label = { flood: 'Tap map: Flood', lightning: 'Tap map: Lightning', volcano: 'Tap map: Volcano', meteor: 'Tap map: Meteor',
+    raise: 'Brush: Raise', lower: 'Brush: Lower', dig: 'Draw: Dig', storm: 'Tap map: Storm' };
+  $('tools-toggle').textContent = kind ? label[kind] : 'Tools';
   canvas.classList.toggle('armed', !!kind);
+  glCanvas.classList.toggle('armed', !!kind);
+}
+
+// --- shaping by hand ---------------------------------------------------------
+
+// One finger with a shaping tool armed shapes the land instead of moving the
+// view: a brush raises or lowers the ground while held, Dig draws a line.
+function startShaping(e) {
+  const world = worldAt(e.clientX, e.clientY);
+  shaping = { kind: armed, x: e.clientX, y: e.clientY, world, pts: world ? [world] : [], timer: null };
+  if (armed === 'dig') {
+    renderer.digPath = shaping.pts;
+    startEffects();
+    return;
+  }
+  const nudge = () => {
+    const w = shaping && shaping.world;
+    if (!w) return;
+    const i = cellAt(...w);
+    if (i >= 0) worker.postMessage({ type: 'sculpt', i, size: brushSize, dz: shaping.kind === 'raise' ? BRUSH_M : -BRUSH_M });
+    renderer.brush = { x: w[0], y: w[1], r: brushSize === 'big' ? 4 : 1.5, t: performance.now() };
+    startEffects();
+  };
+  nudge();
+  shaping.timer = setInterval(nudge, BRUSH_MS);
+}
+
+function moveShaping(e) {
+  shaping.x = e.clientX;
+  shaping.y = e.clientY;
+  const world = worldAt(e.clientX, e.clientY);
+  if (!world) return;
+  shaping.world = world;
+  if (shaping.kind === 'dig') {
+    const p = shaping.pts[shaping.pts.length - 1];
+    if (!p || Math.hypot(world[0] - p[0], world[1] - p[1]) >= 0.4) shaping.pts.push(world);
+    startEffects();
+  }
+}
+
+// Ends a stroke; a finished line is dug, a cancelled one dropped.
+function endShaping(cancelled) {
+  if (!shaping) return;
+  clearInterval(shaping.timer);
+  if (shaping.kind === 'dig' && !cancelled && shaping.pts.length >= 2) {
+    worker.postMessage({ type: 'dig', points: shaping.pts });
+  }
+  shaping = null;
+  renderer.digPath = null;
+  renderer.brush = null;
+  startEffects();
+}
+
+$('wetness').addEventListener('input', () => { $('wetness-out').textContent = `${$('wetness').value}%`; });
+$('wetness').addEventListener('change', () => {
+  if (worker) worker.postMessage({ type: 'wetness', value: Number($('wetness').value) / 100 });
+});
+for (const b of document.querySelectorAll('#brush-row button')) {
+  b.addEventListener('click', () => {
+    brushSize = b.dataset.brush;
+    for (const o of document.querySelectorAll('#brush-row button')) o.setAttribute('aria-pressed', o === b ? 'true' : 'false');
+  });
 }
 
 function setTray(open) {
@@ -951,6 +1168,34 @@ window.Headwaters = {
   disaster: (kind, x, y, size) => worker.postMessage({ type: 'disaster', kind, i: y * last.W + x, size }),
   cooling: () => (last ? last.climate.cooling : 0),
   lookAt: (x, y, zoom) => { renderer.lookAt(x, y, zoom); viewChanged(); },
+  set3d: (on) => set3d(on),
+  cam: (c) => { if (c) Object.assign(view3d.cam, c); viewChanged(); return view3d && view3d.cam ? { ...view3d.cam } : null; },
+  pick3d: (px, py) => view3d.pick(px, py),
+  arm: (kind) => { setTray(true); setArmed(kind); },
+  frame: () => last,
+  // The main thread's share of drawing a new frame in 3D, in ms.
+  cost3d: (n = 10) => {
+    const t0 = performance.now();
+    for (let k = 0; k < n; k++) { view3d.frameOf = null; renderer.paint(last); view3d.render(last); }
+    return (performance.now() - t0) / n;
+  },
+  // Renders the 3D view and reads it back at once (before the browser
+  // clears it): the mean colour and the share that's sky.
+  shot3d: () => {
+    composeView();
+    const gl = view3d.gl, w = glCanvas.width, h = glCanvas.height;
+    const px = new Uint8Array(w * h * 4);
+    gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    let r = 0, g = 0, b = 0, sky = 0, n = 0;
+    const s0 = view3d.skyRgb || [0, 0, 0];
+    for (let k = 0; k < px.length; k += 4 * 7) {
+      r += px[k]; g += px[k + 1]; b += px[k + 2]; n++;
+      if (Math.abs(px[k] - s0[0]) + Math.abs(px[k + 1] - s0[1]) + Math.abs(px[k + 2] - s0[2]) < 6) sky++;
+    }
+    return { mean: [r / n, g / n, b / n], sky: sky / n };
+  },
+  project3d: (x, y) => { const r = glCanvas.getBoundingClientRect(); return view3d.project(x, y, r.width, r.height); },
+  cloudy: () => !!(last && last.cloud),
   // The most thickly vegetated spot, in world cells.
   greenest: () => {
     const v = last.life.veg;

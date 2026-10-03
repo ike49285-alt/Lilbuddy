@@ -17,6 +17,8 @@ const LAND = [
 const MOSS = [150, 162, 88];
 const FOREST = [44, 92, 50];
 const BLOOM = [52, 138, 104];
+const SPRING = [122, 184, 74];
+const GOLD = [204, 150, 46], RUST = [178, 82, 40];
 // Ground mode: bedrock (granite, sandstone, shale, limestone, basalt) and
 // loose cover (sand and silt, soil, scree), which veils the rock under it
 // more the deeper it lies.
@@ -55,6 +57,25 @@ for (let m = 0; m <= LAND_LUT_MAX; m++) {
 for (let m = 0; m <= SEA_LUT_MAX; m++) {
   const c = ramp(SEA, m);
   SEA_LUT[m * 3] = c[1]; SEA_LUT[m * 3 + 1] = c[2]; SEA_LUT[m * 3 + 2] = c[3];
+}
+
+// Where the sun is, for a time in years: how much daylight there is (1 by
+// day, 0 at night), how high it stands (the sine of its elevation), how warm the light is at dawn and dusk, and which way
+// shadows fall (in cells). Days are longer in summer. Only below a day per
+// tick is there a time of day to show; otherwise it's always day.
+export function sunlight(years, yearFrac, tickYears) {
+  if (!(tickYears < 1 / 365.25)) return { day: 1, warm: 0, shadowX: 1.2, shadowY: 1.6, height: 0.7 };
+  const hour = ((years * 365.25) % 1) * 24;
+  const length = 12 + 3.5 * Math.cos(2 * Math.PI * (yearFrac - 0.47));
+  const rise = 12 - length / 2, set = 12 + length / 2;
+  let s;
+  if (hour >= rise && hour <= set) s = Math.sin((Math.PI * (hour - rise)) / length);
+  else s = -Math.sin((Math.PI * ((hour - set + 24) % 24)) / (24 - length));
+  const day = Math.max(0, Math.min(1, (s + 0.12) / 0.3));
+  const warm = Math.max(0, 1 - Math.abs(s) / 0.22);
+  // Shadows fall away from the sun: west in the morning, east in the evening.
+  const along = (hour - 12) / (length / 2);
+  return { day, warm, height: s, shadowX: -2.5 * Math.max(-1, Math.min(1, along)), shadowY: 1.4 + 1.5 * (1 - Math.max(0, s)) };
 }
 
 export function elevationColor(m) {
@@ -228,9 +249,17 @@ export class MapRenderer {
   }
 
   draw(f) {
+    this.paint(f);
+    this.compose(f);
+  }
+
+  // Paints the cell image for a frame: one pixel per cell. With flat set
+  // (for the 3D view, which lights the ground itself) there's no hillshade.
+  paint(f) {
     const { W, H, z, ocean, lake, ice, snow, seaLevel } = f;
     const seaT = f.climate.seaT;
     const seasonal = f.climate.seasonal;
+    const yf = f.climate.yearFrac || 0;
     const lf = f.life;
     const speciesMode = this.mode === 'species';
     const groundMode = this.mode === 'ground';
@@ -244,7 +273,9 @@ export class MapRenderer {
     }
     this.tables(W, H, lf.LW, lf.LH);
     this.hillshade(f);
-    const { bi, bw, shade: SH } = this;
+    const { bi, bw } = this;
+    if (this.flat && (!this.ones || this.ones.length !== W * H)) this.ones = new Float32Array(W * H).fill(1);
+    const SH = this.flat ? this.ones : this.shade;
     const px = this.image.data;
     const { aqua, veg, vegC, rgb } = lf;
     const N = W * H;
@@ -293,9 +324,21 @@ export class MapRenderer {
           if (cover > 0.01) {
             const cc = (vegC[i0] * w0 + vegC[i1] * w1 + vegC[i2] * w2 + vegC[i3] * w3) / 255;
             const t = Math.max(0, Math.min(1, (cc - 0.3) / 0.6));
-            const gr = MOSS[0] + (FOREST[0] - MOSS[0]) * t;
-            const gg = MOSS[1] + (FOREST[1] - MOSS[1]) * t;
-            const gb = MOSS[2] + (FOREST[2] - MOSS[2]) * t;
+            let gr = MOSS[0] + (FOREST[0] - MOSS[0]) * t;
+            let gg = MOSS[1] + (FOREST[1] - MOSS[1]) * t;
+            let gb = MOSS[2] + (FOREST[2] - MOSS[2]) * t;
+            if (seasonal) {
+              // Fresh green in spring; shrubs and trees turn gold and rust in
+              // autumn, a little differently from place to place.
+              const sp = Math.max(0, 1 - Math.abs(yf - 0.34) / 0.12) * 0.6;
+              const au = Math.max(0, 1 - Math.abs(yf - 0.8) / 0.1) * t;
+              if (sp > 0) { gr += (SPRING[0] - gr) * sp; gg += (SPRING[1] - gg) * sp; gb += (SPRING[2] - gb) * sp; }
+              if (au > 0) {
+                const k = ((Math.imul(i, 2654435761) >>> 24) & 255) / 255;
+                const ar = GOLD[0] + (RUST[0] - GOLD[0]) * k, ag = GOLD[1] + (RUST[1] - GOLD[1]) * k, ab = GOLD[2] + (RUST[2] - GOLD[2]) * k;
+                gr += (ar - gr) * au; gg += (ag - gg) * au; gb += (ab - gb) * au;
+              }
+            }
             let leaf = 1;
             if (seasonal) leaf = Math.max(0.35, Math.min(1, (seaT - 0.0065 * Math.max(0, e) - 2) / 10));
             const a = Math.min(0.9, cover) * (0.55 + 0.45 * leaf);
@@ -323,7 +366,7 @@ export class MapRenderer {
       px[o] = r; px[o + 1] = g; px[o + 2] = b; px[o + 3] = 255;
     }
     this.tctx.putImageData(this.image, 0, 0);
-    this.compose(f);
+    this.painted = (this.painted || 0) + 1;
   }
 
   // Puts the current view on screen from the cached terrain image and river
@@ -365,7 +408,67 @@ export class MapRenderer {
       const k = v.zoom / this.zoom;
       ctx.drawImage(this.rivers, (v.x0 - this.x0) * sx, (v.y0 - this.y0) * (h / vh), w * k, h * k);
     }
-    if (this.mode === 'landscape' && f.life.fishes) this.drawSpecks(f, ctx, w);
+    if (this.mode === 'landscape') {
+      if (f.life.fishes) this.drawSpecks(f, ctx, w);
+      const sun = sunlight(f.years, f.climate.yearFrac || 0, f.tickYears);
+      if (f.cloud) this.drawClouds(f, ctx, w, h, sun);
+      if (sun.day < 1) {
+        // Night: everything takes the dark blue of the sky; dusk and dawn glow.
+        const c = [38 + (255 - 38) * sun.day, 52 + (255 - 52) * sun.day, 105 + (255 - 105) * sun.day];
+        const wm = sun.warm * 0.75;
+        ctx.globalCompositeOperation = 'multiply';
+        ctx.fillStyle = `rgb(${c[0] + (255 - c[0]) * wm * 0.4 | 0}, ${c[1] + (186 - c[1]) * wm | 0}, ${c[2] + (140 - c[2]) * wm | 0})`;
+        ctx.fillRect(0, 0, w, h);
+        ctx.globalCompositeOperation = 'source-over';
+      }
+    }
+  }
+
+  // Clouds from the frame's cloud field (one value per kilometre), drawn
+  // soft and upscaled, with their shadow cast away from the sun: thin and
+  // white, thick and grey where it pours, pale blue-white where it snows.
+  drawClouds(f, ctx, w, h, sun) {
+    const cv = this.cloudLayer(f), sv = this.shadowCv;
+    const vw = this.W / this.zoom, vh = this.H / this.zoom;
+    const sx = this.x0 / 2, sy = this.y0 / 2, sw = vw / 2, sh = vh / 2;
+    const cell = w / vw;
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(sv, sx, sy, sw, sh, sun.shadowX * cell, sun.shadowY * cell, w, h);
+    ctx.drawImage(cv, sx, sy, sw, sh, 0, 0, w, h);
+  }
+
+  // The cloud image (one pixel per kilometre, alpha for thickness) and its
+  // shadow, rebuilt when the frame's clouds change.
+  cloudLayer(f) {
+    const { LW, LH } = f.life;
+    if (!this.cloudCv) {
+      this.cloudCv = document.createElement('canvas');
+      this.shadowCv = document.createElement('canvas');
+    }
+    const cv = this.cloudCv, sv = this.shadowCv;
+    if (cv.width !== LW || cv.height !== LH) { cv.width = sv.width = LW; cv.height = sv.height = LH; this.cloudOf = null; }
+    if (this.cloudOf !== f.cloud) {
+      this.cloudOf = f.cloud;
+      const cimg = cv.getContext('2d').createImageData(LW, LH), simg = sv.getContext('2d').createImageData(LW, LH);
+      const cd = cimg.data, sd = simg.data;
+      const { z, W } = f;
+      const seaT = f.climate.seaT;
+      for (let c = 0; c < LW * LH; c++) {
+        const d = f.cloud[c] / 255;
+        const a = Math.max(0, Math.min(0.85, (d - 0.35) * 1.8));
+        if (a <= 0) continue;
+        const cx = (c % LW) * 2, cy = ((c / LW) | 0) * 2;
+        const e = z[cy * W + cx] - f.seaLevel;
+        const snow = seaT - 0.0065 * Math.max(0, e) < 0;
+        const grey = 248 - 120 * Math.max(0, Math.min(1, (d - 0.55) / 0.45));
+        const o = c * 4;
+        cd[o] = snow ? Math.min(255, grey + 10) : grey; cd[o + 1] = snow ? Math.min(255, grey + 14) : grey; cd[o + 2] = snow ? 255 : grey + 4; cd[o + 3] = a * 255;
+        sd[o] = 20; sd[o + 1] = 26; sd[o + 2] = 34; sd[o + 3] = a * 0.4 * 255;
+      }
+      cv.getContext('2d').putImageData(cimg, 0, 0);
+      sv.getContext('2d').putImageData(simg, 0, 0);
+    }
+    return cv;
   }
 
   // Animals as specks where they're dense: silver shoals in the water, dark
@@ -374,15 +477,30 @@ export class MapRenderer {
   // a fixed sample of the whole, so zooming in shows more of each place
   // without drawing more in all.
   drawSpecks(f, ctx, w) {
-    const { W, H, ocean, lake, Q } = f;
-    const { LW, LH, fishes, herds } = f.life;
-    const vw = W / this.zoom, vh = H / this.zoom;
+    const vw = f.W / this.zoom;
     const s = w / vw;
     const px = w / Math.max(1, this.canvas.clientWidth);
     const size = px * Math.min(3.2, 1.5 + 0.2 * (this.zoom - 1));
+    const fishPath = new Path2D(), herdPath = new Path2D();
+    let anyFish = false, anyHerd = false;
+    const z = Math.round(size);
+    this.speckPoints(f, this.x0, this.y0, vw, f.H / this.zoom, (kind, wx, wy) => {
+      const x = Math.round((wx - this.x0) * s), y = Math.round((wy - this.y0) * s);
+      if (kind === 0) { fishPath.rect(x, y, Math.round(size * 1.6), z); anyFish = true; }
+      else { herdPath.rect(x, y, Math.round(size * 1.3), Math.round(size * 1.3)); anyHerd = true; }
+    });
+    if (anyFish) { ctx.fillStyle = 'rgba(236, 243, 247, 0.9)'; ctx.fill(fishPath); }
+    if (anyHerd) { ctx.fillStyle = 'rgba(48, 32, 22, 0.88)'; ctx.fill(herdPath); }
+  }
+
+  // Where the specks are in a window of the world (cells): calls
+  // put(kind, x, y) for each, kind 0 for fish and 1 for land animals.
+  speckPoints(f, x0, y0, vw, vh, put) {
+    const { W, H, ocean, lake, Q } = f;
+    const { LW, LH, fishes, herds } = f.life;
     const t = performance.now() / 1000;
-    const lx0 = Math.max(0, Math.floor(this.x0 / 2) - 1), lx1 = Math.min(LW - 1, Math.ceil((this.x0 + vw) / 2));
-    const ly0 = Math.max(0, Math.floor(this.y0 / 2) - 1), ly1 = Math.min(LH - 1, Math.ceil((this.y0 + vh) / 2));
+    const lx0 = Math.max(0, Math.floor(x0 / 2) - 1), lx1 = Math.min(LW - 1, Math.ceil((x0 + vw) / 2));
+    const ly0 = Math.max(0, Math.floor(y0 / 2) - 1), ly1 = Math.min(LH - 1, Math.ceil((y0 + vh) / 2));
     const wet = (i) => ocean[i] || lake[i] || Q[i] >= 2.5e6;
     let total = 0;
     for (let ly = ly0; ly <= ly1; ly++) {
@@ -394,8 +512,6 @@ export class MapRenderer {
     }
     if (!total) return;
     const keep = Math.min(1, SPECKS / total) * 65536;
-    const fishPath = new Path2D(), herdPath = new Path2D();
-    let anyFish = false, anyHerd = false;
     for (let ly = ly0; ly <= ly1; ly++) {
       for (let lx = lx0; lx <= lx1; lx++) {
         const c = ly * LW + lx;
@@ -422,16 +538,11 @@ export class MapRenderer {
             const amp = kind === 0 ? 0.28 : 0.18;
             const wx = (i % W) + 0.2 + 0.6 * (((h >>> 8) & 255) / 255) + amp * Math.sin(t * sp + ph);
             const wy = ((i / W) | 0) + 0.2 + 0.6 * (((h >>> 16) & 15) / 15) + amp * Math.cos(t * sp * 0.8 + ph * 1.3);
-            const x = Math.round((wx - this.x0) * s), y = Math.round((wy - this.y0) * s);
-            const z = Math.round(size);
-            if (kind === 0) { fishPath.rect(x, y, Math.round(size * 1.6), z); anyFish = true; }
-            else { herdPath.rect(x, y, Math.round(size * 1.3), Math.round(size * 1.3)); anyHerd = true; }
+            put(kind, wx, wy);
           }
         }
       }
     }
-    if (anyFish) { ctx.fillStyle = 'rgba(236, 243, 247, 0.9)'; ctx.fill(fishPath); }
-    if (anyHerd) { ctx.fillStyle = 'rgba(48, 32, 22, 0.88)'; ctx.fill(herdPath); }
   }
 
   // --- disaster effects ------------------------------------------------------
@@ -457,15 +568,21 @@ export class MapRenderer {
     ctx.clearRect(0, 0, w, h);
     const now = performance.now();
     this.effects = this.effects.filter((e) => now - e.t0 < e.dur);
-    if (!this.effects.length) return false;
+    if (!this.effects.length && !this.digPath && !this.brush) return false;
+    // Where a world point lands on this canvas and how many pixels a cell
+    // spans there: the flat view's, or the 3D view's when it's showing.
     const vw = this.W / this.zoom;
-    const s = w / vw;
-    const X = (wx) => (wx - this.x0) * s, Y = (wy) => (wy - this.y0) * s;
+    const flatS = w / vw;
+    const at = this.projector
+      ? (wx, wy) => this.projector(wx, wy, w, h)
+      : (wx, wy) => ({ x: (wx - this.x0) * flatS, y: (wy - this.y0) * flatS, s: flatS });
     for (const e of this.effects) {
       const t = (now - e.t0) / 1000;
       const fade = 1 - (now - e.t0) / e.dur;
       const ev = e.ev;
-      const cx = X(ev.x), cy = Y(ev.y);
+      const c = at(ev.x, ev.y);
+      if (!c) continue;
+      const cx = c.x, cy = c.y, s = c.s;
       const r = Math.max(ev.r * s, 6 * dpr);
       if (ev.kind === 'meteor') {
         if (t < 0.35) {
@@ -497,23 +614,61 @@ export class MapRenderer {
         ctx.fillStyle = lava;
         ctx.beginPath(); ctx.arc(cx, cy, r * 1.2, 0, Math.PI * 2); ctx.fill();
       } else if (ev.kind === 'lightning') {
-        if (ev.cells) this.fillCells(ctx, ev.cells, s, `rgba(255,${110 + 60 * fade | 0},30,${0.6 * fade})`);
+        if (ev.cells) this.fillCells(ctx, ev.cells, at, `rgba(255,${110 + 60 * fade | 0},30,${0.6 * fade})`);
         if (t < 0.12 || (t > 0.2 && t < 0.3)) {
           const [bx, by] = ev.strike || [ev.x, ev.y];
-          this.bolt(ctx, X(bx), Y(by), ev.id, dpr);
+          const b = at(bx, by);
+          if (b) this.bolt(ctx, b.x, b.y, ev.id, dpr);
         }
       } else if (ev.kind === 'flood') {
-        if (ev.cells) this.fillCells(ctx, ev.cells, s, `rgba(70,150,230,${0.6 * Math.min(1, fade * 1.6)})`);
+        if (ev.cells) this.fillCells(ctx, ev.cells, at, `rgba(70,150,230,${0.6 * Math.min(1, fade * 1.6)})`);
       }
     }
+    this.drawShaping(ctx, at, dpr);
     return true;
   }
 
-  fillCells(ctx, cells, s, style) {
+  // While shaping by hand: the channel line being drawn, or the brush.
+  drawShaping(ctx, at, dpr) {
+    const path = this.digPath;
+    if (path && path.length) {
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      for (const [width, style] of [[7, 'rgba(29,40,39,0.55)'], [3.5, 'rgba(120,200,255,0.95)']]) {
+        ctx.lineWidth = width * dpr;
+        ctx.strokeStyle = style;
+        ctx.beginPath();
+        let open = false;
+        for (const [x, y] of path) {
+          const p = at(x, y);
+          if (!p) { open = false; continue; }
+          if (open) ctx.lineTo(p.x, p.y); else ctx.moveTo(p.x, p.y);
+          open = true;
+        }
+        ctx.stroke();
+      }
+    }
+    const b = this.brush;
+    if (b) {
+      const p = at(b.x, b.y);
+      if (p) {
+        ctx.lineWidth = 2 * dpr;
+        ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+        ctx.beginPath(); ctx.arc(p.x, p.y, Math.max(6 * dpr, b.r * p.s), 0, Math.PI * 2); ctx.stroke();
+        ctx.strokeStyle = 'rgba(29,40,39,0.5)';
+        ctx.beginPath(); ctx.arc(p.x, p.y, Math.max(6 * dpr, b.r * p.s) + 2 * dpr, 0, Math.PI * 2); ctx.stroke();
+      }
+    }
+  }
+
+  fillCells(ctx, cells, at, style) {
     const W = this.W;
     ctx.fillStyle = style;
     ctx.beginPath();
-    for (const c of cells) ctx.rect(((c % W) - this.x0) * s, (((c / W) | 0) - this.y0) * s, s + 0.5, s + 0.5);
+    for (const c of cells) {
+      const p = at((c % W) + 0.5, ((c / W) | 0) + 0.5);
+      if (p) ctx.rect(p.x - p.s / 2, p.y - p.s / 2, p.s + 0.5, p.s + 0.5);
+    }
     ctx.fill();
   }
 

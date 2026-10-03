@@ -32,7 +32,9 @@ then open http://localhost:8000/.
 - `src/sim.js` — one world, its clock, and saving/restoring it
 - `src/save.js` — the continue slot in IndexedDB
 - `src/host.js`, `src/worker.js` — runs the sim off the main thread
-- `src/render.js`, `src/app.js` — the page
+- `src/weather.js` — clouds and rain that drift in from the sea
+- `src/tools.js` — shaping the land by hand: brushes, channels, storms
+- `src/render.js`, `src/view3d.js`, `src/app.js` — the page: the flat map, the 3D view, the controls
 
 ## Water
 
@@ -44,6 +46,16 @@ drains. A crater fills over the years before it overflows, and a cone
 across the river stops it below until the lake behind it spills. Below a
 day per tick, water also takes time to travel, at river speeds, so at an
 hour a second you can watch a flood come down the valley.
+
+## Weather, day and night
+
+At a week a second or slower, clouds drift in from the sea on the
+prevailing wind and the rain falls under them, so a storm over the hills
+sends a flood down the river hours later. Averaged over time the rain
+comes to the climate's, so at fast speeds the weather averages out and the
+clouds fade away. Below a day a second the sun rises and sets, with longer
+days in summer and a warm light at dawn and dusk, and with the seasons on,
+plants come out light green in spring and turn gold and red in autumn.
 
 ## Ground
 
@@ -88,7 +100,7 @@ Nature sets them off as time runs: lightning fires in dry summers on
 vegetated ground (about one every 30 years), floods on the trunk river (about
 one in 50, mostly with the spring melt), eruptions in the rising mountains
 (about one per 400,000 years) and meteor impacts (about one per 3 million).
-The Disasters button on the map lets you drop any of them where you tap.
+The Tools button on the map lets you drop any of them where you tap.
 Eruptions build cones and impacts dig craters, and the rivers re-route around
 them at once: a cone across a valley dams a lake. Floods lay silt on the
 floodplain, and fires burn the plants but leave the soil richer. The biggest
@@ -99,10 +111,30 @@ enough to get away shelter offshore and along the coast, and when the
 winter is over the same species come back from the sea and spread inland
 again.
 
+## Shaping it yourself
+
+The Tools tray holds the disasters and four tools of your own. Raise and
+Lower work like a brush: hold a finger on the map and the ground rises or
+falls under it, about 50 m a second, with a soft edge (lowering takes the
+loose cover first). Dig cuts a channel along a line you draw, its bed
+falling steadily from the higher end to the lower and kept below the ground
+either side, so a river that finds it follows it. Storm parks a heavy storm
+for a day and a half where you tap; it slows the clock to an hour a second
+so you can watch the flood come down. The Rain slider makes the whole valley
+wetter or drier, from 30% to 200% of its natural rain. With a tool armed
+one finger shapes; two fingers still move and zoom. Everything you change
+is saved with the world.
+
 ## The map
 
 Pinch, double-tap, scroll or use the + and − buttons to zoom in; drag to
 move around once zoomed. Tap a spot to see what lives there.
+
+The 3D button stands the valley up, its heights exaggerated three times so
+the relief reads: drag to turn and tilt it, pinch or use + and − to move in,
+double-tap to centre on a spot. Everything else works there too: the map
+modes, clouds and night, tapping to see what lives somewhere, and the
+disasters.
 
 ## Saving
 
