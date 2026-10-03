@@ -29,6 +29,9 @@ const ARRIVE_SETTLE = 20000;        // years a newcomer is spared the crowding c
 const ARRIVE_DENSITY = 0.03;        // its numbers where it first lands
 const ARRIVE_TOTAL = 0.3;           // and at least this many in all
 const ARRIVE_CELLS = 6;             // the edge band widens until it has this many cells to land on
+const ARRIVE_FOOD = 0.1;            // an animal lands only where its food is at least this dense
+const ARRIVE_LAG = 5000;            // years animals wait, if there's no food for them yet, before trying again
+const ARRIVE_TRIES = 5;
 const FRONTIER_RANGE = 10;          // km²: a species this widespread counts toward the frontier
 
 const R_MAX = 3;                    // growth per year of the simplest, fastest species
@@ -126,7 +129,7 @@ export class Life {
     // (sea, fresh, land): { score, traits }. It never goes back, so after an
     // extinction it still knows what lived here before.
     this.frontier = { plant: {}, animal: {} };
-    this.arrivals = [];     // years when newcomers come in, after a winter that killed species
+    this.arrivals = [];     // { at, kinds, tries }: newcomers due, after a winter that killed species
     this.nextArrive = null; // the next lone newcomer, any time
     this.trickleKind = 'animal';
     this.arrived = [];      // this step's newcomers: { names, plants, animals, at, trickle }
@@ -350,9 +353,12 @@ export class Life {
       this.held = false;
       this.arrive(years, ['plant', 'animal'], false);
     }
-    if (!this.hold && this.arrivals.some((a) => a <= years)) {
-      this.arrivals = this.arrivals.filter((a) => a > years);
-      this.arrive(years, ['plant', 'animal'], false);
+    if (!this.hold && this.arrivals.some((a) => a.at <= years)) {
+      const due = this.arrivals.filter((a) => a.at <= years);
+      this.arrivals = this.arrivals.filter((a) => a.at > years);
+      const kinds = new Set(due.flatMap((a) => a.kinds));
+      const tries = Math.max(...due.map((a) => a.tries || 0));
+      this.arrive(years, ['plant', 'animal'].filter((k) => kinds.has(k)), false, tries);
     }
     if (this.nextArrive === null && !this.hold) this.nextArrive = years + ARRIVE_EVERY;
     if (!this.hold && years >= this.nextArrive) {
@@ -894,7 +900,7 @@ export class Life {
   // mouths). Each is new, at the most advanced level its kind has reached in
   // that realm, and suited to the climate where it lands. After a deadly
   // winter, two or three of each kind; in the trickle, one at a time.
-  arrive(years, kinds, trickle) {
+  arrive(years, kinds, trickle, tries = 0) {
     const rng = this.rng;
     const names = [];
     const count = { plant: 0, animal: 0 };
@@ -911,16 +917,22 @@ export class Life {
       const known = Object.keys(this.frontier[kind])
         .filter((r) => kind === 'plant' || eats(r))
         .sort((a, b) => REALM_RANK[b] - REALM_RANK[a]);
-      if (!known.length) continue;
-      let realms;
-      if (trickle) realms = [known[rng.int(known.length)]];
+      const before = count[kind];
+      let realms = [];
+      if (!known.length) realms = [];
+      else if (trickle) realms = [known[rng.int(known.length)]];
       else realms = known.length >= 2 ? known.slice(0, 3) : [known[0], known[0]];
-      for (const realm of realms) {
+      for (const realm of known.length ? realms : []) {
         const sp = this.newcomer(kind, realm, years);
         if (!sp) continue;
         count[kind]++;
         names.push(sp.name);
         if (at < 0) at = sp.landedAt;
+      }
+      // Animals with nothing yet to eat at the edges wait for the plants to
+      // take hold, and try again a while later.
+      if (kind === 'animal' && count.animal === before && !trickle && tries < ARRIVE_TRIES) {
+        this.arrivals.push({ at: years + ARRIVE_LAG, kinds: ['animal'], tries: tries + 1 });
       }
     }
     if (!names.length) return;
@@ -954,7 +966,7 @@ export class Life {
     for (let w = 1; w <= 8 && cells.length < ARRIVE_CELLS; w *= 2) {
       cells = [];
       for (let c = 0; c < NL; c++) {
-        if (food && food[c] < 0.02) continue;
+        if (food && food[c] < ARRIVE_FOOD) continue;
         if (realm === 'sea' ? sea[c] > 0.5 && edge(c, w, { bottom: true })
           : realm === 'fresh' ? fresh[c] > 0.1 && edge(c, w + 2, { top: true, bottom: true })
             : landF[c] > 0.5 && edge(c, w + 1, { top: true })) cells.push(c);
@@ -1028,7 +1040,7 @@ export class Life {
       freshSeeded: !!this.freshSeeded,
       fishSeeded: !!this.fishSeeded,
       frontier: JSON.parse(JSON.stringify(this.frontier)),
-      arrivals: this.arrivals.slice(),
+      arrivals: this.arrivals.map((a) => ({ ...a, kinds: a.kinds.slice() })),
       nextArrive: this.nextArrive,
       trickleKind: this.trickleKind,
       held: !!this.held,
@@ -1047,7 +1059,8 @@ export class Life {
     this.frontier = s.frontier ? JSON.parse(JSON.stringify(s.frontier)) : { plant: {}, animal: {} };
     // Worlds saved with species sheltering at sea (before newcomers): when
     // they would have come back, newcomers arrive instead.
-    this.arrivals = s.arrivals ? s.arrivals.slice() : [...new Set((s.refuge || []).map((r) => r.at))];
+    const due = s.arrivals ? s.arrivals : [...new Set((s.refuge || []).map((r) => r.at))];
+    this.arrivals = due.map((a) => (typeof a === 'number' ? { at: a, kinds: ['plant', 'animal'], tries: 0 } : { ...a, kinds: a.kinds.slice() }));
     this.nextArrive = s.nextArrive ?? null;
     this.trickleKind = s.trickleKind || 'animal';
     this.held = !!s.held;

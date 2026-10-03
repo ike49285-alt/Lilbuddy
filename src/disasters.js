@@ -211,7 +211,7 @@ export class Disasters {
       if (ev.winter) {
         ev.label += `; ${ev.winter}: ${lost ? `${lost} species lost` : 'every species hangs on'}`;
         // When it's over, newcomers come in from beyond the valley.
-        if (lost) sim.life.arrivals.push(ev.returnAt);
+        if (lost) sim.life.arrivals.push({ at: ev.returnAt, kinds: ['plant', 'animal'], tries: 0 });
       }
       sim.syncCover();
     }

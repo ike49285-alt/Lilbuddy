@@ -1170,11 +1170,16 @@ window.Headwaters = {
     gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
     let r = 0, g = 0, b = 0, sky = 0, n = 0;
     const s0 = view3d.skyRgb || [0, 0, 0];
+    const grid = new Array(64 * 3).fill(0), gn = new Array(64).fill(0);
     for (let k = 0; k < px.length; k += 4 * 7) {
       r += px[k]; g += px[k + 1]; b += px[k + 2]; n++;
       if (Math.abs(px[k] - s0[0]) + Math.abs(px[k + 1] - s0[1]) + Math.abs(px[k + 2] - s0[2]) < 6) sky++;
+      const p = k / 4, cell = Math.min(7, Math.floor(((p / w) | 0) / h * 8)) * 8 + Math.min(7, Math.floor((p % w) / w * 8));
+      grid[cell * 3] += px[k]; grid[cell * 3 + 1] += px[k + 1]; grid[cell * 3 + 2] += px[k + 2]; gn[cell]++;
     }
-    return { mean: [r / n, g / n, b / n], sky: sky / n };
+    // An 8 × 8 grid of mean colours, to tell pictures apart that average alike.
+    for (let c = 0; c < 64; c++) for (let j = 0; j < 3; j++) grid[c * 3 + j] /= Math.max(1, gn[c]);
+    return { mean: [r / n, g / n, b / n], sky: sky / n, grid };
   },
   project3d: (x, y) => { const r = glCanvas.getBoundingClientRect(); return view3d.project(x, y, r.width, r.height); },
   cloudy: () => !!(last && last.cloud),

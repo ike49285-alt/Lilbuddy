@@ -114,11 +114,13 @@ tetrapods walk in), suited to the climate where they land and only where
 there's something for them to eat. Now and then a lone newcomer drifts in
 too, a plant or an animal, about once every 100,000 years.
 
-The world's first million years are the heavy bombardment: catastrophic
-impacts and eruptions one after another, about one every 4,000 years at
-first and easing off to nothing by the million-year mark, leaving a
-cratered, volcanic valley. Life is there from the start and is knocked
-back again and again, and refilled by newcomers each time.
+The world's first million years are the heavy bombardment: impacts and
+eruptions one after another, about one every 500 years at first, most of
+them small and a few catastrophic, easing off to nothing by the
+million-year mark and leaving a cratered, volcanic valley. Life is there
+from the start and is knocked back again and again; nothing comes in from
+beyond until it's over. Then the valley is restocked: plants first, and
+the animals once there's something for them to eat.
 
 ## Shaping it yourself
 
@@ -130,7 +132,9 @@ falling steadily from the higher end to the lower and kept below the ground
 either side, so a river that finds it follows it. Storm parks a heavy storm
 for a day and a half where you tap; it slows the clock to an hour a second
 so you can watch the flood come down. The Rain slider makes the whole valley
-wetter or drier, from 30% to 200% of its natural rain. With a tool armed
+wetter or drier, from 30% to 200% of its natural rain; the Meteors and
+Volcanoes sliders set how often nature strikes and erupts, from none to
+five times natural (the bombardment included). With a tool armed
 one finger shapes; two fingers still move and zoom. Everything you change
 is saved with the world.
 
