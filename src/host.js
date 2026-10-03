@@ -2,7 +2,7 @@
 // messages. The worker wraps this; nothing here touches the DOM.
 //
 // The page asks for a rate in sim-years per real second. Each tick's length
-// adapts to it: about ten ticks a second, never shorter than a day and never
+// adapts to it: about ten ticks a second, never shorter than a minute and never
 // longer than the model's maximum step. When ticks can't be computed fast
 // enough the actual rate falls behind the target, and the page says so.
 //
@@ -16,13 +16,15 @@
 import { Simulation, transferList, stateTransferList, MAX_STEP_YEARS } from './sim.js';
 
 const DAY = 1 / 365.25;
+const MINUTE = DAY / 1440;
+const MIN_RATE = 10 * MINUTE;      // sim-years per second: ten minutes a second
 const TICKS_PER_SECOND = 10;
 const BUDGET_MS = 12;       // longest a single slice may run before yielding
 const LOOP_MS = 16;
 
 export function tickFor(rate) {
   if (!Number.isFinite(rate)) return MAX_STEP_YEARS;
-  return Math.max(DAY, Math.min(MAX_STEP_YEARS, rate / TICKS_PER_SECOND));
+  return Math.max(MINUTE, Math.min(MAX_STEP_YEARS, rate / TICKS_PER_SECOND));
 }
 
 export function createHost(post) {
@@ -144,7 +146,7 @@ export function createHost(post) {
         start();
         break;
       case 'rate':
-        rate = msg.rate === 'max' ? Infinity : Math.max(DAY, Number(msg.rate));
+        rate = msg.rate === 'max' ? Infinity : Math.max(MIN_RATE, Number(msg.rate));
         tickYears = tickFor(rate);
         debt = 0;
         recent.length = 0;

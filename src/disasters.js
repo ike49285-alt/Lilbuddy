@@ -308,6 +308,7 @@ export class Disasters {
       const q = (d * d) / (r * r);
       const dz = h * Math.exp(-q) - 0.12 * h * Math.exp(-(d * d) / (0.35 * r) ** 2);
       z[j] += dz;
+      if (dz > 1) land.water[j] = 0;     // the lava pushes any water out
       fert[j] += 0.12 * Math.exp(-(d * d) / (1.5 * r) ** 2);
       // Lava flows build the cone in basalt, burying whatever was there;
       // further out, the ash falls as a fresh loose layer.
@@ -346,6 +347,7 @@ export class Disasters {
       const q = d / r;
       const dz = q < 1 ? -D * (1 - q * q) + rim * q * q : rim * Math.exp(-(((d - r) / (0.5 * r)) ** 2));
       z[j] += dz;
+      if (Math.abs(dz) > 1) land.water[j] = 0;   // the blast throws any water out; the crater fills again
       // The blast takes the cover first, then the rock; what it throws out
       // lands as a rim of shattered rubble.
       loose[j] = dz >= 0 ? loose[j] + dz : Math.max(0, loose[j] + dz);

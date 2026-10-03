@@ -34,6 +34,7 @@ export function generateTerrain(rng) {
   const rock = new Uint8Array(N);       // bedrock type, an index into ROCKS
   const loose = new Float32Array(N);    // metres of loose cover over it
   const cover = makeNoise2D(rng.fork('cover'));
+  const hummock = makeNoise2D(rng.fork('hummock'));
   const core = makeNoise2D(rng.fork('core'));
 
   const rough = makeNoise2D(rng.fork('rough'));
@@ -81,7 +82,12 @@ export function generateTerrain(rng) {
       const r = fbm(rough, u * 7, v * 9, 5) * (18 + 70 * highland) * (1 - 0.7 * seaward);
       // A ragged summit line rather than a ruler edge.
       const rr = v < 0.18 ? fbm(ridge, u * 5, 0.5, 3) * 60 * (1 - v / 0.18) : 0;
-      z[i] = base + trough + r + rr;
+      // Hummocky ground: dips and swells a few metres high, a few hundred
+      // metres across, on the foothills and the plain. The first rains pool
+      // in them and have to fill and spill to find a way to the sea.
+      const lowland = smooth((v - 0.3) / 0.2) * (1 - seaward);
+      const hm = fbm(hummock, u * 40, v * 70, 2) * 18 * lowland;
+      z[i] = base + trough + r + rr + hm;
 
       // Uplift: strongest along the range front, fading out by mid-valley,
       // with slight subsidence under the coast so the delta has room to build.

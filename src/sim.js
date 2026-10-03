@@ -115,6 +115,8 @@ export class Simulation {
       land: {
         z: land.z.slice(), fert: land.fert.slice(), snow: land.snow.slice(), cover: land.cover.slice(),
         loose: land.loose.slice(), rock: land.rock.slice(),
+        water: land.water.slice(), chan: land.chan.slice(), spillIn: land.spillIn.slice(),
+        lagActive: land.lagActive, lastDt: land.lastDt,
       },
       life: life.saveState(),
       disasters: this.disasters.saveState(),
@@ -138,6 +140,14 @@ export class Simulation {
     // Worlds saved before ground types keep the cover and rock their seed
     // starts with.
     if (state.land.loose) land.loose.set(state.land.loose);
+    // Worlds saved before water could stand start dry and fill again.
+    if (state.land.water) {
+      land.water.set(state.land.water);
+      land.chan.set(state.land.chan);
+      land.spillIn.set(state.land.spillIn);
+      land.lagActive = state.land.lagActive;
+      land.lastDt = state.land.lastDt;
+    }
     if (state.land.rock) {
       land.rock.set(state.land.rock);
       for (let i = 0; i < land.N; i++) land.kfac[i] = ROCKS[land.rock[i]].k;
@@ -155,7 +165,7 @@ export class Simulation {
   // A digest of the evolving state, for checking that a restored world
   // carries on exactly as the original would have.
   stateHash() {
-    const arrays = [this.land.z, this.land.snow, this.land.cover, this.land.loose];
+    const arrays = [this.land.z, this.land.snow, this.land.cover, this.land.loose, this.land.water, this.land.chan];
     for (const sp of this.life.species) arrays.push(sp.N);
     return hashArrays(arrays);
   }
@@ -276,7 +286,8 @@ function snowBytes(snow) {
 
 export function stateTransferList(state) {
   const list = [state.history.sea.buffer, state.history.mouthQ.buffer, state.land.z.buffer,
-    state.land.fert.buffer, state.land.snow.buffer, state.land.cover.buffer, state.land.loose.buffer, state.land.rock.buffer];
+    state.land.fert.buffer, state.land.snow.buffer, state.land.cover.buffer, state.land.loose.buffer, state.land.rock.buffer,
+    state.land.water.buffer, state.land.chan.buffer, state.land.spillIn.buffer];
   for (const sp of state.life.species) if (sp.N) list.push(sp.N.buffer);
   return list;
 }

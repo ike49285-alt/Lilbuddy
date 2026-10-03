@@ -17,8 +17,12 @@ let pendingRunTo = null;
 // --- time rate -------------------------------------------------------------
 
 const DAY = 1 / 365.25;
+const HOUR = DAY / 24;
+const MINUTE = HOUR / 60;
 // Rates in sim-years per real second.
 const PRESETS = [
+  { rate: 10 * MINUTE, label: '10 min/s' },
+  { rate: HOUR, label: '1 hr/s' },
   { rate: DAY, label: '1 day/s' },
   { rate: 7 * DAY, label: '1 week/s' },
   { rate: 1 / 12, label: '1 month/s' },
@@ -30,7 +34,7 @@ const PRESETS = [
   { rate: 100000, label: '100 kyr/s' },
 ];
 const MAX_RATE = 'max';
-const LOG_MIN = Math.log10(DAY);
+const LOG_MIN = Math.log10(10 * MINUTE);
 const LOG_MAX = 5;
 const SLIDER_MAX = 1000;
 const SNAP = 14;            // slider units within which a drag snaps to a preset
@@ -121,13 +125,18 @@ function onMessage(e) {
 const n0 = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
 const n1 = new Intl.NumberFormat('en-US', { maximumFractionDigits: 1 });
 
-// At day-scale rates the clock counts days within the year, so it visibly
-// moves; otherwise it shows whole years, thousands or millions.
+// At day-scale rates the clock counts days within the year, and below a
+// day the time of day too, so it visibly moves; otherwise it shows whole
+// years, thousands or millions.
 function formatTime(years, tickYears) {
   const year = Math.floor(years + 1e-9);
   if (tickYears < 1) {
-    const day = Math.min(365, Math.floor((years - year) * 365.25 + 1e-6) + 1);
-    return `${n0.format(year)} yr · day ${day}`;
+    const days = (years - year) * 365.25 + 1e-6;
+    const day = Math.min(365, Math.floor(days) + 1);
+    if (tickYears >= DAY) return `${n0.format(year)} yr · day ${day}`;
+    const mins = Math.floor((days - Math.floor(days)) * 1440);
+    const hh = String(Math.floor(mins / 60)).padStart(2, '0'), mm = String(mins % 60).padStart(2, '0');
+    return `${n0.format(year)} yr · day ${day} · ${hh}:${mm}`;
   }
   if (years < 10000) return `${n0.format(year)} yr`;
   if (years < 1e6) return `${(years / 1000).toFixed(1)} kyr`;
@@ -136,6 +145,8 @@ function formatTime(years, tickYears) {
 
 function formatSpan(years) {
   const trim = (v) => (v >= 10 || Math.abs(v - Math.round(v)) < 0.05 ? n0.format(v) : n1.format(v));
+  if (years < 0.95 * HOUR) return `${trim(years / MINUTE)} min`;
+  if (years < 0.95 * DAY) return `${trim(years / HOUR)} hr`;
   if (years < 6.5 * DAY) return `${trim(years * 365.25)} day`;
   if (years < 0.07) return `${trim(years * 52.18)} wk`;
   if (years < 0.95) return `${trim(years * 12)} mo`;
