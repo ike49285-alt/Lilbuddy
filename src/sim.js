@@ -152,15 +152,17 @@ export class Simulation {
 
   // Seeds a species by hand where the page tapped: the one picked (id), or
   // with none, a newcomer suited to the spot. Returns a note.
-  seedSpecies(i, id) {
+  seedSpecies(i, id, kind) {
     if (!(i >= 0 && i < this.land.N)) return null;
-    const r = this.life.seedAt(this.life.toLife[i], id || null, this.years);
+    const r = this.life.seedAt(this.life.toLife[i], id || null, this.years, kind);
     this.syncCover();
     let label;
     const where = { land: 'on land', fresh: 'in fresh water', sea: 'in the sea' };
     if (!r) label = 'Nothing could be seeded here';
-    else if (!r.ok && !r.sp) label = `Nothing has made it ${where[r.realm]} yet to seed here`;
-    else if (!r.ok) label = `${r.sp.name} can\u2019t live here`;
+    else if (!r.ok && r.sp) label = `${r.sp.name} can\u2019t live here`;
+    else if (!r.ok && r.reason === 'food') label = 'Nothing here for an animal to eat yet';
+    else if (!r.ok && r.reason === 'none') label = `No ${r.kind} has made it ${where[r.realm]} yet to seed here`;
+    else if (!r.ok) label = 'Nothing could be seeded here';
     else label = `Seeded ${r.sp.name} (${formOf(r.sp.traits)}) here`;
     return this.disasters.note(this, 'seed', i, label, 3);
   }

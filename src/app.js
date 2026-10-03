@@ -547,6 +547,7 @@ function renderCard(card, sp, byId) {
 
 function selectSpecies(id) {
   selectedId = id;
+  syncSeedPicked();
   lastSlow = 0;
   worker.postMessage({ type: 'select', id });
   for (const b of document.querySelectorAll('#species-list button')) {
@@ -947,7 +948,7 @@ function dropAt(wx, wy) {
   const i = cellAt(wx, wy);
   if (i < 0) return;
   if (armed === 'seed') {
-    worker.postMessage({ type: 'seed', i, id: selectedId || null });
+    worker.postMessage({ type: 'seed', i, id: seedKind === 'picked' ? selectedId : null, kind: seedKind });
     return;
   }
   if (armed === 'storm') {
@@ -966,6 +967,7 @@ const SHAPERS = new Set(['raise', 'lower', 'dig']);
 const BRUSH_MS = 100;        // a held brush sends a nudge this often
 const BRUSH_M = 5;           // metres per nudge at the brush's centre: 50 m a second
 let brushSize = 'big';
+let seedKind = 'plant';      // what Seed drops: 'plant', 'animal', or the 'picked' species
 let shaping = null;          // a brush held down or a channel being drawn
 
 function setArmed(kind) {
@@ -973,11 +975,12 @@ function setArmed(kind) {
   for (const b of document.querySelectorAll('.tools .tool')) b.setAttribute('aria-pressed', b.dataset.kind === kind ? 'true' : 'false');
   $('size-row').hidden = !(kind === 'volcano' || kind === 'meteor');
   $('brush-row').hidden = !(kind === 'raise' || kind === 'lower');
+  $('seed-row').hidden = kind !== 'seed';
   const names = {
     flood: 'Tap the map to flood a river.', lightning: 'Tap the map to strike with lightning.', volcano: 'Tap the map to raise a volcano.',
     meteor: 'Tap the map to drop a meteor.', raise: 'Hold a finger on the map to raise the ground.', lower: 'Hold a finger on the map to lower the ground.',
     dig: 'Draw a line on the map to dig a channel.', storm: 'Tap the map to park a storm there.',
-    seed: selectedId ? 'Tap the map to seed the species picked in the Life tab.' : 'Tap the map to seed a newcomer there (or pick a species in the Life tab first).',
+    seed: seedKind === 'picked' ? 'Tap the map to seed the species picked in the Life tab.' : `Tap the map to seed ${seedKind === 'animal' ? 'an animal' : 'a plant'} there.`,
   };
   $('tools-hint').textContent = kind ? names[kind] : 'Pick a tool, then use it on the map.';
   const label = { flood: 'Tap map: Flood', lightning: 'Tap map: Lightning', volcano: 'Tap map: Volcano', meteor: 'Tap map: Meteor',
@@ -1065,6 +1068,20 @@ for (const [id, [key, scale, label]] of Object.entries(SLIDERS)) {
   $(id).addEventListener('input', () => { $(`${id}-out`).textContent = label(Number($(id).value)); });
   $(id).addEventListener('change', () => { if (worker) worker.postMessage({ type: 'setting', key, value: Number($(id).value) / scale }); });
 }
+// What Seed drops. Picking a species in the Life tab offers it, and
+// chooses it; unpicking it goes back to a plant.
+function setSeedKind(k) {
+  seedKind = k;
+  for (const o of document.querySelectorAll('#seed-row button')) o.setAttribute('aria-pressed', o.dataset.seed === k ? 'true' : 'false');
+  if (armed === 'seed') setArmed('seed');
+}
+function syncSeedPicked() {
+  const picked = document.querySelector('#seed-row [data-seed="picked"]');
+  picked.hidden = !selectedId;
+  if (selectedId && seedKind !== 'picked') setSeedKind('picked');
+  else if (!selectedId && seedKind === 'picked') setSeedKind('plant');
+}
+for (const b of document.querySelectorAll('#seed-row button')) b.addEventListener('click', () => setSeedKind(b.dataset.seed));
 for (const b of document.querySelectorAll('#brush-row button')) {
   b.addEventListener('click', () => {
     brushSize = b.dataset.brush;

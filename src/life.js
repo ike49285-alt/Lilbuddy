@@ -1003,10 +1003,10 @@ export class Life {
   }
 
   // Seeds a species by hand within 3 km of a life cell: the species picked,
-  // where it can live, or with none picked, a newcomer at the frontier for
-  // what's there (a plant, or an animal if its food is already there).
-  // Returns { sp, ok }.
-  seedAt(c, id, years) {
+  // where it can live, or a newcomer of the kind asked for ('plant' or
+  // 'animal') at the frontier for what's there; an animal only where its
+  // food already is. Returns { sp, ok } or { ok: false, realm, reason }.
+  seedAt(c, id, years, kind = 'plant') {
     const { LW, LH } = this;
     const near = [];
     const x0 = c % LW, y0 = (c / LW) | 0;
@@ -1034,10 +1034,10 @@ export class Life {
       if (realm) break;
     }
     if (!realm) return null;
-    let sp = null;
-    if (this.frontier.animal[realm]) sp = this.newcomer('animal', realm, years, near);
-    if (!sp && this.frontier.plant[realm]) sp = this.newcomer('plant', realm, years, near);
-    if (!sp) return { ok: false, realm };
+    if (kind !== 'animal') kind = 'plant';
+    if (!this.frontier[kind][realm]) return { ok: false, realm, kind, reason: 'none' };
+    const sp = this.newcomer(kind, realm, years, near);
+    if (!sp) return { ok: false, realm, kind, reason: kind === 'animal' ? 'food' : 'room' };
     sp.arrivedAt = null;
     sp.seededAt = years;
     this.species.sort((a, b) => a.id - b.id);

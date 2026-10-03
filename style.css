@@ -319,6 +319,8 @@ body {
 .tray-head { margin: 4px 0 0; color: var(--muted); font: 600 11px/1 var(--font-display); letter-spacing: 0.08em; text-transform: uppercase; }
 .tools .shape-row .tool[aria-pressed="true"] { background: #2b6c9e; }
 .size-row.brush-row { grid-template-columns: 1fr 1fr; }
+.size-row.seed-row { grid-auto-flow: column; grid-auto-columns: 1fr; grid-template-columns: none; }
+.size-row button[hidden] { display: none; }
 .wet-row {
   display: grid;
   grid-template-columns: 7em 1fr 4em;

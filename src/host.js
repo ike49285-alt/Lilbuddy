@@ -204,7 +204,7 @@ export function createHost(post) {
         urgent = true;
         break;
       case 'seed':
-        sim.seedSpecies(msg.i, msg.id);
+        sim.seedSpecies(msg.i, msg.id, msg.kind);
         dirty = true;
         urgent = true;
         break;

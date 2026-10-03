@@ -65,6 +65,11 @@
           <button type="button" data-brush="small" aria-pressed="false">Small brush</button>
           <button type="button" data-brush="big" aria-pressed="true">Big brush</button>
         </div>
+        <div class="size-row seed-row" id="seed-row" role="group" aria-label="What to seed" hidden>
+          <button type="button" data-seed="plant" aria-pressed="true">Plant</button>
+          <button type="button" data-seed="animal" aria-pressed="false">Animal</button>
+          <button type="button" data-seed="picked" aria-pressed="false" hidden>Picked</button>
+        </div>
         <p class="tray-head">World</p>
         <label class="wet-row" for="wetness"><span>Rain</span><input type="range" id="wetness" min="30" max="200" step="5" value="100"><output id="wetness-out" for="wetness">100%</output></label>
         <label class="wet-row" for="meteors"><span>Meteors</span><input type="range" id="meteors" min="0" max="500" step="10" value="100"><output id="meteors-out" for="meteors">100%</output></label>
