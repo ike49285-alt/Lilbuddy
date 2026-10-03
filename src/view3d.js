@@ -105,7 +105,7 @@ precision mediump float;
 uniform vec3 uTint;
 varying float vKind;
 void main() {
-  vec3 c = vKind < 0.5 ? vec3(0.93, 0.95, 0.97) : vec3(0.19, 0.13, 0.09);
+  vec3 c = vKind < 0.5 ? vec3(0.93, 0.95, 0.97) : vKind < 1.5 ? vec3(0.19, 0.13, 0.09) : vec3(0.77, 0.29, 0.14);
   gl_FragColor = vec4(c * uTint, vKind < 0.5 ? 0.6 : 0.92);
 }`;
 

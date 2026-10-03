@@ -95,6 +95,7 @@ export class Simulation {
       warm: (n) => `The first warm-blooded animal: ${n}`,
       seed: (n) => `The first seed plants: ${n}`,
       flower: (n) => `The first flowers: ${n}`,
+      hunter: (n) => `The first hunter: ${n} eats other animals`,
     };
     for (const [k, f] of Object.entries(st.firsts || {})) {
       if (!firsts[k] && FIRSTS[k]) this.disasters.milestone(this, FIRSTS[k](f.name), f.at);
@@ -473,7 +474,7 @@ export function transferList(frame) {
     ...(frame.cloud ? [frame.cloud.buffer] : []),
     ...(frame.layer ? [frame.layer.buffer] : []),
     frame.lake.buffer, frame.ice.buffer, frame.snow.buffer, frame.history.sea.buffer, frame.history.mouthQ.buffer,
-    L.aqua.buffer, L.veg.buffer, L.vegC.buffer, L.rgb.buffer, L.fishes.buffer, L.herds.buffer];
+    L.aqua.buffer, L.veg.buffer, L.vegC.buffer, L.rgb.buffer, L.fishes.buffer, L.herds.buffer, ...(L.hunters ? [L.hunters.buffer] : [])];
   if (L.selected) list.push(L.selected.buffer);
   return list;
 }

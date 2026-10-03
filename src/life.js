@@ -17,7 +17,7 @@ import { CELL_M } from './terrain.js';
 import { CHANNEL_Q } from './landscape.js';
 import {
   realms, mutate, genusName, epithet, formOf, isLandPlant, isLandAnimal,
-  tempOptC, tempWidthC, toTempTrait, traitDistance, withDefaults, clamp01, SHELLED, SEEDED,
+  tempOptC, tempWidthC, toTempTrait, traitDistance, withDefaults, clamp01, SHELLED, SEEDED, isHunter,
 } from './species.js';
 
 export const LIFE_SCALE = 2;
@@ -55,6 +55,10 @@ const A_RATE = 1.2;                 // growth per year of the fastest-breeding a
 const EAT = 0.35;                   // animal biomass one unit of food supports
 const APPETITE = 1.2;               // what a unit of animal biomass eats, relative to EAT
 const MAX_GRAZE = 0.6;              // grazers take at most this share of a plant's room
+const MAX_HUNT = 0.6;               // hunters take at most this share of their prey's room
+const HUNT_EAT = 0.5;               // a hunter needs twice the food per head
+const HUNT_RATE = 0.6;              // and breeds slower
+const MEAT = 4;                     // a hunter eats several times its own weight in prey
 // Lookup tables, rebuilt per species each tick, so the per-cell work has no
 // pow or exp in it: temperature fit over −40…40 °C in quarter degrees, and
 // resource richness 0…2.5 in 1/256ths.
@@ -112,6 +116,20 @@ export class Life {
     this.eatFresh = [new Float32Array(NL), new Float32Array(NL)];
     this.eatSea = [new Float32Array(NL), new Float32Array(NL)];
     this.eatLand = [new Float32Array(NL), new Float32Array(NL)];
+    // Hunters: their own crowding, the best any manages, how hard they hunt
+    // in each realm, and the share of the plant-eaters' room they take.
+    this.hFresh = new Float32Array(NL);
+    this.hSea = new Float32Array(NL);
+    this.hLand = new Float32Array(NL);
+    this.kmHFresh = new Float32Array(NL);
+    this.kmHSea = new Float32Array(NL);
+    this.kmHLand = new Float32Array(NL);
+    this.eatPFresh = new Float32Array(NL);
+    this.eatPSea = new Float32Array(NL);
+    this.eatPLand = new Float32Array(NL);
+    this.huntFresh = new Float32Array(NL);
+    this.huntSea = new Float32Array(NL);
+    this.huntLand = new Float32Array(NL);
     // The share of a plant's room grazed away, per realm and size class.
     this.gFresh = [new Float32Array(NL), new Float32Array(NL)];
     this.gSea = [new Float32Array(NL), new Float32Array(NL)];
@@ -377,7 +395,8 @@ export class Life {
       this.arrive(years, [this.trickleKind], true);
     }
     this.tally();
-    for (const a of [...this.kmFresh, ...this.kmSea, ...this.kmLand, this.kmAFresh, this.kmASea, this.kmALand]) a.fill(0);
+    for (const a of [...this.kmFresh, ...this.kmSea, ...this.kmLand, this.kmAFresh, this.kmASea, this.kmALand,
+      this.kmHFresh, this.kmHSea, this.kmHLand]) a.fill(0);
     for (const sp of this.species) this.capacity(sp);
     for (const sp of this.species) this.grow(sp, dt);
     for (const sp of this.species) this.disperse(sp, dt);
@@ -389,10 +408,11 @@ export class Life {
   // Realm totals: how much biomass already lives in each realm of each cell.
   tally() {
     for (const a of [...this.bFresh, ...this.bSea, ...this.bLand, this.aFresh, this.aSea, this.aLand,
-      ...this.eatFresh, ...this.eatSea, ...this.eatLand]) a.fill(0);
-    let grazers = false;
+      ...this.eatFresh, ...this.eatSea, ...this.eatLand, this.hFresh, this.hSea, this.hLand,
+      this.eatPFresh, this.eatPSea, this.eatPLand]) a.fill(0);
+    let grazers = false, hunters = false;
     for (const sp of this.species) {
-      if (sp.traits.animal) { this.tallyAnimal(sp); grazers = true; continue; }
+      if (sp.traits.animal) { this.tallyAnimal(sp); grazers = true; if (isHunter(sp.traits)) hunters = true; continue; }
       const tier = tierOf(sp.traits);
       const bFresh = this.bFresh[tier], bSea = this.bSea[tier], bLand = this.bLand[tier];
       const r = realms(sp.traits);
@@ -410,6 +430,10 @@ export class Life {
       this.grazeOf(this.gSea[tier], this.eatSea[tier], this.bSea[tier], grazers);
       this.grazeOf(this.gLand[tier], this.eatLand[tier], this.bLand[tier], grazers);
     }
+    // How much of the plant-eaters' room the hunters take.
+    this.grazeOf(this.huntFresh, this.eatPFresh, this.aFresh, hunters, MAX_HUNT);
+    this.grazeOf(this.huntSea, this.eatPSea, this.aSea, hunters, MAX_HUNT);
+    this.grazeOf(this.huntLand, this.eatPLand, this.aLand, hunters, MAX_HUNT);
   }
 
   // An animal's crowding, and what it eats: filter feeders the microbes and
@@ -419,14 +443,21 @@ export class Life {
     const r = realms(t);
     const sum = r.fresh + r.sea + r.land || 1;
     const wf = r.fresh / sum, ws = r.sea / sum, wl = r.land / sum;
-    const small = (1 - t.diet) * APPETITE, big = t.diet * APPETITE;
-    const { aFresh, aSea, aLand } = this;
+    // Hunters crowd only hunters, and eat the plant-eaters; what plants they
+    // still eat, they eat less of.
+    const hunter = isHunter(t);
+    const plants = plantShare(t);
+    const small = (1 - t.diet) * APPETITE * plants, big = t.diet * APPETITE * plants;
+    const meat = t.prey * APPETITE * MEAT;
+    const aFresh = hunter ? this.hFresh : this.aFresh, aSea = hunter ? this.hSea : this.aSea, aLand = hunter ? this.hLand : this.aLand;
+    const { eatPFresh, eatPSea, eatPLand } = this;
     const [eF0, eF1] = this.eatFresh, [eS0, eS1] = this.eatSea, [eL0, eL1] = this.eatLand;
     const N = sp.N;
     this.forBox(sp, 0, (c) => {
       const n = N[c];
       if (n === 0) return;
       aFresh[c] += n * wf; aSea[c] += n * ws; aLand[c] += n * wl;
+      if (hunter) { eatPFresh[c] += n * wf * meat; eatPSea[c] += n * ws * meat; eatPLand[c] += n * wl * meat; }
       eF0[c] += n * wf * small; eF1[c] += n * wf * big;
       eS0[c] += n * ws * small; eS1[c] += n * ws * big;
       eL0[c] += n * wl * small; eL1[c] += n * wl * big;
@@ -434,11 +465,11 @@ export class Life {
   }
 
   // How much of a plant's room the grazers take, in one realm and size class.
-  grazeOf(out, eat, have, any) {
+  grazeOf(out, eat, have, any, most = MAX_GRAZE) {
     if (!any) { out.fill(0); return; }
     for (let c = 0; c < this.NL; c++) {
       const e = eat[c];
-      out[c] = e > 0 ? Math.min(MAX_GRAZE, e / (have[c] + 0.05)) : 0;
+      out[c] = e > 0 ? Math.min(most, e / (have[c] + 0.05)) : 0;
     }
   }
 
@@ -517,8 +548,12 @@ export class Life {
     const t = sp.traits;
     const r = realms(t);
     const lutT = this.tempFit(t);
-    // Warm blood keeps an animal going in the cold but takes more food.
-    const kMult = EAT * (0.8 + 0.4 * t.complexity) * (1 - 0.3 * t.warm);
+    // Warm blood keeps an animal going in the cold but takes more food, and
+    // a hunter needs more again.
+    const hunter = isHunter(t);
+    const kMult = EAT * (0.8 + 0.4 * t.complexity) * (1 - 0.3 * t.warm) * (hunter ? HUNT_EAT : 1);
+    const plants = plantShare(t);
+    const { aFresh, aSea, aLand, huntFresh, huntSea, huntLand } = this;
     const d = t.diet;
     const finCost = 0.3 * t.limbs;
     // Eggs laid in water tie an animal on land to damp ground; shelled eggs free it.
@@ -526,14 +561,20 @@ export class Life {
     const { sea, fresh, landF, ice, tempMean, kmAFresh, kmASea, kmALand, damp } = this;
     const [bF0, bF1] = this.bFresh, [bS0, bS1] = this.bSea, [bL0, bL1] = this.bLand;
     const N = sp.N, K = sp.K;
-    const dom = r.land >= r.fresh && r.land >= r.sea ? kmALand : r.sea > r.fresh ? kmASea : kmAFresh;
+    const landDom = r.land >= r.fresh && r.land >= r.sea, seaDom = r.sea > r.fresh;
+    const dom = hunter ? (landDom ? this.kmHLand : seaDom ? this.kmHSea : this.kmHFresh)
+      : (landDom ? kmALand : seaDom ? kmASea : kmAFresh);
     sp.dom = dom;
+    const rsum = r.fresh + r.sea + r.land || 1;
     this.forBox(sp, MAX_SUBSTEPS + 1, (c) => {
       const water = fresh[c] + sea[c];
       const margin = Math.min(1, 4 * water * landF[c]);
       const inWater = r.fresh * ((1 - d) * bF0[c] + d * bF1[c]) + r.sea * ((1 - d) * bS0[c] + d * bS1[c]);
       const onLand = r.land * ((1 - d) * bL0[c] + d * bL1[c]) * (freed + (1 - freed) * damp[c]);
-      const food = inWater * (1 - finCost * (1 - margin)) + onLand;
+      let food = (inWater * (1 - finCost * (1 - margin)) + onLand) * plants;
+      // Hunters eat the plant-eaters around them; plant-eaters lose what the hunters take.
+      if (t.prey > 0) food += t.prey * (r.fresh * aFresh[c] + r.sea * aSea[c] + r.land * aLand[c] * (freed + (1 - freed) * damp[c]));
+      if (!hunter) food *= 1 - (r.fresh * huntFresh[c] + r.sea * huntSea[c] + r.land * huntLand[c]) / rsum;
       if (food <= 0) { K[c] = 0; return; }
       const T = tempMean[c];
       // Warm shallows run short of oxygen, so a gulp of air helps there;
@@ -556,13 +597,14 @@ export class Life {
     const rsum = r.fresh + r.sea + r.land || 1;
     const rf = r.fresh / rsum, rs = r.sea / rsum, rl = r.land / rsum;
     const animal = !!t.animal;
-    const rate = animal ? A_RATE * (1 - 0.5 * t.complexity) : R_MAX * (1 - 0.6 * t.complexity) * (t.seeds >= 0.75 ? 1.25 : 1);
+    const hunter = animal && isHunter(t);
+    const rate = animal ? A_RATE * (1 - 0.5 * t.complexity) * (hunter ? HUNT_RATE : 1) : R_MAX * (1 - 0.6 * t.complexity) * (t.seeds >= 0.75 ? 1.25 : 1);
     const coldGrowth = animal ? 0.25 + 0.6 * t.warm : 0;
     const { snow, temp, landF, LW } = this;
     const tier = tierOf(t);
-    const bFresh = animal ? this.aFresh : this.bFresh[tier];
-    const bSea = animal ? this.aSea : this.bSea[tier];
-    const bLand = animal ? this.aLand : this.bLand[tier];
+    const bFresh = hunter ? this.hFresh : animal ? this.aFresh : this.bFresh[tier];
+    const bSea = hunter ? this.hSea : animal ? this.aSea : this.bSea[tier];
+    const bLand = hunter ? this.hLand : animal ? this.aLand : this.bLand[tier];
     const N = sp.N, K = sp.K, dom = sp.dom;
     const light = this.light;
     const landy = r.land > 0;
@@ -885,6 +927,7 @@ export class Life {
       }
       if (!sp.traits.animal) continue;
       animals++;
+      if (isHunter(sp.traits) && sp.range >= FRONTIER_RANGE) this.first('hunter', sp, years);
       if (!isLandAnimal(sp.traits)) continue;
       // Out of the water for real: established on dry ground in a few places,
       // not just able to be, nor living in a river that crosses the land.
@@ -893,6 +936,7 @@ export class Life {
       const best = ashore.best;
       landAnimals++;
       if (sp.traits.eggs >= SHELLED) this.first('reptile', sp, years, best);
+      if (isHunter(sp.traits)) this.first('hunter', sp, years, best);
       if (sp.traits.eggs >= SHELLED && sp.traits.warm >= 0.5) this.first('warm', sp, years, best);
       if (this.stats.firstLandAnimal === null) {
         this.stats.firstLandAnimal = years;
@@ -1019,6 +1063,7 @@ export class Life {
     if (!cells.length) return null;
     // At the frontier's level, with its own colour and a little variety.
     const traits = { ...f.traits };
+    if (traits.animal) traits.prey = 0;      // newcomers eat plants; hunters follow their prey
     traits.hue = rng.next();
     traits.complexity = Math.max(0, Math.min(1, traits.complexity + rng.normal(0, 0.02)));
     if (traits.animal) traits.diet = Math.max(0, Math.min(1, traits.diet + rng.normal(0, 0.1)));
@@ -1184,18 +1229,20 @@ export class Life {
     const acc = new Float32Array(NL * 3);
     const water = new Float32Array(NL);
     // Animals in the water and on land, for the specks on the map.
-    const swim = new Float32Array(NL), walk = new Float32Array(NL);
+    const swim = new Float32Array(NL), walk = new Float32Array(NL), hunt = new Float32Array(NL);
     const { landF } = this;
     for (const sp of this.species) {
       const r = realms(sp.traits);
       const animal = !!sp.traits.animal;
+      sp.hunter = isHunter(sp.traits);
       const wa = animal ? 0 : (r.fresh + r.sea) / (r.fresh + r.sea + r.land || 1);
       const col = hueRgb(sp.traits.hue);
       const N = sp.N;
       for (let c = 0; c < NL; c++) {
         const n = N[c];
         if (n === 0) continue;
-        if (animal) {
+        if (animal && sp.hunter) hunt[c] += n;
+        else if (animal) {
           const hw = r.fresh * fresh[c] + r.sea * sea[c], hl = r.land * landF[c];
           const onLand = hw + hl > 0 ? hl / (hw + hl) : 0;
           walk[c] += n * onLand;
@@ -1224,12 +1271,13 @@ export class Life {
       selected = new Uint8Array(NL);
       for (let c = 0; c < NL; c++) selected[c] = Math.min(255, Math.round(sel.N[c] * 300));
     }
-    const fishes = new Uint8Array(NL), herds = new Uint8Array(NL);
+    const fishes = new Uint8Array(NL), herds = new Uint8Array(NL), hunters = new Uint8Array(NL);
     for (let c = 0; c < NL; c++) {
       fishes[c] = Math.min(255, Math.round(swim[c] * 900));
       herds[c] = Math.min(255, Math.round(walk[c] * 900));
+      hunters[c] = Math.min(255, Math.round(hunt[c] * 1800));
     }
-    return { LW: this.LW, LH: this.LH, aqua, veg, vegC, rgb, selected, fishes, herds };
+    return { LW: this.LW, LH: this.LH, aqua, veg, vegC, rgb, selected, fishes, herds, hunters };
   }
 
   summary() {
@@ -1285,6 +1333,12 @@ function advance(t) {
 }
 
 const REALM_RANK = { land: 2, fresh: 1, sea: 0 };
+
+// How much of an animal's food is plants: all of it for plant-eaters, a
+// share for those taking some meat, none for hunters.
+function plantShare(t) {
+  return clamp01(1 - 2 * (t.prey || 0));
+}
 
 // Whether a life cell has room for a realm's life: open sea, fresh water,
 // or dry ground.

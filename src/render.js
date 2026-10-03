@@ -516,23 +516,27 @@ export class MapRenderer {
     const s = w / vw;
     const px = w / Math.max(1, this.canvas.clientWidth);
     const size = px * Math.min(3.2, 1.5 + 0.2 * (this.zoom - 1));
-    const fishPath = new Path2D(), herdPath = new Path2D();
-    let anyFish = false, anyHerd = false;
+    const fishPath = new Path2D(), herdPath = new Path2D(), huntPath = new Path2D();
+    let anyFish = false, anyHerd = false, anyHunt = false;
     const z = Math.round(size);
     this.speckPoints(f, this.x0, this.y0, vw, f.H / this.zoom, (kind, wx, wy) => {
       const x = Math.round((wx - this.x0) * s), y = Math.round((wy - this.y0) * s);
       if (kind === 0) { fishPath.rect(x, y, Math.round(size * 1.6), z); anyFish = true; }
-      else { herdPath.rect(x, y, Math.round(size * 1.3), Math.round(size * 1.3)); anyHerd = true; }
+      else if (kind === 1) { herdPath.rect(x, y, Math.round(size * 1.3), Math.round(size * 1.3)); anyHerd = true; }
+      else { huntPath.rect(x, y, Math.round(size * 1.5), Math.round(size * 1.5)); anyHunt = true; }
     });
     if (anyFish) { ctx.fillStyle = 'rgba(236, 243, 247, 0.9)'; ctx.fill(fishPath); }
     if (anyHerd) { ctx.fillStyle = 'rgba(48, 32, 22, 0.88)'; ctx.fill(herdPath); }
+    if (anyHunt) { ctx.fillStyle = 'rgba(196, 74, 36, 0.95)'; ctx.fill(huntPath); }
   }
 
   // Where the specks are in a window of the world (cells): calls
-  // put(kind, x, y) for each, kind 0 for fish and 1 for land animals.
+  // put(kind, x, y) for each, kind 0 for fish, 1 for land animals and 2
+  // for hunters, in the water or out.
   speckPoints(f, x0, y0, vw, vh, put) {
     const { W, H, ocean, lake, Q } = f;
     const { LW, LH, fishes, herds } = f.life;
+    const hunters = f.life.hunters || null;
     const t = performance.now() / 1000;
     const lx0 = Math.max(0, Math.floor(x0 / 2) - 1), lx1 = Math.min(LW - 1, Math.ceil((x0 + vw) / 2));
     const ly0 = Math.max(0, Math.floor(y0 / 2) - 1), ly1 = Math.min(LH - 1, Math.ceil((y0 + vh) / 2));
@@ -543,6 +547,7 @@ export class MapRenderer {
         const c = ly * LW + lx;
         if (fishes[c] >= 10) total += Math.min(4, Math.ceil(fishes[c] / 60));
         if (herds[c] >= 10) total += Math.min(4, Math.ceil(herds[c] / 60));
+        if (hunters && hunters[c] >= 10) total += Math.min(4, Math.ceil(hunters[c] / 60));
       }
     }
     if (!total) return;
@@ -550,8 +555,8 @@ export class MapRenderer {
     for (let ly = ly0; ly <= ly1; ly++) {
       for (let lx = lx0; lx <= lx1; lx++) {
         const c = ly * LW + lx;
-        for (let kind = 0; kind < 2; kind++) {
-          const d = kind === 0 ? fishes[c] : herds[c];
+        for (let kind = 0; kind < 3; kind++) {
+          const d = kind === 0 ? fishes[c] : kind === 1 ? herds[c] : hunters ? hunters[c] : 0;
           if (d < 10) continue;
           const count = Math.min(4, Math.ceil(d / 60));
           for (let k = 0; k < count; k++) {
@@ -565,12 +570,12 @@ export class MapRenderer {
               const ix = lx * 2 + (sub & 1), iy = ly * 2 + (sub >> 1);
               if (ix >= W || iy >= H) continue;
               const j = iy * W + ix;
-              if ((kind === 0) === !!wet(j)) { i = j; break; }
+              if (kind === 2 || (kind === 0) === !!wet(j)) { i = j; break; }
             }
             if (i < 0) continue;
             const ph = ((h >>> 20) & 1023) / 163;
-            const sp = kind === 0 ? 0.9 + ((h >>> 4) & 7) * 0.12 : 0.25 + ((h >>> 4) & 7) * 0.03;
-            const amp = kind === 0 ? 0.28 : 0.18;
+            const sp = kind === 0 ? 0.9 + ((h >>> 4) & 7) * 0.12 : kind === 2 ? 0.6 + ((h >>> 4) & 7) * 0.08 : 0.25 + ((h >>> 4) & 7) * 0.03;
+            const amp = kind === 0 ? 0.28 : kind === 2 ? 0.35 : 0.18;
             const wx = (i % W) + 0.2 + 0.6 * (((h >>> 8) & 255) / 255) + amp * Math.sin(t * sp + ph);
             const wy = ((i / W) | 0) + 0.2 + 0.6 * (((h >>> 16) & 15) / 15) + amp * Math.cos(t * sp * 0.8 + ph * 1.3);
             put(kind, wx, wy);
