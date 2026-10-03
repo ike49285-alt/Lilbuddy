@@ -393,15 +393,17 @@ export class Landscape {
     q1.set(Q);
     this.flowPass(null);
     const { region } = this;
+    let filling = 0;
     for (let R = 0; R < regions.length; R++) {
       const g = regions[R];
       // Everything leaving the hollow in the first pass is everything that reached it.
       let inflow = 0;
       for (const c of g.cells) if (region[rec[c]] !== R) inflow += Q[c];
       g.full = this.fillHollow(R, inflow * dt, dt, commit) >= 0;
-      if (!g.full) for (const c of g.cells) rec[c] = recS[c];
+      if (!g.full) { filling++; for (const c of g.cells) rec[c] = recS[c]; }
     }
-    if (regions.length) {
+    // With every hollow full, the first pass already has it right.
+    if (filling) {
       Q.set(q1);
       this.flowPass(region);
       // In a hollow that's still filling, the water runs down to its lowest points and stays.

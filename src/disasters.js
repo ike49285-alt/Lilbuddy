@@ -62,6 +62,9 @@ export class Disasters {
   natural(sim, dt) {
     const { rng } = this;
     const { land, life, climate } = sim;
+    // Life is settled once after all of this step's events, not after each.
+    this.batch = true;
+    this.unsettled = false;
     if (this.shock && sim.years - this.shock.start >= this.shock.years) this.shock = null;
 
     // Lightning fires: in summer, in dry spells, where there's plenty to burn.
@@ -108,6 +111,11 @@ export class Disasters {
       const r = Math.min(8, Math.max(1, Math.pow(rng.next(), -0.6)));
       this.apply(sim, 'meteor', i, r >= 4 ? 2 : r >= 2 ? 1 : 0, 1, r);
     }
+    this.batch = false;
+    if (this.unsettled) {
+      life.settle(sim.years);
+      sim.syncCover();
+    }
   }
 
   // A random cell that passes the test, or -1 after so many tries.
@@ -146,7 +154,9 @@ export class Disasters {
       sim.land.refresh(sim.climate);
     }
     if (size === 2 && (kind === 'volcano' || kind === 'meteor')) this.winter(sim, kind, ev);
-    if (ev.hurt) {
+    if (ev.hurt && this.batch && !ev.winter) {
+      this.unsettled = true;
+    } else if (ev.hurt) {
       const lost = sim.life.settle(sim.years);
       const away = ev.sheltered ? sim.life.shelter(ev.sheltered, ev.returnAt) : 0;
       ev.lost = (ev.lost || 0) + lost - away;
