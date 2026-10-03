@@ -75,7 +75,6 @@ function resume(state, savedAt) {
 function afterStart(seed) {
   selectedId = null;
   listSig = '';
-  treeSig = '';
   inspectAt = -1;
   clearInterval(inspectTimer);
   $('inspect').hidden = true;
@@ -437,7 +436,6 @@ window.addEventListener('pagehide', () => requestSave('hide'));
 
 let selectedId = null;
 let listSig = '';
-let treeSig = '';
 let inspectAt = -1;
 let inspectTimer = null;
 
@@ -512,7 +510,6 @@ function drawLife(f) {
   card.hidden = !sel;
   if (sel) renderCard(card, sel, byId);
 
-  if (!$('pane-tree').hidden) renderTree(f.species);
 }
 
 function renderCard(card, sp, byId) {
@@ -546,38 +543,6 @@ function renderCard(card, sp, byId) {
   card.append(dl);
 }
 
-function renderTree(all) {
-  const sig = all.map((s) => `${s.id}:${s.died === null ? 1 : s.sheltered ? 2 : 0}`).join(',');
-  if (sig === treeSig) return;
-  treeSig = sig;
-  const ids = new Set(all.map((s) => s.id));
-  const kids = new Map();
-  const roots = [];
-  for (const s of all) {
-    if (s.parent && ids.has(s.parent)) {
-      if (!kids.has(s.parent)) kids.set(s.parent, []);
-      kids.get(s.parent).push(s);
-    } else roots.push(s);
-  }
-  const build = (s) => {
-    const li = el('li');
-    const node = el('div', `node ${s.died === null ? 'alive' : 'dead'}`);
-    node.append(swatch(s.hue), el('span', 'sp-name', s.name), el('span', 'sp-form', s.form),
-      el('span', 'when', s.died === null ? `${when(s.born)} –` : s.sheltered ? `${when(s.born)} – at sea` : `${when(s.born)} – ${when(s.died)}`));
-    li.append(node);
-    const ch = kids.get(s.id);
-    if (ch) {
-      const ul = el('ul');
-      for (const c of ch) ul.append(build(c));
-      li.append(ul);
-    }
-    return li;
-  };
-  const tree = $('tree');
-  tree.innerHTML = '';
-  for (const r of roots) tree.append(build(r));
-}
-
 function selectSpecies(id) {
   selectedId = id;
   lastSlow = 0;
@@ -588,14 +553,13 @@ function selectSpecies(id) {
 }
 
 function showTab(name) {
-  for (const t of ['river', 'life', 'tree']) {
+  for (const t of ['river', 'life']) {
     $(`tab-${t}`).setAttribute('aria-selected', t === name ? 'true' : 'false');
     $(`pane-${t}`).hidden = t !== name;
   }
-  if (name === 'tree') treeSig = '';
   if (last) drawSlow(last);
 }
-for (const t of ['river', 'life', 'tree']) $(`tab-${t}`).addEventListener('click', () => showTab(t));
+for (const t of ['river', 'life']) $(`tab-${t}`).addEventListener('click', () => showTab(t));
 
 function setMode(mode) {
   renderer.mode = mode;
