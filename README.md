@@ -71,6 +71,18 @@ slope as it creeps and goes with landslides; bare rock weathers back into
 soil, faster for shale than granite; rivers, lakes and floods lay down
 new cover. Plants do poorly on bare rock. The Ground map mode shows it all.
 
+## Muddy rivers
+
+The rivers are coloured by the silt they carry. Clear blue water is coming
+off hard rock, through lakes that have dropped their load, or from a quiet
+catchment; jade, olive and then brown mean more and more mud, from soft
+rock, bare ground, steep rising mountains and floods. A storm sends a brown
+pulse down the valley that clears within a few days, and a lake goes muddy
+where a river runs into it. At the coast the silt fans out into the sea as
+a tan plume off each mouth. The River tab totals the silt reaching the sea
+each year, and tapping a river or lake shows how many tonnes a day pass
+that spot.
+
 ## Life
 
 Life starts in the sea: plankton, seaweed and microbial mats, with freshwater
@@ -90,8 +102,12 @@ leave less for what they eat. Diet, limbs and lungs evolve like any other
 trait, through armored, ray-finned and lobe-finned fish. Fleshy fins and
 gulping air each help a little in warm, weedy shallows; with real legs and
 lungs, and land plants to eat, an animal can walk out of the water.
-Nothing schedules it: in some worlds it takes tens of millions of years, in
-some it may not happen at all.
+It usually happens on its own, but not always in time: if nothing has
+walked ashore by 5 million years, the most land-ward fish living by a green
+shore gives rise to amphibians there, a real descendant in its line (and if
+no plant has made it onto land yet, the most land-ward plant goes first,
+and the animals follow once there's something to eat). If that line dies
+out, another try comes 250,000 years later. Each gets a note.
 
 The first walkers are amphibians: they lay their eggs in water, so they do
 well only near streams, lakes or heavy rain. Shelled eggs (reptiles) free

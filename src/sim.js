@@ -15,6 +15,8 @@ export { MAX_STEP_YEARS };
 export const HISTORY_LEN = 240;       // samples kept for the sparklines
 export const HISTORY_EVERY = 5000;    // years between samples (240 × 5 kyr = 1.2 Myr)
 const STORM_R_CELLS = 12;             // a parked storm's size on the map, for its note
+const MUD_DAYS = 1;                   // how long a river stays muddy after the load drops, days
+const SILT_T_PER_M3 = 2.65;           // tonnes of silt per cubic metre
 
 // The world's settings, as set on the page: [natural, least, most].
 export const SETTINGS = {
@@ -71,6 +73,7 @@ export class Simulation {
       this.land.rainField = null;
     }
     this.land.step(this.climate, d);
+    this.trackMud(d);
     if (this.layer === 'erode') this.trackErosion();
     const ashore = this.life.stats.firstLandAnimal;
     const firsts = { ...(this.life.stats.firsts || {}) };
@@ -79,6 +82,12 @@ export class Simulation {
     this.life.step(this.land, this.climate, d, this.years);
     this.syncCover();
     const st = this.life.stats;
+    // Life pushed onto land, if it hadn't got there by itself.
+    for (const f of this.life.forced) {
+      this.disasters.milestone(this, f.kind === 'plant'
+        ? `Plants creep out of the water: ${f.name} takes root on the shore`
+        : `${f.name}, a descendant of ${f.parent}, hauls itself out of the water`, f.at);
+    }
     // Newcomers after a deadly winter, or after the bombardment, get a note;
     // the lone ones are quiet.
     for (const a of this.life.arrived) {
@@ -315,6 +324,8 @@ export class Simulation {
       elevation: elev,
       water: land.ocean[i] ? 'sea' : land.lake[i] ? 'lake' : land.Q[i] >= 2.5e6 ? 'river' : 'land',
       flow: land.ocean[i] ? 0 : land.Q[i],
+      // Silt carried past here, tonnes a day.
+      silt: !land.ocean[i] && this.mudConc ? (this.mudConc[i] * land.Q[i] * SILT_T_PER_M3) / 365.25 : 0,
       temp: climate.tempAt(Math.max(0, elev)),
       meanTemp: climate.meanTempAt(Math.max(0, elev)),
       snow: land.snow[i],
@@ -398,6 +409,60 @@ export class Simulation {
     return out;
   }
 
+  // How muddy the water is, as running averages over about a day: in rivers
+  // and lakes the volume of silt per volume of water; in the sea, the silt
+  // arriving there, m³ a year; and the total reaching the sea.
+  trackMud(dt) {
+    const { N, qs, Q, ocean } = this.land;
+    if (!this.mudConc) { this.mudConc = new Float32Array(N); this.mudSea = new Float32Array(N); this.toSea = 0; }
+    const a = 1 - Math.exp(-dt / (MUD_DAYS / 365.25));
+    const conc = this.mudConc, seaIn = this.mudSea;
+    let toSea = 0;
+    for (let i = 0; i < N; i++) {
+      if (ocean[i]) {
+        const rate = qs[i] / dt;
+        seaIn[i] += (rate - seaIn[i]) * a;
+        toSea += rate;
+        conc[i] = 0;
+      } else {
+        const c = Q[i] > 0 ? qs[i] / (Q[i] * dt) : 0;
+        conc[i] += (c - conc[i]) * a;
+        seaIn[i] = 0;
+      }
+    }
+    this.toSea += (toSea - this.toSea) * a;
+    this.mudStep = this.steps;
+  }
+
+  // The mud as a byte per cell for the page: on a log scale, turbidity for
+  // rivers and lakes, and for the sea a plume fanning out from each mouth.
+  // Rebuilt only when a step has run since the last frame.
+  mudBytes() {
+    if (this.mudCache && this.mudCacheStep === this.mudStep) return this.mudCache.slice();
+    const { N, ocean, nbr } = this.land;
+    const out = new Uint8Array(N);
+    if (!this.mudConc) return out;
+    const plume = this.mudPlume || (this.mudPlume = new Float32Array(N));
+    const conc = this.mudConc, seaIn = this.mudSea;
+    for (let i = 0; i < N; i++) {
+      if (ocean[i]) plume[i] = seaIn[i] > 300 ? Math.min(1, (Math.log10(seaIn[i]) - 2.5) / 2.5) : 0;
+      else { const c = conc[i]; out[i] = c > 3e-6 ? Math.min(255, Math.round(((Math.log10(c) + 5.5) / 3) * 255)) : 0; }
+    }
+    // The plume spreads over the shelf, fading as it goes.
+    for (let pass = 0; pass < 6; pass++) {
+      for (let i = 0; i < N; i++) {
+        if (!ocean[i]) continue;
+        let m = plume[i];
+        for (let k = 0, o = i * 8; k < 8; k++) { const j = nbr[o + k]; if (j >= 0 && ocean[j] && plume[j] * 0.8 > m) m = plume[j] * 0.8; }
+        plume[i] = m;
+      }
+    }
+    for (let i = 0; i < N; i++) if (ocean[i]) out[i] = Math.round(plume[i] * 255);
+    this.mudCache = out;
+    this.mudCacheStep = this.mudStep;
+    return out.slice();
+  }
+
   // A running average of how fast each cell wears, in metres a year, kept
   // while the erosion layer is showing.
   trackErosion() {
@@ -417,6 +482,7 @@ export class Simulation {
       years: this.years,
       z: new Float32Array(land.z),
       water: new Float32Array(land.water),
+      mud: this.mudBytes(),
       Q: land.Q.slice(),
       rec: land.rec.slice(),
       ocean: land.ocean.slice(),
@@ -439,7 +505,7 @@ export class Simulation {
         settings: { ...this.settings },
         yearFrac: climate.yearFrac,
       },
-      stats: { ...land.stats },
+      stats: { ...land.stats, toSea: (this.toSea || 0) * SILT_T_PER_M3 },
       life: this.life.frameData(selectedId),
       lifeStats: { ...this.life.stats },
       terrainEpoch: this.disasters.epoch,
@@ -473,6 +539,7 @@ export function transferList(frame) {
   const list = [frame.z.buffer, frame.Q.buffer, frame.rec.buffer, frame.ocean.buffer, frame.rock.buffer, frame.ground.buffer,
     ...(frame.cloud ? [frame.cloud.buffer] : []),
     ...(frame.layer ? [frame.layer.buffer] : []),
+    frame.mud.buffer,
     frame.lake.buffer, frame.ice.buffer, frame.snow.buffer, frame.history.sea.buffer, frame.history.mouthQ.buffer,
     L.aqua.buffer, L.veg.buffer, L.vegC.buffer, L.rgb.buffer, L.fishes.buffer, L.herds.buffer, ...(L.hunters ? [L.hunters.buffer] : [])];
   if (L.selected) list.push(L.selected.buffer);

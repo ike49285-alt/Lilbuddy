@@ -363,6 +363,9 @@ function drawSlow(f) {
     : 'none';
   $('s-lakes').textContent = st.lakeCells ? `${n0.format(st.lakeCells * CELL_KM2)} km²` : 'none';
   $('s-delta').textContent = `${n0.format(st.deltaCells * CELL_KM2)} km²`;
+  // Tonnes a year; at a few million and up, in megatonnes.
+  const silt = st.toSea || 0;
+  $('s-silt').textContent = silt >= 1e6 ? `${n1.format(silt / 1e6)} Mt/yr` : silt >= 1e3 ? `${n0.format(silt / 1e3)} kt/yr` : silt > 0 ? `${n0.format(silt)} t/yr` : 'none yet';
   $('s-temp').textContent = `${n1.format(f.climate.seaT)} °C`;
 
   if (!tokens) readTokens();
@@ -1169,6 +1172,7 @@ function renderInspect(info) {
   fact('Now', `${n1.format(info.temp)} °C`);
   fact('Year avg', `${n1.format(info.meanTemp)} °C`);
   if (info.water !== 'sea') fact('Flow', `${n1.format(info.flow / 3.156e7)} m³/s`);
+  if ((info.water === 'river' || info.water === 'lake') && info.silt >= 0.5) fact('Silt', `${n0.format(info.silt)} t a day`);
   fact('Plant cover', `${n0.format(info.cover * 100)}%`);
   if (info.snow > 0.005) fact('Snow', `${n0.format(info.snow * 100)} cm`);
   if (info.ice) fact('Ice', 'glacier');

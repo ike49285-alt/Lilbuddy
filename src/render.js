@@ -109,6 +109,20 @@ export function nightTint(sun) {
   return [(c[0] + (255 - c[0]) * wm * 0.4) / 255, (c[1] + (196 - c[1]) * wm) / 255, (c[2] + (150 - c[2]) * wm) / 255];
 }
 
+// Muddy water: rivers carrying a heavy load, and the silt plumes they
+// spread into the sea.
+const SILT = [168, 118, 62];
+// Rivers from clear to thick with silt: cloudy jade, khaki, then brown
+// (real silty water, not a grey blend of blue and brown).
+const MUD_SHADES = [[70, 128, 138], [118, 112, 64], [134, 84, 38]];
+const PLUME = [176, 150, 96];
+
+// How brown to draw water, 0..1, from the frame's mud byte: a typical river
+// is only tinged, a flood or a shale-fed stream runs brown.
+function muddiness(m) {
+  return Math.max(0, Math.min(1, (m / 255 - 0.36) / 0.4));
+}
+
 export function elevationColor(m) {
   const c = ramp(LAND, m);
   return `rgb(${c[1] | 0}, ${c[2] | 0}, ${c[3] | 0})`;
@@ -296,7 +310,7 @@ export class MapRenderer {
     const groundMode = this.mode === 'ground';
     const layerLut = f.layer ? LAYER_LUT[this.mode] : null;
     const layer = layerLut ? f.layer : null;
-    const { rock, ground } = f;
+    const { rock, ground, mud } = f;
     const sel = lf.selected;
     const selRgb = this.selectedRgb;
     if (!this.image || this.image.width !== W || this.image.height !== H) {
@@ -325,6 +339,11 @@ export class MapRenderer {
         const bloom = (aqua[i0] * w0 + aqua[i1] * w1 + aqua[i2] * w2 + aqua[i3] * w3) / 255;
         const a = Math.min(0.5, bloom * 0.5) * (e > -150 ? 1 : 0.5);
         r += (BLOOM[0] - r) * a; g += (BLOOM[1] - g) * a; b += (BLOOM[2] - b) * a;
+        // Silt the rivers carry out to sea, fanning over the shelf.
+        if (mud && mud[i]) {
+          const p = Math.min(1, (mud[i] / 255) * 1.2) * 0.85;
+          r += (PLUME[0] - r) * p; g += (PLUME[1] - g) * p; b += (PLUME[2] - b) * p;
+        }
       } else {
         const shade = SH[i];
         if (layer) {
@@ -350,6 +369,8 @@ export class MapRenderer {
             const bloom = (aqua[i0] * w0 + aqua[i1] * w1 + aqua[i2] * w2 + aqua[i3] * w3) / 255;
             const a = Math.min(0.55, bloom * 0.55);
             r += (BLOOM[0] - r) * a; g += (BLOOM[1] - g) * a; b += (BLOOM[2] - b) * a;
+            // A lake fed by a muddy river clouds over.
+            if (mud) { const m = muddiness(mud[i]) * 0.6; r += (SILT[0] - r) * m; g += (SILT[1] - g) * m; b += (SILT[2] - b) * m; }
           }
         } else {
           const d = Math.min(LAND_LUT_MAX, Math.max(0, Math.round(e))) * 3;
@@ -759,9 +780,12 @@ export class MapRenderer {
     // Lines thicken as the view zooms in, but less than the ground does, so
     // a zoomed-in river still reads as a channel rather than a flood.
     const cell = Math.min(sx, sy) / Math.pow(this.zoom, 0.4);
-    const CLASSES = 10;
-    const paths = Array.from({ length: CLASSES }, () => new Path2D());
-    const used = new Uint8Array(CLASSES);
+    // Each reach is drawn in its width class and one of four shades from
+    // clear to muddy, by how much silt it carries.
+    const CLASSES = 10, MUDS = 4;
+    const paths = Array.from({ length: CLASSES * MUDS }, () => new Path2D());
+    const used = new Uint8Array(CLASSES * MUDS);
+    const mud = f.mud;
     for (let i = 0; i < N; i++) {
       if (ocean[i] || lake[i] || Q[i] < MIN_Q) continue;
       const r = rec[i];
@@ -769,7 +793,9 @@ export class MapRenderer {
       const cx = i % W, cy = (i / W) | 0;
       if (cx < xa || cx > xb || cy < ya || cy > yb) continue;
       const k = Math.max(0, Math.min(CLASSES - 1, Math.floor((Math.log10(Q[i]) - 6.48) / 0.34)));
-      const p = paths[k];
+      const m = mud ? muddiness(mud[i]) : 0;
+      const slot = k * MUDS + Math.min(MUDS - 1, Math.round(m * (MUDS - 1)));
+      const p = paths[slot];
       const xi = (X[i] - ox) * sx, yi = (Y[i] - oy) * sy;
       const xr = (X[r] - ox) * sx, yr = (Y[r] - oy) * sy;
       const d = mainDonor[i];
@@ -777,16 +803,21 @@ export class MapRenderer {
       else p.moveTo(xi, yi);
       p.quadraticCurveTo(xi, yi, (xi + xr) / 2, (yi + yr) / 2);
       if (mainDonor[r] !== i || ocean[r] || lake[r]) p.lineTo(xr, yr);
-      used[k] = 1;
+      used[slot] = 1;
     }
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
     for (let k = 0; k < CLASSES; k++) {
-      if (!used[k]) continue;
       const t = k / (CLASSES - 1);
       ctx.lineWidth = cell * (0.16 + 1.05 * t * t + 0.12 * t);
-      ctx.strokeStyle = `rgba(${46 - 10 * t | 0}, ${112 + 6 * t | 0}, ${178 + 22 * t | 0}, ${0.35 + 0.65 * Math.min(1, t * 1.6)})`;
-      ctx.stroke(paths[k]);
+      const alpha = 0.35 + 0.65 * Math.min(1, t * 1.6);
+      for (let mb = 0; mb < MUDS; mb++) {
+        const slot = k * MUDS + mb;
+        if (!used[slot]) continue;
+        const c = mb === 0 ? [46 - 10 * t, 112 + 6 * t, 178 + 22 * t] : MUD_SHADES[mb - 1];
+        ctx.strokeStyle = `rgba(${c[0] | 0}, ${c[1] | 0}, ${c[2] | 0}, ${alpha})`;
+        ctx.stroke(paths[slot]);
+      }
     }
   }
 }
