@@ -1,56 +1,40 @@
 // host.js — runs a Simulation against a clock and answers the page's
 // messages. The worker wraps this; nothing here touches the DOM.
 //
-// The page asks for a rate in sim-years per real second. Each tick's length
-// adapts to it: about ten ticks a second, never shorter than a minute and never
-// longer than the model's maximum step. When ticks can't be computed fast
-// enough the actual rate falls behind the target, and the page says so.
+// The page asks for a rate in sim-years per real second. The water is
+// worked out in steps of a fraction of a second whatever the rate; when
+// that can't keep up, the bed's time is sped up (the morphological factor)
+// by as much as the rate needs. When even that falls behind, the actual
+// rate is less than asked, and the page says so.
 //
-// At most two frames are in flight: one being drawn and one waiting, so the
-// page always has the next ready when the screen refreshes. More go out only
-// as the page acknowledges them, and no sooner than the interval it asks for,
-// which it sets from how long its frames take to draw. A fast device gets up
-// to 30 fps; a slow phone gets fewer rather than a backlog that starves its
-// taps. While paused, frames go out only when something has changed.
+// At most two frames are in flight: one being drawn and one waiting. More
+// go out only as the page acknowledges them, and no sooner than the interval
+// it asks for, which it sets from how long its frames take to draw. While
+// paused, frames go out only when something has changed.
 
-import { Simulation, transferList, stateTransferList, MAX_STEP_YEARS } from './sim.js';
+import { Simulation, transferList, stateTransferList, SEC_PER_YR } from './sim.js';
 
-const DAY = 1 / 365.25;
-const MINUTE = DAY / 1440;
-const MIN_RATE = 10 * MINUTE;      // sim-years per second: ten minutes a second
-const TICKS_PER_SECOND = 10;
-const GEOLOGIC_RATE = 100;  // sim-years per second from which ticks are halved
-const BUDGET_MS = 12;       // longest a single slice may run before yielding
+const HOST_DAY = 1 / 365.25;
+const MIN_RATE = 1 / SEC_PER_YR;    // a second a second
+const MAX_MORPH = 20000;
+const BUDGET_MS = 12;               // longest a single slice may run before yielding
 const LOOP_MS = 16;
-
-export function tickFor(rate) {
-  if (!Number.isFinite(rate)) return MAX_STEP_YEARS;
-  // At geologic speeds, fewer and longer ticks: a step costs about the same
-  // whatever its length, and frames wait while one runs, so halving them
-  // keeps the picture smooth. Nothing that needs short ticks (seasons,
-  // weather) runs this fast.
-  const perSecond = rate >= GEOLOGIC_RATE ? TICKS_PER_SECOND / 2 : TICKS_PER_SECOND;
-  return Math.max(MINUTE, Math.min(MAX_STEP_YEARS, rate / perSecond));
-}
 
 export function createHost(post) {
   let sim = null;
-  let rate = 1000;          // target sim-years per second; Infinity = as fast as possible
+  let rate = HOST_DAY / 24;      // target sim-years per second; Infinity = as fast as possible
   let paused = false;
   let debt = 0;             // sim-years owed
   let last = 0;
   let lastFrame = 0;
   let timer = null;
-  let stepMs = 0;
-  let tickYears = tickFor(rate);
-  let selectedId = null;
-  let paceMs = 1000 / 30;   // the page's requested spacing between frames
-  let inFlight = 0;         // frames the page hasn't acknowledged yet
+  let stepMs = 1;           // what a hydraulic step costs, smoothed
+  let paceMs = 1000 / 30;
+  let inFlight = 0;
   const MAX_IN_FLIGHT = 2;
-  let dirty = true;         // something changed that the page should see
-  let urgent = false;       // a control changed: show it without waiting for the pace
-  // Rolling measure of the actual rate: [real ms, sim years] samples.
-  const recent = [];
+  let dirty = true;
+  let urgent = false;
+  const recent = [];        // [real ms, sim years]
 
   function actualRate() {
     if (recent.length < 2) return 0;
@@ -59,13 +43,25 @@ export function createHost(post) {
     return ms > 0 ? ((b[1] - a[1]) * 1000) / ms : 0;
   }
 
+  // How much faster than the water the bed must run to keep up with the rate.
+  function morphFor() {
+    if (rate === Infinity) return MAX_MORPH;
+    const steps = (1000 / Math.max(0.05, stepMs)) * (BUDGET_MS / LOOP_MS);
+    const water = steps * sim.flow.dt;                 // hydraulic seconds per real second
+    return Math.max(1, Math.min(MAX_MORPH, (rate * SEC_PER_YR) / Math.max(1e-3, water)));
+  }
+
+  function tickYears() {
+    return rate === Infinity ? Math.max(HOST_DAY / 10, actualRate() / 10) : rate / 10;
+  }
+
   function sendFrame() {
-    const f = sim.frame(selectedId);
+    const f = sim.frame(tickYears());
     f.stepMs = stepMs;
     f.paused = paused;
     f.targetRate = rate;
     f.actualRate = paused ? 0 : actualRate();
-    f.tickYears = tickYears;
+    f.tickYears = tickYears();
     post({ type: 'frame', frame: f }, transferList(f));
     lastFrame = performance.now();
     inFlight++;
@@ -79,17 +75,16 @@ export function createHost(post) {
     if (!paused || dirty) sendFrame();
   }
 
-  // Runs ticks until the owed time is paid or the slice budget is spent.
+  // Runs steps until the owed time is paid or the slice budget is spent.
   function runFor(years) {
     const start = performance.now();
-    let done = 0;
-    while (done < years - 1e-9 && performance.now() - start < BUDGET_MS) {
-      const t0 = performance.now();
-      const d = Math.min(tickYears, years - done);
-      sim.step(d);
-      stepMs = stepMs * 0.9 + (performance.now() - t0) * 0.1;
-      done += d;
+    const morph = morphFor();
+    let done = 0, n = 0;
+    while (done < years && performance.now() - start < BUDGET_MS) {
+      done += sim.step(morph);
+      n++;
     }
+    if (n) stepMs = stepMs * 0.8 + ((performance.now() - start) / n) * 0.2;
     return done;
   }
 
@@ -104,30 +99,26 @@ export function createHost(post) {
         runFor(Infinity);
         debt = 0;
       } else {
-        // Owed time accrues continuously but only whole ticks are run, so a
-        // one-day tick at 1 day/s runs once a second, not as fractions.
-        debt = Math.min(debt + (rate * dt) / 1000, rate * 0.5 + tickYears);
-        if (debt >= tickYears - 1e-12) {
-          const whole = Math.floor(debt / tickYears + 1e-9) * tickYears;
-          debt -= runFor(whole);
-        }
+        debt = Math.min(debt + (rate * dt) / 1000, rate * 0.5);
+        debt -= runFor(debt);
       }
     }
     recent.push([now, sim.years]);
     while (recent.length > 2 && now - recent[0][0] > 1000) recent.shift();
     maybeSend(now);
-    // Wake again when the next frame is due if that's sooner than the usual
-    // beat, so frames go out on pace rather than at the next loop after it.
     let wait = LOOP_MS;
-    if (!paused && inFlight < MAX_IN_FLIGHT) {
-      wait = Math.max(2, Math.min(LOOP_MS, lastFrame + paceMs - performance.now()));
-    }
+    if (!paused && inFlight < MAX_IN_FLIGHT) wait = Math.max(2, Math.min(LOOP_MS, lastFrame + paceMs - performance.now()));
     timer = setTimeout(loop, wait);
   }
 
   function start() {
     last = performance.now();
     if (!timer) timer = setTimeout(loop, 0);
+  }
+
+  function changed() {
+    dirty = true;
+    urgent = true;
   }
 
   return function onMessage(msg) {
@@ -144,86 +135,36 @@ export function createHost(post) {
         break;
       case 'init':
         sim = new Simulation(msg.seed);
-        selectedId = null;
-        debt = 0;
-        recent.length = 0;
-        inFlight = 0;
-        dirty = true;
+        debt = 0; recent.length = 0; inFlight = 0;
+        changed();
+        start();
+        break;
+      case 'restore':
+        sim = Simulation.fromState(msg.state);
+        debt = 0; recent.length = 0; inFlight = 0;
+        changed();
         start();
         break;
       case 'rate':
         rate = msg.rate === 'max' ? Infinity : Math.max(MIN_RATE, Number(msg.rate));
-        tickYears = tickFor(rate);
         debt = 0;
         recent.length = 0;
-        dirty = true;
-        urgent = true;
+        changed();
         break;
       case 'save': {
         const state = sim.saveState();
         post({ type: 'state', state, reason: msg.reason }, stateTransferList(state));
         break;
       }
-      case 'restore':
-        sim = Simulation.fromState(msg.state);
-        selectedId = null;
-        debt = 0;
-        recent.length = 0;
-        inFlight = 0;
-        dirty = true;
-        start();
-        break;
-      case 'select':
-        selectedId = msg.id || null;
-        dirty = true;
-        urgent = true;
-        break;
-      case 'disaster':
-        sim.disaster(msg.kind, msg.i, msg.size);
-        dirty = true;
-        urgent = true;
-        break;
-      case 'sculpt':
-        sim.sculpt(msg.i, msg.size, msg.dz);
-        dirty = true;
-        urgent = true;
-        break;
-      case 'dig':
-        sim.dig(msg.points || []);
-        dirty = true;
-        urgent = true;
-        break;
-      case 'setting':
-        sim.set(msg.key, msg.value);
-        dirty = true;
-        urgent = true;
-        break;
-      // Older pages' names for two of the settings.
-      case 'wetness':
-        sim.set('wetness', msg.value);
-        dirty = true;
-        urgent = true;
-        break;
-      case 'activity':
-        sim.set(msg.kind, msg.value);
-        dirty = true;
-        urgent = true;
-        break;
+      case 'sculpt': sim.sculpt(msg.i, msg.size, msg.dir); changed(); break;
+      case 'dig': sim.dig(msg.points || []); changed(); break;
+      case 'block': sim.block(msg.i); changed(); break;
+      case 'storm': sim.storm(msg.i); changed(); break;
+      case 'section': sim.setSection(msg.points); changed(); break;
+      case 'setting': sim.set(msg.key, msg.value); changed(); break;
       case 'mode':
-        // Which colour layer the map shows, if any: only that one is sent.
-        sim.layer = ['heat', 'rain', 'flow', 'erode'].includes(msg.mode) ? msg.mode : null;
-        dirty = true;
-        urgent = true;
-        break;
-      case 'seed':
-        sim.seedSpecies(msg.i, msg.id, msg.kind);
-        dirty = true;
-        urgent = true;
-        break;
-      case 'storm':
-        sim.storm(msg.i);
-        dirty = true;
-        urgent = true;
+        sim.layer = ['depth', 'speed', 'drag', 'change', 'cutfill'].includes(msg.mode) ? msg.mode : null;
+        changed();
         break;
       case 'inspect':
         post({ type: 'inspected', info: sim.inspect(msg.i) });
@@ -231,21 +172,19 @@ export function createHost(post) {
       case 'pause':
         paused = true;
         recent.length = 0;
-        dirty = true;
-        urgent = true;
+        changed();
         break;
       case 'play':
         paused = false;
         debt = 0;
         recent.length = 0;
         last = performance.now();
-        dirty = true;
-        urgent = true;
+        changed();
         break;
-      // Test hook: advance synchronously to a year using the given tick.
+      // Test hook: advance synchronously to a year, the bed up to `morph` times the water.
       case 'runTo': {
-        const tick = msg.tick || 100;
-        while (sim.years < msg.years - 1e-9) sim.step(Math.min(tick, msg.years - sim.years));
+        const morph = msg.morph || 1000;
+        while (sim.years < msg.years) sim.step(morph);
         recent.length = 0;
         sendFrame();
         post({ type: 'ranTo', years: sim.years });

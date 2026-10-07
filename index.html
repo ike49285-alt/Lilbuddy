@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>Headwaters</title>
-  <meta name="description" content="A river carves its valley through geologic time." />
+  <meta name="description" content="A stream table: a river shapes its own channel, bends, bars and delta." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600&family=Barlow:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" />
@@ -16,22 +16,21 @@
   <main class="layout">
     <div class="map-col">
     <figure class="map" id="map">
-      <canvas id="map-canvas" role="img" aria-label="Relief map of the valley, mountains at the top and the sea at the bottom. Tap a spot to see what lives there; pinch or use the buttons to zoom, and drag to move around when zoomed in."></canvas>
-      <canvas id="gl-canvas" class="gl" role="img" aria-label="The valley in 3D. Drag to turn and tilt it, pinch or use the buttons to zoom, double-tap to centre on a spot, tap to see what lives there." hidden></canvas>
+      <canvas id="map-canvas" role="img" aria-label="Map of the river valley, the river coming in at the top and running down to the sea at the bottom. Tap a spot to see what's there; pinch or use the buttons to zoom, and drag to move around when zoomed in."></canvas>
+      <canvas id="gl-canvas" class="gl" role="img" aria-label="The valley in 3D. Drag to turn and tilt it, pinch or use the buttons to zoom, double-tap to centre on a spot, tap to see what's there." hidden></canvas>
       <canvas id="fx-canvas" class="fx" aria-hidden="true"></canvas>
-      <span id="phase" class="chip on-map">interglacial</span>
+      <span id="phase" class="chip on-map">spring</span>
       <div class="north" aria-hidden="true">N<span id="north-arrow">↑</span></div>
       <div class="map-mode" role="group" aria-label="Map shows">
         <button type="button" id="mode-landscape" aria-pressed="true">Land</button>
-        <button type="button" id="mode-species" aria-pressed="false">Species</button>
-        <button type="button" id="mode-ground" aria-pressed="false">Ground</button>
         <button type="button" id="mode-layers" aria-pressed="false" aria-haspopup="true" aria-expanded="false">Layers</button>
       </div>
       <div class="layer-menu" id="layer-menu" role="menu" aria-label="Map layers" hidden>
-        <button type="button" role="menuitem" data-layer="heat">Temperature</button>
-        <button type="button" role="menuitem" data-layer="rain">Rainfall</button>
-        <button type="button" role="menuitem" data-layer="flow">River flow</button>
-        <button type="button" role="menuitem" data-layer="erode">Erosion</button>
+        <button type="button" role="menuitem" data-layer="depth">Water depth</button>
+        <button type="button" role="menuitem" data-layer="speed">Current</button>
+        <button type="button" role="menuitem" data-layer="drag">Drag on the bed</button>
+        <button type="button" role="menuitem" data-layer="change">Cutting and filling</button>
+        <button type="button" role="menuitem" data-layer="cutfill">Cut and fill since the start</button>
       </div>
       <div class="zoom" role="group" aria-label="Zoom">
         <button type="button" id="zoom-in" aria-label="Zoom in" title="Zoom in">+</button>
@@ -41,98 +40,73 @@
         </button>
         <button type="button" id="view-3d" class="view-3d" aria-pressed="false" aria-label="Show the valley in 3D" title="3D view" hidden>3D</button>
       </div>
-      <div class="scale" aria-hidden="true"><span id="scale-bar" class="bar"></span><span id="scale-label">10 km</span></div>
+      <div class="scale" aria-hidden="true"><span id="scale-bar" class="bar"></span><span id="scale-label">100 m</span></div>
       <div class="inspect" id="inspect" hidden>
         <div class="inspect-head">
           <span id="inspect-title">Here</span>
           <button type="button" id="inspect-close" class="close" aria-label="Close">×</button>
         </div>
         <p id="inspect-ground" class="ground-line"></p>
-        <p id="inspect-dam" class="ground-line" hidden></p>
         <dl id="inspect-facts" class="facts"></dl>
-        <ul id="inspect-life" class="here-life"></ul>
       </div>
     </figure>
     <div class="toolbar">
       <button type="button" id="tools-toggle" class="tools-toggle" aria-expanded="false" aria-controls="tools">Tools</button>
       <div class="tools" id="tools" hidden>
-        <div class="tool-row" role="group" aria-label="Disaster to drop">
-          <button type="button" class="tool" data-kind="flood" aria-pressed="false">Flood</button>
-          <button type="button" class="tool" data-kind="lightning" aria-pressed="false">Lightning</button>
-          <button type="button" class="tool" data-kind="volcano" aria-pressed="false">Volcano</button>
-          <button type="button" class="tool" data-kind="meteor" aria-pressed="false">Meteor</button>
-        </div>
         <div class="tool-row shape-row" role="group" aria-label="Shape the land">
           <button type="button" class="tool" data-kind="raise" aria-pressed="false">Raise</button>
           <button type="button" class="tool" data-kind="lower" aria-pressed="false">Lower</button>
           <button type="button" class="tool" data-kind="dig" aria-pressed="false">Dig</button>
+          <button type="button" class="tool" data-kind="block" aria-pressed="false">Block</button>
+        </div>
+        <div class="tool-row shape-row" role="group" aria-label="Weather and measuring">
           <button type="button" class="tool" data-kind="storm" aria-pressed="false">Storm</button>
-          <button type="button" class="tool" data-kind="seed" aria-pressed="false">Seed</button>
+          <button type="button" class="tool" data-kind="section" aria-pressed="false">Section</button>
         </div>
         <div class="size-row brush-row" id="brush-row" role="group" aria-label="Brush size" hidden>
           <button type="button" data-brush="small" aria-pressed="false">Small brush</button>
           <button type="button" data-brush="big" aria-pressed="true">Big brush</button>
         </div>
-        <div class="size-row seed-row" id="seed-row" role="group" aria-label="What to seed" hidden>
-          <button type="button" data-seed="plant" aria-pressed="true">Plant</button>
-          <button type="button" data-seed="animal" aria-pressed="false">Animal</button>
-          <button type="button" data-seed="picked" aria-pressed="false" hidden>Picked</button>
-        </div>
-        <p class="tray-head">World</p>
-        <label class="wet-row" for="wetness"><span>Rain</span><input type="range" id="wetness" min="30" max="200" step="5" value="100"><output id="wetness-out" for="wetness">100%</output></label>
-        <label class="wet-row" for="meteors"><span>Meteors</span><input type="range" id="meteors" min="0" max="500" step="10" value="100"><output id="meteors-out" for="meteors">100%</output></label>
-        <label class="wet-row" for="volcanoes"><span>Volcanoes</span><input type="range" id="volcanoes" min="0" max="500" step="10" value="100"><output id="volcanoes-out" for="volcanoes">100%</output></label>
-        <label class="wet-row" for="uplift"><span>Uplift</span><input type="range" id="uplift" min="0" max="300" step="10" value="100"><output id="uplift-out" for="uplift">100%</output></label>
-        <label class="wet-row" for="warmth"><span>Warmth</span><input type="range" id="warmth" min="-8" max="8" step="0.5" value="0"><output id="warmth-out" for="warmth">±0 °C</output></label>
-        <label class="wet-row" for="sea"><span>Sea level</span><input type="range" id="sea" min="-150" max="150" step="5" value="0"><output id="sea-out" for="sea">±0 m</output></label>
-        <label class="wet-row" for="hardness"><span>Rock</span><input type="range" id="hardness" min="25" max="400" step="5" value="100"><output id="hardness-out" for="hardness">100%</output></label>
-        <div class="size-row" id="size-row" role="group" aria-label="Size" hidden>
-          <button type="button" data-size="small" aria-pressed="false">Small</button>
-          <button type="button" data-size="big" aria-pressed="true">Big</button>
-          <button type="button" data-size="catastrophic" aria-pressed="false">Catastrophic</button>
-        </div>
+        <p class="tray-head">The table</p>
+        <label class="wet-row" for="flow"><span>Pump</span><input type="range" id="flow" min="2" max="80" step="1" value="15"><output id="flow-out" for="flow">15 m³/s</output></label>
+        <label class="wet-row" for="tilt"><span>Tilt</span><input type="range" id="tilt" min="0.5" max="6" step="0.1" value="2"><output id="tilt-out" for="tilt">2.0 m/km</output></label>
+        <label class="wet-row" for="sea"><span>Sea level</span><input type="range" id="sea" min="-2" max="2" step="0.1" value="0"><output id="sea-out" for="sea">±0 m</output></label>
+        <label class="wet-row" for="supply"><span>Sand in</span><input type="range" id="supply" min="0" max="200" step="5" value="60"><output id="supply-out" for="supply">60%</output></label>
         <p class="visually-hidden" id="tools-hint" aria-live="polite">Pick a tool, then use it on the map.</p>
-        </div>
+      </div>
     </div>
     </div>
 
     <section class="panel" aria-label="Readings">
       <div class="tabs" role="tablist" aria-label="Readings">
         <button type="button" role="tab" id="tab-river" aria-controls="pane-river" aria-selected="true">River</button>
-        <button type="button" role="tab" id="tab-life" aria-controls="pane-life" aria-selected="false">Life</button>
+        <button type="button" role="tab" id="tab-profile" aria-controls="pane-profile" aria-selected="false">Profile</button>
       </div>
 
       <div class="pane" id="pane-river" role="tabpanel" aria-labelledby="tab-river">
       <dl class="stats">
-        <div><dt>Main river</dt><dd id="s-len">—</dd></div>
-        <div><dt>Flow at the mouth</dt><dd id="s-q">—</dd></div>
-        <div><dt>Share of all runoff</dt><dd id="s-share">—</dd></div>
-        <div><dt>Highest peak</dt><dd id="s-relief">—</dd></div>
-        <div><dt>Ice and snow</dt><dd id="s-ice">—</dd></div>
-        <div><dt>Lakes</dt><dd id="s-lakes">—</dd></div>
+        <div><dt>Flow in</dt><dd id="s-q">—</dd></div>
+        <div><dt>Channel width</dt><dd id="s-width">—</dd></div>
+        <div><dt>Sinuosity</dt><dd id="s-sin">—</dd></div>
+        <div><dt>Deepest water</dt><dd id="s-deep">—</dd></div>
+        <div><dt>Sand on the move</dt><dd id="s-sand">—</dd></div>
+        <div><dt>Sand to the sea</dt><dd id="s-sea">—</dd></div>
         <div><dt>Delta built</dt><dd id="s-delta">—</dd></div>
-        <div><dt>Silt to the sea</dt><dd id="s-silt">—</dd></div>
-        <div><dt>Beaver dams</dt><dd id="s-dams">—</dd></div>
-        <div><dt>Coast temperature</dt><dd id="s-temp">—</dd></div>
+        <div><dt>Plant cover</dt><dd id="s-plants">—</dd></div>
       </dl>
 
       <div class="sparks">
         <figure>
-          <figcaption><span>Sea level</span><span id="sp-sea-v" class="val"></span></figcaption>
-          <canvas id="sp-sea" aria-label="Sea level over the last 1.2 million years"></canvas>
+          <figcaption><span>Flow in</span><span id="sp-q-v" class="val"></span></figcaption>
+          <canvas id="sp-q" aria-label="The river's flow over time"></canvas>
         </figure>
         <figure>
-          <figcaption><span>Flow at the mouth</span><span id="sp-q-v" class="val"></span></figcaption>
-          <canvas id="sp-q" aria-label="River flow at the mouth over the last 1.2 million years"></canvas>
+          <figcaption><span>Sinuosity</span><span id="sp-s-v" class="val"></span></figcaption>
+          <canvas id="sp-s" aria-label="How much the river winds, over time"></canvas>
         </figure>
-        <p class="axis"><span id="sp-from">−1.2 Myr</span><span>now</span></p>
+        <p class="axis"><span id="sp-from">−1 day</span><span>now</span></p>
       </div>
 
-      <div class="key" aria-label="Elevation key">
-        <div class="ramp" id="ramp"></div>
-        <div class="ticks"><span>0</span><span>500</span><span>1,000</span><span>2,000</span><span>2,900 m</span></div>
-      </div>
-      <ul class="ground-key" id="ground-key" aria-label="Ground key"></ul>
       <div class="key layer-key" id="layer-key" hidden>
         <p class="layer-name" id="layer-name"></p>
         <div class="ramp" id="layer-ramp"></div>
@@ -147,21 +121,19 @@
       </form>
       <p class="save-status" id="save-status" aria-live="polite"></p>
 
-      <p class="note">Time runs at the rate set in the bar below, from a day to a hundred thousand years per second. At a year per second or slower the seasons show: snow piles up on the peaks in winter and the river swells with the spring melt. The rains begin light on a young mountain front still being pushed upward, so the first water is a trickle. Over millions of years it finds its way, cuts gorges, captures neighbouring streams and builds a delta, while ice ages pull the sea back across the shelf and let it return.</p>
+      <p class="note">A kilometre of valley, half a kilometre wide, tilted gently toward the sea. A pump at the top sends the river in, more in the spring melt and after storms upstream, with the sand it carries. The water moves as a sheet, the sand moves where the water drags hard enough at it, and the river shapes its own channel: cutting the outside of its bends, building bars on the inside, breaking its banks in a flood and building a delta into the sea. Plants grow on dry ground and hold the banks together. The clock runs on the river bed's time: at the faster rates the bed's changes are sped up, as river models do.</p>
       </div>
 
-      <div class="pane" id="pane-life" role="tabpanel" aria-labelledby="tab-life" hidden>
-        <dl class="stats">
-          <div><dt>Species alive</dt><dd id="l-alive">—</dd></div>
-          <div><dt>Plants on land</dt><dd id="l-land">—</dd></div>
-          <div><dt>Green ground</dt><dd id="l-veg">—</dd></div>
-          <div><dt>Ever lived</dt><dd id="l-ever">—</dd></div>
-          <div><dt>Animals</dt><dd id="l-animals">—</dd></div>
-          <div><dt>Animals on land</dt><dd id="l-ashore">—</dd></div>
-        </dl>
-        <div class="species-card" id="species-card" hidden></div>
-        <ul class="species" id="species-list" aria-label="Living species"></ul>
-        <p class="note">Life begins in the sea: plankton, seaweed and microbial mats. Freshwater algae arrive once the river reaches the coast. Species split when the river, ice or the coast cut a population in two, and new forms appear by mutation. Plants need more complexity before they can live out of water; once they do, they green the land and hold the soil, so vegetated slopes erode more slowly. Animals start as simple fish that graze the algae and plankton. Limbs and lungs can evolve, and fish that have them do a little better in warm, weedy shallows; with real legs and lungs, and land plants to eat, they can walk out of the water. Nothing makes it happen on a schedule. After a deadly winter, and now and then anyway, newcomers arrive at the edges of the map from beyond the valley, as advanced as anything that lived here before. Tap a species to see where it lives.</p>
+      <div class="pane" id="pane-profile" role="tabpanel" aria-labelledby="tab-profile" hidden>
+        <figure class="chart">
+          <figcaption><span>Long profile</span><span class="legend"><i class="lg-bed"></i>bed <i class="lg-water"></i>water <i class="lg-start"></i>at the start</span></figcaption>
+          <canvas id="profile" aria-label="The river's long profile: the bed and water surface from the top of the valley to the sea, and the bed at the start"></canvas>
+        </figure>
+        <figure class="chart">
+          <figcaption><span>Cross-section</span><span id="section-len" class="val"></span></figcaption>
+          <canvas id="section" aria-label="A cross-section along the line drawn with the Section tool" hidden></canvas>
+          <p id="section-hint" class="note">Pick Section in the tools and draw a line across the river to see its cross-section here.</p>
+        </figure>
       </div>
 
     </section>
@@ -170,7 +142,7 @@
   <div class="timebar" id="timebar" role="region" aria-label="Time">
     <button type="button" id="event-note" class="event-note" hidden aria-live="polite"></button>
     <div class="tb-main">
-      <span id="time" class="time" aria-live="off">0 yr</span>
+      <span id="time" class="time" aria-live="off">day 1</span>
       <button type="button" id="play" class="play" aria-label="Pause" title="Pause (Space)">
         <svg class="i-pause" viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1"/><rect x="9.5" y="2" width="3.5" height="12" rx="1"/></svg>
         <svg class="i-play" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.2v11.6c0 .6.7 1 1.2.6l8.4-5.8a.75.75 0 0 0 0-1.2L5.2 1.6C4.7 1.2 4 1.6 4 2.2z"/></svg>
@@ -183,7 +155,7 @@
       <input id="rate-slider" type="range" min="0" max="1000" step="1" value="0" aria-label="Time rate" />
       <button type="button" id="faster" class="step" aria-label="Faster" title="Faster (+)">+</button>
     </div>
-    <div class="tb-status"><span id="tick">tick 100 yr</span><span id="lag" class="lag"></span></div>
+    <div class="tb-status"><span id="tick">bed ×1</span><span id="lag" class="lag"></span></div>
   </div>
 </div>
 <!-- app:end -->

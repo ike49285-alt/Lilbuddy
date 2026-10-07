@@ -1,15 +1,14 @@
 # Headwaters
 
-A river starts as a trickle on a young mountain front and carves its valley to
-the sea over millions of years, while ice ages come and go.
+A stream table you can carry around. A kilometre of valley, half a kilometre
+wide, tilts gently toward the sea. A pump at the top sends a river in, and
+the river shapes its own channel: it cuts the outsides of its bends and
+builds bars on the insides, breaks its banks in a flood, and builds a delta
+where it meets the sea. Plants grow on the dry ground and hold the banks
+together.
 
-Time runs at a chosen rate, from ten minutes to 100,000 years per second; each tick adapts from a minute up to 1,000 years. The landscape is a standard landscape-evolution
-model: depressions are filled into lakes (priority-flood), water is routed
-downhill (D8), channels cut by the stream-power law solved implicitly
-(Braun & Willett 2013), sediment is carried downstream and dropped on fans,
-floodplains, in lakes and at the mouth, where it builds a delta. Mountains keep
-rising; orbital-style cycles drive temperature, rainfall, ice and sea level.
-Times and rates are compressed toy values, not a calibrated model.
+The earlier version, a whole valley carved over millions of years with life
+evolving in it, is in the history at commit `50d6dee`.
 
 ## Running it
 
@@ -24,203 +23,98 @@ then open http://localhost:8000/.
 
 ## Layout
 
-- `src/terrain.js` — starting surface, uplift and rock hardness
-- `src/climate.js` — ice-age cycles, long eras, temperature, rain, sea level
-- `src/landscape.js` — the river and landscape model
-- `src/species.js`, `src/life.js` — species traits, names, and the population model
-- `src/disasters.js` — floods, wildfires, eruptions and impacts
-- `src/sim.js` — one world, its clock, and saving/restoring it
+- `src/table.js` — the starting landscape: floodplain, terraces, the river's first channel, the beach
+- `src/flow.js` — the water, the sand, the banks and the plants
+- `src/weather.js` — clouds, rain, and the floods that come down from upstream
+- `src/sim.js` — one world: the clock, the seasons, the tools, measuring, saving
 - `src/save.js` — the continue slot in IndexedDB
 - `src/host.js`, `src/worker.js` — runs the sim off the main thread
-- `src/weather.js` — clouds and rain that drift in from the sea
-- `src/tools.js` — shaping the land by hand: brushes, channels, storms
-- `src/render.js`, `src/view3d.js`, `src/app.js` — the page: the flat map, the 3D view, the controls
+- `src/render.js`, `src/view3d.js`, `src/app.js` — the page: the map, the 3D view, the charts, the controls
 
-## Water
+## The model
 
-The world starts dry. Rain pools in hollows (the young foothills and
-plain are hummocky) and only spills on once a hollow is full, so the
-first network of streams has to find its way to the sea. Lakes evaporate:
-one that gets less than it loses shrinks, and if its outlet is cut down it
-drains. A crater fills over the years before it overflows, and a cone
-across the river stops it below until the lake behind it spills. Below a
-day per tick, water also takes time to travel, at river speeds, so at an
-hour a second you can watch a flood come down the valley.
+The valley is a grid of 4 m cells, 128 across and 256 down.
 
-## Weather, day and night
+**Water** moves as a sheet with depth and momentum: the local inertial form
+of the shallow-water equations (Bates and others, 2010). Each cell face
+carries a flow pushed by the slope of the water surface and held back by
+friction on the bed, which is rougher where plants grow. So the water
+spreads, ponds, overtops its banks and splits round bars. It's worked out
+in steps of a fraction of a second.
 
-At a week a second or slower, clouds drift in from the sea on the
-prevailing wind and the rain falls under them, so a storm over the hills
-sends a flood down the river hours later. Averaged over time the rain
-comes to the climate's, so at fast speeds the weather averages out and the
-clouds fade away. Below a day a second the sun rises and sets, with longer
-days in summer and a warm light at dawn and dusk, and with the seasons on,
-plants come out light green in spring and turn gold and red in autumn.
+**Sand** (coarse, 1 mm) moves where the water drags at the bed harder than
+a threshold (the Shields stress), at the Meyer-Peter Müller rate. It goes
+the way the water goes, turned toward the inside of a bend by the bend's
+spiral flow and pulled a little downhill. The bed rises where more sand
+comes in than goes out and falls where less does, and no sand is made or
+lost along the way. The pump feeds in sand with its water, as a share of
+what that water can carry.
 
-## Ground
+**Banks** wear back where the flow drags hardest beside them, which is the
+outside of a bend. A channel scouring at the foot of a bank brings some of
+the bank down with it, and any slope steeper than wet or dry sand can stand
+slumps. Bedrock lies a few metres down, close under the terraces, and
+nothing wears below it.
 
-The ground is bedrock under loose cover. A granite core runs along the top
-of the range; below it, bands of sandstone, shale and limestone cross the
-valley, so the river cuts gorges through the hard bands and opens out
-across the soft; volcanoes add basalt. Each rock wears at its own rate,
-granite slowest and shale fastest. Loose cover (soil on the slopes, sand
-and silt on the plain and delta, scree on steep ground) goes as fast as the
-water can carry it: a sandy river bed cuts tens of centimetres a century
-where a granite one moves about a millimetre. Hillside soil rides on the
-slope as it creeps and goes with landslides; bare rock weathers back into
-soil, faster for shale than granite; rivers, lakes and floods lay down
-new cover. Plants do poorly on bare rock. The Ground map mode shows it all.
+**Plants** green bare ground over a year or two in the growing season. They
+drown under standing water, and a flood that drags hard enough tears them
+out. Where they grow they hold the banks, slow the water and keep the sand
+in place.
 
-## Muddy rivers
+**Time.** The bed changes far more slowly than the water moves. At the faster
+rates each second of water stands for many seconds of the bed's time, the
+morphological factor river models use. The bottom left of the time bar
+shows it as "bed ×N". The clock runs on the bed's time. The factor backs
+off by itself when the bed would change faster than the water could follow.
 
-The rivers are coloured by the silt they carry. Clear blue water is coming
-off hard rock, through lakes that have dropped their load, or from a quiet
-catchment; jade, olive and then brown mean more and more mud, from soft
-rock, bare ground, steep rising mountains and floods. A storm sends a brown
-pulse down the valley that clears within a few days, and a lake goes muddy
-where a river runs into it. At the coast the silt fans out into the sea as
-a tan plume off each mouth. The River tab totals the silt reaching the sea
-each year, and tapping a river or lake shows how many tonnes a day pass
-that spot.
+**Seasons and weather.** The river runs low in winter and high in the spring
+melt, with a smaller rise in the autumn rains. At a day a second or slower,
+weather systems drift over: clouds cover the map, it rains, and the rain on
+the catchment upstream comes down the river as a flood some hours later.
 
-## Life
+## Using it
 
-Life starts in the sea: plankton, seaweed and microbial mats, with freshwater
-algae seeded at the river mouths once the river reaches the coast. Each
-species is a density map over a 1 km grid plus a handful of traits: water or
-land, fresh or salt, temperature, complexity, dispersal. Species grow,
-compete within their size class and realm, spread along the rivers, adapt to
-the climate, and split, either when the river, ice or the coast cuts a
-population in two or by mutation. Plants need enough complexity before they
-can live on land; once they do, they green the valley and hold the soil, so
-vegetated slopes erode more slowly. At slow speeds you see blooms and
-dormancy through the seasons; at fast speeds, evolution.
+**Map.** The map shows the land, or one of five layers:
+- water depth;
+- the current;
+- the drag on the bed, as a multiple of what moves sand;
+- where the bed is cutting or filling now;
+- how much it has been cut or filled since the start.
 
-Animals start as two simple jawless fish in the sea. They graze: some
-filter plankton, some crop the larger plants, and where they're dense they
-leave less for what they eat. Diet, limbs and lungs evolve like any other
-trait, through armored, ray-finned and lobe-finned fish. Fleshy fins and
-gulping air each help a little in warm, weedy shallows; with real legs and
-lungs, and land plants to eat, an animal can walk out of the water.
-It usually happens on its own, but not always in time: if nothing has
-walked ashore by 5 million years, the most land-ward fish living by a green
-shore gives rise to amphibians there, a real descendant in its line (and if
-no plant has made it onto land yet, the most land-ward plant goes first,
-and the animals follow once there's something to eat). They count at once
-as what has lived on land here, so from then on, if the land is ever left
-without plants or animals, newcomers like them come back in from beyond
-the valley as soon as there's something for them to eat. Each gets a note.
+Pinch, double-tap or use + and − to zoom in, and drag to move around when
+zoomed. Tap a spot to see the depth, current, sand moving, how far the bed
+has moved and the plant cover there. The 3D button stands the valley up,
+heights exaggerated four times.
 
-The first walkers are amphibians: they lay their eggs in water, so they do
-well only near streams, lakes or heavy rain. Shelled eggs (reptiles) free
-them to live anywhere on land, and only then can warm blood evolve: warm-
-blooded animals (mammals, and the far-ranging ones birds) keep going in the
-cold, at the price of more food. Plants follow the same way out of the wet:
-spore plants (mosses, ferns) need damp ground; seed plants (shrubland,
-conifer forest) take the dry uplands; flowering plants (meadows, broadleaf
-forest) grow and spread faster. Each step comes in order, by chance, if it
-comes at all, and the first of each gets a note.
+**Tools.**
+- **Raise** and **Lower:** brushes that pile up or scoop away sand while
+  you hold a finger on the map. Lower stops at the bedrock.
+- **Dig:** cuts a channel along a line you draw.
+- **Block:** drops a block of rock the river can't wear away.
+- **Storm:** parks a storm over the valley for a day and a half, and slows
+  the clock so you can watch the flood come down.
+- **Section:** draws a line for a cross-section.
 
-Some animals take to eating other animals. Hunters eat the plant-eaters
-around them and nothing else, need twice the food per head and breed
-slower; they thin their prey, and starve without it. Fish show as silver
-specks in the water, land animals as dark specks on the ground, and hunters
-as rust-red specks.
+With a tool picked, one finger works the map and two fingers still move and
+zoom it.
 
-## Beavers
+**The table's sliders.**
+- **Pump:** the river's flow before the seasons.
+- **Tilt:** the valley's fall, in metres per kilometre.
+- **Sea level.**
+- **Sand in:** sand fed in with the water, as a share of what it can carry.
+  Less than it can carry and the river cuts down; more and it builds up and
+  spreads out.
 
-Some animals change the valley to suit themselves. A plant-eating animal
-that walks on land can evolve a habit of building dams, like eggs or warm
-blood: a little helps it on the banks of a stream, and the more it builds,
-the better it does by still water and the worse away from it. Once it's
-far enough along, the animals read as dam-building amphibians or reptiles,
-or as beavers once they're warm-blooded, and they start walling off the
-gentle, wooded streams they live on. A dam is 2.5 m of sticks and mud
-across a small or medium stream (never a big river), and a pond fills
-behind it. The pond is a lake to the river, so it keeps the silt that comes
-down: below a dam the water runs clear. It wets the ground around it, so
-damp-loving plants and amphibians do well there, and the beavers best of
-all. Ponds fill up with silt over the years, and when the beavers leave, or
-the pond is full, the dam falls in and the pond drains, leaving a flat,
-fertile meadow that the stream slowly cuts back down through. A big flood,
-or a storm surge at slow speeds, bursts the dams in its way and sends the
-pond down the river.
+**Readings.** The River tab gives the flow, the channel's width, its
+sinuosity (the length of its line over the valley's), the sand moving, the
+sand reaching the sea and the delta built, with sparklines over time. The
+Profile tab draws the river's long profile, from the inlet to the sea:
+- the bed;
+- the water over it;
+- the bed at the start, dashed.
 
-If none have evolved by 8 million years, the most land-ward plant-eater
-living by the water takes it up, and its descendants build. Whenever the
-builders die out, newcomers like the best of them come back from beyond
-the valley, and newcomers after an extinction build dams too.
-
-On the map a dam is a short brown bar across its stream, and the pond
-behind it is a lake; tap one to see who built it and when. The River tab
-counts the dams and the pond area.
-
-## Disasters
-
-Nature sets them off as time runs: lightning fires in dry summers on
-vegetated ground (about one every 30 years), floods on the trunk river (about
-one in 50, mostly with the spring melt), eruptions in the rising mountains
-(about one per 400,000 years) and meteor impacts (about one per 3 million).
-The Tools button on the map lets you drop any of them where you tap.
-Eruptions build cones and impacts dig craters, and the rivers re-route around
-them at once: a cone across a valley dams a lake. Floods lay silt on the
-floodplain, and fires burn the plants but leave the soil richer. The biggest
-eruptions and impacts bring a volcanic or impact winter a few degrees colder
-for a few years, and the species least able to take the cold die out.
-When the winter is over, newcomers come in from beyond the valley at the
-edges of the map: two or three plants and two or three animals, new species
-at the most advanced level their kind had reached here in each of the sea,
-fresh water and land (so if early tetrapods walked the valley before, early
-tetrapods walk in), suited to the climate where they land and only where
-there's something for them to eat. Now and then a lone newcomer drifts in
-too, a plant or an animal, about once every 100,000 years.
-
-The world's first million years are the heavy bombardment: impacts and
-eruptions one after another, about one every 500 years at first, most of
-them small and a few catastrophic, easing off to nothing by the
-million-year mark and leaving a cratered, volcanic valley. Life is there
-from the start and is knocked back again and again; nothing comes in from
-beyond until it's over. Then the valley is restocked: plants first, and
-the animals once there's something for them to eat.
-
-## Shaping it yourself
-
-The Tools tray holds the disasters, five tools of your own and the World sliders. Raise and
-Lower work like a brush: hold a finger on the map and the ground rises or
-falls under it, about 50 m a second, with a soft edge (lowering takes the
-loose cover first). Dig cuts a channel along a line you draw, its bed
-falling steadily from the higher end to the lower and kept below the ground
-either side, so a river that finds it follows it. Storm parks a heavy storm
-for a day and a half where you tap; it slows the clock to an hour a second
-so you can watch the flood come down. Seed drops a species where you tap:
-pick Plant or Animal for a newcomer suited to the spot (an animal only where
-there's something for it to eat), or Picked for the species chosen in the
-Life tab, if it can live there.
-
-The World sliders change the valley as a whole. Rain makes it wetter or
-drier (30% to 200% of natural); Meteors and Volcanoes set how often nature
-strikes and erupts (none to five times natural, the bombardment included);
-Uplift sets how fast the mountains rise (none to three times); Warmth shifts
-the climate up to 8 °C either way, so glaciers, snow and life follow; Sea
-level raises or drops the sea by up to 150 m, and the coast moves at once;
-Rock sets how hard all the rock is (a quarter to four times), so it wears
-faster or slower. With a tool armed
-one finger shapes; two fingers still move and zoom. Everything you change
-is saved with the world.
-
-## The map
-
-Pinch, double-tap, scroll or use the + and − buttons to zoom in; drag to
-move around once zoomed. Tap a spot to see what lives there.
-
-The switch at the bottom shows Land, Species or Ground; Layers adds colour
-maps of temperature, rainfall, river flow and erosion, each with its key.
-
-The 3D button stands the valley up, its heights exaggerated three times so
-the relief reads: drag to turn and tilt it, pinch or use + and − to move in,
-double-tap to centre on a spot. Everything else works there too: the map
-modes, clouds and night, tapping to see what lives somewhere, and the
-disasters.
+Under it is the cross-section along the line from the Section tool.
 
 ## Saving
 

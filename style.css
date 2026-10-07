@@ -92,14 +92,14 @@ body {
   display: grid;
   gap: 8px;
   margin: 0 auto;
-  width: min(100%, calc(62vh * 128 / 224));
+  width: min(100%, calc(62vh * 128 / 256));
   min-width: 0;
 }
 .map {
   position: relative;
   margin: 0 auto;
   width: 100%;
-  aspect-ratio: 128 / 224;
+  aspect-ratio: 128 / 256;
   max-width: 100%;
   border-radius: 6px;
   overflow: hidden;
@@ -236,7 +236,7 @@ body {
 
 @media (min-width: 860px) {
   .layout { grid-template-columns: auto minmax(320px, 420px); justify-content: center; gap: 28px; }
-  .map-col { width: min(100%, calc((100vh - 170px) * 128 / 224)); margin: 0; }
+  .map-col { width: min(100%, calc((100vh - 170px) * 128 / 256)); margin: 0; }
 }
 
 /* On-map labels and controls share the north arrow's plate. */
@@ -650,5 +650,22 @@ body {
   .tb-slide { order: 1; }
   .tb-status { order: 2; flex-direction: column; justify-content: center; min-width: 16ch; }
   .timebar select { max-width: none; }
-  .map { width: min(100%, calc((100vh - 140px) * 128 / 224)); }
+  .map { width: min(100%, calc((100vh - 140px) * 128 / 256)); }
 }
+
+/* The profile and cross-section charts. */
+.chart { margin: 0; display: grid; gap: 6px; }
+.chart figcaption {
+  display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
+  font: 600 12px/1.2 var(--font-display); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted);
+}
+.chart canvas { display: block; width: 100%; height: 170px; background: var(--panel); border-radius: 6px; box-shadow: 0 0 0 1px var(--line); }
+.chart canvas[hidden] { display: none; }
+.chart .val { font: 500 12px/1.2 var(--font-data); letter-spacing: 0; text-transform: none; color: var(--ink); }
+.legend { display: flex; align-items: center; gap: 6px; font: 400 12px/1 var(--font-body); letter-spacing: 0; text-transform: none; }
+.legend i { display: inline-block; width: 14px; height: 0; border-top: 3px solid; margin-left: 4px; }
+.legend .lg-bed { border-color: #8a6a44; }
+.legend .lg-water { border-color: #5aa3d0; }
+.legend .lg-start { border-top-style: dashed; border-color: var(--muted); }
+.tool-row.shape-row { grid-template-columns: repeat(4, 1fr); }
+.tool-row.shape-row:nth-of-type(2) { grid-template-columns: repeat(2, 1fr); }

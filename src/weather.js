@@ -1,87 +1,110 @@
-// weather.js — rain you can see. Cloud systems drift in from the sea on a
-// prevailing wind, change shape as they go, and the rain falls under them.
-//
-// The field is a pure function of the seed, the place and the time, so it
-// never needs saving. It only moves the rain around: averaged over time at
-// any one spot it comes to exactly the climate's rain there, so long ticks,
-// which see the average, are unaffected. It's worked out on the life grid
-// (1 km cells); its days-long storms only matter at short ticks.
+// weather.js — the sky over the valley, and the floods it sends down the
+// river. Weather systems tens of kilometres across drift over on the wind:
+// while one passes, clouds cover the map and rain falls, and the rain that
+// falls on the catchment upstream comes down the river as a flood some hours
+// later. Everything here is a function of the seed and the time except
+// what's carried over between steps (the water still on its way down, and
+// any storm parked by hand), which is saved.
 
 import { makeNoise2D, fbm } from './rng.js';
 
-export const WEATHER_TICK = 7 / 365.25;    // at ticks this short or shorter, rain follows the clouds
-const KM_PER_YEAR = 25 * 24 * 365.25;      // the wind carries the weather at about 25 km/h
-const SYSTEM_KM = 40;                      // the size of a weather system
-const COVER = 0.05;                        // where the cloud field exceeds this, it rains
-const SAMPLES = 20000;
+const KM_PER_HOUR = 25;                 // the wind carries the weather at about this
+const SYSTEM_KM = 60;                   // the size of a weather system
+const CELL_KM = 0.004 * 4;              // the cloud grid: 16 m cells
+const SHOWER_KM = 0.35;                 // the size of a shower cloud
+const CATCH_HOURS = 8;                  // how long the catchment takes to send its rain down
+const SAMPLES = 4000;
+const HOURS_PER_YEAR = 365.25 * 24;
+
+export const STORM_HOURS = 36;          // a storm parked by hand rains this long
 
 export class Weather {
-  constructor(rng, LW, LH) {
+  constructor(rng, W, H) {
     const r = rng.fork('weather');
     this.big = makeNoise2D(r.fork('systems'));
-    this.small = makeNoise2D(r.fork('cells'));
-    this.LW = LW;
-    this.LH = LH;
-    // Mostly onshore, from the sea (the bottom of the map) toward the
-    // mountains, at a slant that differs between worlds.
-    const slant = r.range(-0.6, 0.6);
+    this.small = makeNoise2D(r.fork('showers'));
+    this.CW = Math.ceil(W / 4);
+    this.CH = Math.ceil(H / 4);
+    const slant = r.range(-0.8, 0.8);
     this.vx = Math.sin(slant);
     this.vy = -Math.cos(slant);
-    this.cloud = new Float32Array(LW * LH);   // cloud thickness, 0 … about 1
-    this.rain = new Float32Array(LW * LH);    // rain here as a multiple of the climate's
-    this.storms = [];                         // set by the page: { x, y, r, start, end, strength }
-    // The average of the raw rain over the noise's range, so the field
-    // can be scaled to average 1.
+    this.cloud = new Float32Array(this.CW * this.CH);
+    this.storms = [];                   // parked by hand: { x, y, start, end }
+    this.upstream = 0;                  // rain on the catchment still coming down, as a multiple of the mean
+    this.intensity = 0;                 // how hard it's raining here now, as a multiple of the mean
+    // Scale the systems' rain to average 1.
     let sum = 0;
-    for (let k = 0; k < SAMPLES; k++) {
-      const x = (k * 0.6180339887) % 1, y = (k * 0.7548776662) % 1;
-      sum += this.raw(x * 4000, y * 4000, 0).rain;
-    }
+    for (let k = 0; k < SAMPLES; k++) sum += this.raw(k * 37.1);
     this.scale = SAMPLES / sum;
   }
 
-  // Clouds and raw rain at a point (km) and time (years): two layers, the
-  // big systems and the showers inside them, carried at different speeds so
-  // the shapes change as they move.
-  raw(xk, yk, t) {
-    const d = t * KM_PER_YEAR;
-    const bx = (xk - this.vx * d) / SYSTEM_KM, by = (yk - this.vy * d) / (SYSTEM_KM * 1.6);
-    const sx = (xk - this.vx * d * 1.3) / (SYSTEM_KM / 4), sy = (yk - this.vy * d * 1.3) / (SYSTEM_KM / 4);
-    const c = 0.75 * fbm(this.big, bx, by, 2) + 0.35 * fbm(this.small, sx + 50, sy + 50, 2);
-    return { cloud: c, rain: c > COVER ? (c - COVER) ** 1.5 : 0 };
+  // Rain from the systems at an hour (any point in the valley: they're far
+  // bigger than it), before scaling.
+  raw(hours) {
+    const d = hours * KM_PER_HOUR;
+    const c = 0.8 * fbm(this.big, d / SYSTEM_KM, 0.37, 3) + 0.25 * fbm(this.small, d / (SYSTEM_KM / 5), 5.3, 2);
+    return c > 0.08 ? (c - 0.08) ** 1.5 : 0;
   }
 
-  // The field at year t on the life grid.
-  update(t) {
-    const { LW, LH, cloud, rain, scale } = this;
-    for (let y = 0; y < LH; y++) {
-      for (let x = 0; x < LW; x++) {
-        const c = y * LW + x;
-        const w = this.raw(x + 0.5, y + 0.5, t);
-        cloud[c] = Math.max(0, Math.min(1, (w.cloud + 0.15) * 1.6));
-        rain[c] = w.rain * scale;
-      }
-    }
+  // The weather at year t. dtYears is how far time has moved since the last
+  // call, for the water on its way down from upstream.
+  update(t, dtYears) {
+    const hours = t * HOURS_PER_YEAR;
+    let rain = this.raw(hours) * this.scale;
+    rain += 12 * this.parked(t);
+    this.intensity = rain;
+    // The catchment's rain arrives over some hours.
+    const k = 1 - Math.exp(-(dtYears * HOURS_PER_YEAR) / CATCH_HOURS);
+    this.upstream += (rain - this.upstream) * k;
+    if (this.storms.length && this.storms.some((s) => s.end <= t)) this.storms = this.storms.filter((s) => s.end > t);
+  }
+
+  // How much a storm parked by hand is raining now, 0..1.
+  parked(t) {
+    let p = 0;
     for (const s of this.storms) {
       if (t < s.start || t > s.end) continue;
-      const fade = Math.min(1, (t - s.start) / 0.002, (s.end - t) / 0.002);
-      const r2 = s.r * s.r;
-      for (let y = Math.max(0, Math.floor(s.y - 2 * s.r)); y <= Math.min(LH - 1, Math.ceil(s.y + 2 * s.r)); y++) {
-        for (let x = Math.max(0, Math.floor(s.x - 2 * s.r)); x <= Math.min(LW - 1, Math.ceil(s.x + 2 * s.r)); x++) {
-          const g = Math.exp(-((x - s.x) ** 2 + (y - s.y) ** 2) / r2) * fade;
-          const c = y * LW + x;
-          cloud[c] = Math.min(1, cloud[c] + g);
-          rain[c] += s.strength * g;
+      p = Math.max(p, Math.min(1, (t - s.start) * HOURS_PER_YEAR / 2, (s.end - t) * HOURS_PER_YEAR / 2));
+    }
+    return p;
+  }
+
+  // The clouds over the map at year t, for drawing: shower cells drifting
+  // over, as many as the system's rain makes, and a parked storm's.
+  clouds(t) {
+    const hours = t * HOURS_PER_YEAR;
+    const parked = this.parked(t);
+    const rain = this.raw(hours) * this.scale + 12 * parked;
+    const { CW, CH, cloud } = this;
+    const cover = Math.min(0.75, rain / 4);
+    const d = hours * KM_PER_HOUR;
+    for (let y = 0; y < CH; y++) {
+      for (let x = 0; x < CW; x++) {
+        const xk = x * CELL_KM - this.vx * d, yk = y * CELL_KM - this.vy * d;
+        let c = 0.5 + 0.5 * fbm(this.small, xk / SHOWER_KM + 31, yk / SHOWER_KM + 17, 3);
+        c = Math.max(0, Math.min(1, (c - (1 - cover)) / 0.25));
+        for (const s of this.storms) {
+          if (t < s.start || t > s.end) continue;
+          const r2 = ((x - s.x / 4) ** 2 + (y - s.y / 4) ** 2) / 80;
+          c = Math.max(c, Math.exp(-r2) * parked);
         }
+        cloud[y * CW + x] = c;
       }
     }
+  }
+
+  park(x, y, t) {
+    this.storms = this.storms.filter((s) => s.end > t).slice(-3);
+    this.storms.push({ x, y, start: t, end: t + STORM_HOURS / HOURS_PER_YEAR });
   }
 
   saveState() {
-    return { storms: this.storms.map((s) => ({ ...s })) };
+    return { storms: this.storms.map((s) => ({ ...s })), upstream: this.upstream, intensity: this.intensity };
   }
 
   restoreState(s) {
     this.storms = s && s.storms ? s.storms.map((x) => ({ ...x })) : [];
+    this.upstream = s && s.upstream != null ? s.upstream : 0;
+    this.intensity = s && s.intensity != null ? s.intensity : 0;
   }
 }

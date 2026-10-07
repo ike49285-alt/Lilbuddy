@@ -2,18 +2,17 @@
 // heightfield you can turn, tilt and zoom. Raw WebGL 1, no library.
 //
 // Units are cells: x across, z down the valley (the 2D map's y), y up, with
-// heights exaggerated so the relief reads. The ground takes its colours from
-// the flat map's cell image, so every map mode works, with the rivers drawn
-// sharper on a layer of their own; the sea and lakes are flat water.
+// heights exaggerated so a metre-high bank reads. The ground takes its
+// colours from the flat map's cell image, so every map mode works; where
+// there's water, the surface drawn is the water's.
 
 import { sunlight, nightTint } from './render.js';
 
-const EXAG = 3;
-const UNIT = EXAG / 500;               // metres of height to cells (500 m), exaggerated
+const EXAG = 4;
+const UNIT = EXAG / 4;                 // metres of height to cells (4 m), exaggerated
 const FOV = (45 * Math.PI) / 180;
-const RIVER_PX = 4;                    // river layer pixels per cell
 const MIN_PITCH = 0.12, MAX_PITCH = 1.45;
-const MIN_DIST = 12, MAX_DIST = 520;
+const MIN_DIST = 8, MAX_DIST = 520;
 
 const TERRAIN_VS = `
 attribute vec2 aPos;
@@ -191,13 +190,13 @@ export class View3D {
   // Heights and normals for a new frame: the sea flat at sea level, lakes
   // flat at their water level.
   shape(f) {
-    const { W, H, z, ocean, lake, water, seaLevel } = f;
+    const { W, H, z, h: depth, seaLevel } = f;
     const { hn, wet, heights } = this;
-    const sea = seaLevel * UNIT;
-    let top = sea;
+    let top = seaLevel * UNIT;
     for (let i = 0; i < W * H; i++) {
-      let h;
-      if (ocean[i]) { h = sea; wet[i] = 1; } else if (lake[i]) { h = (z[i] + (water ? water[i] : 0)) * UNIT; wet[i] = 1; } else { h = z[i] * UNIT; wet[i] = 0; }
+      const d = depth[i];
+      const h = (z[i] + (d > 0.03 ? d : 0)) * UNIT;
+      wet[i] = d > 0.08 ? 1 : 0;
       heights[i] = h;
       if (h > top) top = h;
     }
@@ -208,7 +207,7 @@ export class View3D {
         const i = y * W + x;
         const o = i * 4;
         hn[o] = heights[i];
-        if (wet[i]) { hn[o + 1] = 0; hn[o + 2] = 0; continue; }
+
         const xm = x > 0 ? x - 1 : x, xp = x < W - 1 ? x + 1 : x;
         hn[o + 1] = -(heights[y * W + xp] - heights[y * W + xm]) / Math.max(1, xp - xm);
         hn[o + 2] = -(heights[yp + x] - heights[ym + x]) / Math.max(1, (yp - ym) / W);
@@ -237,7 +236,7 @@ export class View3D {
 
   // Looking up the valley from out at sea, the whole of it in view.
   resetCamera() {
-    this.cam = { tx: this.W / 2 || 64, ty: this.H * 0.47 || 105, yaw: 0, pitch: 0.62, dist: 300 };
+    this.cam = { tx: this.W / 2 || 64, ty: this.H * 0.5 || 128, yaw: 0, pitch: 0.62, dist: 330 };
   }
 
   turn(dx, dy) {
@@ -360,41 +359,13 @@ export class View3D {
 
   // The rivers, drawn by the flat map's code over the whole valley, a few
   // pixels per cell, about once a second.
-  riverLayer(f) {
-    const now = performance.now();
-    const stale = (now - this.riverAt >= 1000 && f.years !== this.riverYears) || f.terrainEpoch !== this.riverEpoch;
-    if (!this.riverDirty && !stale) return false;
-    const R = this.renderer;
-    const w = f.W * RIVER_PX, h = f.H * RIVER_PX;
-    if (this.rivers.width !== w || this.rivers.height !== h) { this.rivers.width = w; this.rivers.height = h; }
-    const ctx = this.rivers.getContext('2d');
-    ctx.clearRect(0, 0, w, h);
-    const saved = [R.zoom, R.x0, R.y0];
-    R.zoom = 1; R.x0 = 0; R.y0 = 0;
-    R.drawRivers(f, w, h, ctx);
-    [R.zoom, R.x0, R.y0] = saved;
-    this.riverAt = now;
-    this.riverYears = f.years;
-    this.riverEpoch = f.terrainEpoch;
-    this.riverDirty = false;
-    return true;
-  }
-
-  // Animal specks over the whole valley, as points on the ground.
-  specks(f) {
-    const list = [];
-    this.renderer.speckPoints(f, 0, 0, f.W, f.H, (kind, wx, wy) => {
-      list.push(wx, this.heightAt(wx, wy) + 0.15, wy, kind);
-    });
-    return new Float32Array(list);
-  }
 
   // Draws a frame (the flat map's cell image must already be painted for
   // it). Called for every new frame and whenever the camera moves.
   render(f) {
     if (this.lost || !f) return;
     const gl = this.gl;
-    const { w, h, dpr } = this.fit();
+    const { w, h } = this.fit();
     if (!this.cam || this.W !== f.W || this.H !== f.H) {
       this.W = f.W; this.H = f.H;
       if (!this.cam) this.resetCamera();
@@ -412,12 +383,6 @@ export class View3D {
       gl.bindTexture(gl.TEXTURE_2D, this.tColor);
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, this.renderer.terrain);
     }
-    if (fresh) {
-      if (this.riverLayer(f)) {
-        gl.bindTexture(gl.TEXTURE_2D, this.tRiver);
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, this.rivers);
-      }
-    }
     const landscape = this.renderer.mode === 'landscape';
     const cloudCv = landscape && f.cloud ? this.renderer.cloudLayer(f) : null;
     if (cloudCv && (fresh || this.cloudOf !== f.cloud)) {
@@ -434,7 +399,7 @@ export class View3D {
     const elev = Math.max(0.12, Math.min(1.2, Math.asin(Math.max(0.12, Math.min(1, sun.height)))));
     const L = [(sx / hl) * Math.cos(elev), Math.sin(elev), (sz / hl) * Math.cos(elev)];
 
-    const cloudY = Math.max(this.top + 2, (f.seaLevel + 2600) * UNIT);
+    const cloudY = this.top + 40;
     const mvp = this.matrices();
     gl.viewport(0, 0, w, h);
     const sky = [0.62 * tint[0], 0.74 * tint[1], 0.84 * tint[2]];
@@ -468,22 +433,6 @@ export class View3D {
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 
-    // Animals.
-    if (landscape && f.life.fishes) {
-      const pts = this.specks(f);
-      if (pts.length) {
-        p = this.speckProg;
-        gl.useProgram(p.prog);
-        gl.bindBuffer(gl.ARRAY_BUFFER, this.bSpeck);
-        gl.bufferData(gl.ARRAY_BUFFER, pts, gl.STREAM_DRAW);
-        attrib(gl, p, 'aP', this.bSpeck, 4);
-        gl.uniformMatrix4fv(p.u.uMVP, false, mvp);
-        gl.uniform1f(p.u.uPx, dpr * 1.6);
-        gl.uniform3fv(p.u.uTint, tint);
-        gl.drawArrays(gl.POINTS, 0, pts.length / 4);
-        disable(gl, p);
-      }
-    }
 
     // Clouds, floating well above the peaks.
     if (cloudCv) {

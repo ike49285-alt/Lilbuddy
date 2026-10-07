@@ -5,7 +5,7 @@
 
 const DB = 'headwaters';
 const STORE = 'worlds';
-const SLOT = 'continue';
+const SLOT = 'stream';
 
 function open() {
   return new Promise((resolve, reject) => {

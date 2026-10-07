@@ -1,13 +1,11 @@
 // app.js — the page: starts the worker, draws what it sends, wires the controls.
 
-import { MapRenderer, drawSpark, elevationColor, ROCK_RGB, COVER_RGB, LAYERS } from './render.js';
+import { MapRenderer, drawSpark, drawProfile, LAYERS } from './render.js';
 import { saveWorld, loadWorld } from './save.js';
 import { View3D, webglAvailable } from './view3d.js';
 
-const CELL_KM2 = 0.25;
-const SEED_WORDS = ['alder', 'basalt', 'cedar', 'delta', 'eddy', 'fjord', 'gravel', 'heron', 'iron',
-  'juniper', 'karst', 'larch', 'moraine', 'notch', 'oxbow', 'pumice', 'quartz', 'riffle', 'scree',
-  'tarn', 'umber', 'vale', 'willow', 'yarrow', 'zinc'];
+const SEED_WORDS = ['alder', 'bar', 'cutbank', 'delta', 'eddy', 'ford', 'gravel', 'heron', 'island',
+  'kingfisher', 'levee', 'meander', 'neck', 'oxbow', 'pool', 'riffle', 'sandbar', 'thalweg', 'willow'];
 
 const $ = (id) => document.getElementById(id);
 const renderer = new MapRenderer($('map-canvas'));
@@ -17,29 +15,29 @@ let pendingRunTo = null;
 
 // --- time rate -------------------------------------------------------------
 
-const DAY = 1 / 365.25;
-const HOUR = DAY / 24;
-const MINUTE = HOUR / 60;
+const SECOND = 1 / 3.156e7;
+const MINUTE = 60 * SECOND;
+const HOUR = 60 * MINUTE;
+const DAY = 24 * HOUR;
 // Rates in sim-years per real second.
 const PRESETS = [
+  { rate: SECOND, label: 'Real time' },
+  { rate: 10 * SECOND, label: '10 s/s' },
+  { rate: MINUTE, label: '1 min/s' },
   { rate: 10 * MINUTE, label: '10 min/s' },
   { rate: HOUR, label: '1 hr/s' },
+  { rate: 6 * HOUR, label: '6 hr/s' },
   { rate: DAY, label: '1 day/s' },
   { rate: 7 * DAY, label: '1 week/s' },
   { rate: 1 / 12, label: '1 month/s' },
   { rate: 1, label: '1 yr/s' },
-  { rate: 10, label: '10 yr/s' },
-  { rate: 100, label: '100 yr/s' },
-  { rate: 1000, label: '1 kyr/s' },
-  { rate: 10000, label: '10 kyr/s' },
-  { rate: 100000, label: '100 kyr/s' },
 ];
 const MAX_RATE = 'max';
-const LOG_MIN = Math.log10(10 * MINUTE);
-const LOG_MAX = 5;
+const LOG_MIN = Math.log10(SECOND);
+const LOG_MAX = 0;
 const SLIDER_MAX = 1000;
-const SNAP = 14;            // slider units within which a drag snaps to a preset
-let rate = 1000;            // a number, or MAX_RATE
+const SNAP = 14;
+let rate = DAY;
 let paused = false;
 
 function randomSeed() {
@@ -63,18 +61,15 @@ function start(seed) {
   afterStart(seed);
 }
 
-// Picks up a saved world exactly where it stopped.
 function resume(state, savedAt) {
   newWorker();
   worker.postMessage({ type: 'restore', state });
   afterStart(state.seed);
   lastSaved = savedAt;
-  saveNote(`Picked up where you left off`);
+  saveNote('Picked up where you left off');
 }
 
 function afterStart(seed) {
-  selectedId = null;
-  listSig = '';
   inspectAt = -1;
   clearInterval(inspectTimer);
   $('inspect').hidden = true;
@@ -94,11 +89,7 @@ function afterStart(seed) {
 function onMessage(e) {
   const msg = e.data;
   if (msg.type === 'frame') {
-    // A frame that arrives while another is still waiting replaces it; the
-    // replaced one is acknowledged at once so the worker can keep going.
     if (drawPending && worker) worker.postMessage({ type: 'ack', nextIn: paceMs });
-    // Events ride on the frame they happened in; a replaced frame hands its
-    // own on to the next, so none are missed.
     if (drawPending && last && last.events && last.events.length) msg.frame.events = last.events.concat(msg.frame.events || []);
     last = msg.frame;
     if (!drawPending) {
@@ -125,38 +116,34 @@ function onMessage(e) {
 
 const n0 = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
 const n1 = new Intl.NumberFormat('en-US', { maximumFractionDigits: 1 });
+const n2 = new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 });
 
-// At day-scale rates the clock counts days within the year, and below a
-// day the time of day too, so it visibly moves; otherwise it shows whole
-// years, thousands or millions.
+// The clock: the year, the day and, at slow rates, the time of day.
 function formatTime(years, tickYears) {
-  const year = Math.floor(years + 1e-9);
-  if (tickYears < 1) {
-    const days = (years - year) * 365.25 + 1e-6;
-    const day = Math.min(365, Math.floor(days) + 1);
-    // Two lines, so it fits beside the controls on a phone.
-    if (tickYears >= DAY) return `${n0.format(year)} yr\nday ${day}`;
+  const year = Math.floor(years + 1e-12);
+  const days = (years - year) * 365.25;
+  const day = Math.min(365, Math.floor(days) + 1);
+  const yr = year ? `year ${year + 1}, ` : '';
+  if (tickYears < DAY) {
     const mins = Math.floor((days - Math.floor(days)) * 1440);
     const hh = String(Math.floor(mins / 60)).padStart(2, '0'), mm = String(mins % 60).padStart(2, '0');
-    return `${n0.format(year)} yr\nday ${day} ${hh}:${mm}`;
+    return `${yr}day ${day}\n${hh}:${mm}`;
   }
-  if (years < 10000) return `${n0.format(year)} yr`;
-  if (years < 1e6) return `${(years / 1000).toFixed(1)} kyr`;
-  return `${(years / 1e6).toFixed(3)} Myr`;
+  return `${yr}day ${day}`;
 }
 
 function formatSpan(years) {
   const trim = (v) => (v >= 10 || Math.abs(v - Math.round(v)) < 0.05 ? n0.format(v) : n1.format(v));
+  if (years < 0.95 * MINUTE) return `${trim(years / SECOND)} s`;
   if (years < 0.95 * HOUR) return `${trim(years / MINUTE)} min`;
   if (years < 0.95 * DAY) return `${trim(years / HOUR)} hr`;
-  if (years < 6.5 * DAY) return `${trim(years * 365.25)} day`;
+  if (years < 6.5 * DAY) return `${trim(years / DAY)} day`;
   if (years < 0.07) return `${trim(years * 52.18)} wk`;
   if (years < 0.95) return `${trim(years * 12)} mo`;
-  if (years < 1000) return `${trim(years)} yr`;
-  return `${trim(years / 1000)} kyr`;
+  return `${trim(years)} yr`;
 }
 
-const rateLabel = (r) => `${formatSpan(r)}/s`;
+const rateLabel = (r) => (Math.abs(r / SECOND - 1) < 0.02 ? 'real time' : `${formatSpan(r)}/s`);
 
 function sliderToRate(v) {
   return Math.pow(10, LOG_MIN + (v / SLIDER_MAX) * (LOG_MAX - LOG_MIN));
@@ -188,7 +175,6 @@ function presetIndex(r) {
   return PRESETS.findIndex((p) => Math.abs(Math.log10(p.rate) - Math.log10(r)) < 1e-6);
 }
 
-// Brings the slider and the list in line with the current rate.
 function syncRateUI() {
   const sel = $('rate-select');
   const slider = $('rate-slider');
@@ -249,16 +235,11 @@ function togglePlay() {
 }
 
 // Frames arrive one at a time; only the latest is drawn, once per display
-// frame, and the worker hears back so it can send the next.
+// frame, and the worker hears back so it can send the next, paced so that
+// drawing takes about a quarter of the main thread.
 let drawPending = false;
 let lastSlow = 0;
 const SLOW_MS = 500;
-
-// Adaptive pacing: each frame's real cost on the main thread is its script
-// time, or how far it pushed the next display frame late (which catches the
-// browser's paint and canvas work), whichever is larger. The worker is told
-// to space frames so drawing takes about a quarter of the main thread: up to
-// 30 fps when frames are cheap, fewer on a device that's struggling.
 const SHARE = 0.25;
 const MIN_PACE = 1000 / 30;
 const MAX_PACE = 500;
@@ -273,8 +254,6 @@ function drawLatest(ts) {
   const t0 = performance.now();
   draw(last);
   const js = performance.now() - t0;
-  // Ask for the next frame now, paced by what earlier frames cost; this
-  // frame's own cost is folded in once the browser has painted it.
   if (worker) worker.postMessage({ type: 'ack', nextIn: paceMs });
   drawnAt.push(t0);
   while (drawnAt.length && t0 - drawnAt[0] > 2000) drawnAt.shift();
@@ -291,18 +270,20 @@ function drawLatest(ts) {
 let tokens = null;
 function readTokens() {
   const css = getComputedStyle(document.documentElement);
+  const dark = matchMedia('(prefers-color-scheme: dark)').matches && document.documentElement.dataset.theme !== 'light';
   tokens = {
     water: css.getPropertyValue('--water').trim(),
     soft: css.getPropertyValue('--water-soft').trim(),
     grid: css.getPropertyValue('--line').trim(),
+    muted: css.getPropertyValue('--muted').trim(),
+    bed: dark ? '#c7a77c' : '#8a6a44',
+    bedFill: dark ? 'rgba(199, 167, 124, 0.35)' : 'rgba(138, 106, 68, 0.3)',
+    waterFill: dark ? 'rgba(90, 163, 208, 0.55)' : 'rgba(90, 163, 208, 0.5)',
   };
 }
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { tokens = null; lastSlow = 0; });
 
 function draw(f, force) {
-  const sel = selectedId && f.species.find((s) => s.id === selectedId && s.died === null);
-  if (selectedId && !sel) selectSpecies(null);
-  if (sel) renderer.selectedRgb = hslRgb(sel.hue);
   if (view3d && in3d) {
     renderer.paint(f);
     view3d.render(f);
@@ -311,13 +292,14 @@ function draw(f, force) {
   }
   composedKey = viewKey();
   if (f.events && f.events.length) {
-    for (const ev of f.events) onEvent(ev, f);
+    for (const ev of f.events) onEvent(ev);
     f.events = [];
   }
   const clock = formatTime(f.years, f.tickYears);
   $('time').textContent = clock;
   $('time').classList.toggle('two', clock.includes('\n'));
-  $('tick').textContent = `tick ${formatSpan(f.tickYears)}`;
+  const m = f.stats.morph;
+  $('tick').textContent = m > 1.5 ? `bed ×${n0.format(m)}` : 'bed in real time';
   const lag = $('lag');
   if (f.paused) {
     lag.textContent = 'paused';
@@ -332,15 +314,16 @@ function draw(f, force) {
     lag.textContent = '';
     lag.className = 'lag';
   }
-  const phase = $('phase');
-  phase.textContent = f.climate.label;
-  phase.classList.toggle('glacial', f.climate.glacial > 0.55);
+  $('phase').textContent = f.climate.rain > 2.5 ? `${f.climate.label} · rain` : f.climate.label;
 
-  // Everything below changes slowly; it doesn't need redoing every frame.
   const now = performance.now();
   if (!force && now - lastSlow < SLOW_MS) return;
   lastSlow = now;
   drawSlow(f);
+}
+
+function fmtVolume(v) {
+  return `${n0.format(v)} m³`;
 }
 
 function drawSlow(f) {
@@ -351,34 +334,36 @@ function drawSlow(f) {
     const v = Math.round(value * scale * 100) / 100;
     if (Number($(id).value) !== v) { $(id).value = v; $(`${id}-out`).textContent = label(v); }
   }
-  drawLife(f);
-
-  $('s-len').textContent = st.trunkLen > 0 ? `${n0.format(st.trunkLen / 1000)} km` : 'not yet';
-  $('s-q').textContent = `${n1.format(st.mouthQ / 3.156e7)} m³/s`;
-  $('s-share').textContent = `${n0.format(st.mainShare * 100)}%`;
-  $('s-relief').textContent = `${n0.format(st.relief)} m`;
-  const iceKm = st.iceCells * CELL_KM2, snowKm = (st.snowCells || 0) * CELL_KM2;
-  $('s-ice').textContent = iceKm || snowKm
-    ? [iceKm ? `${n0.format(iceKm)} km² ice` : '', snowKm ? `${n0.format(snowKm)} km² snow` : ''].filter(Boolean).join(', ')
-    : 'none';
-  $('s-lakes').textContent = st.lakeCells ? `${n0.format(st.lakeCells * CELL_KM2)} km²` : 'none';
-  $('s-delta').textContent = `${n0.format(st.deltaCells * CELL_KM2)} km²`;
-  // Tonnes a year; at a few million and up, in megatonnes.
-  const silt = st.toSea || 0;
-  $('s-silt').textContent = silt >= 1e6 ? `${n1.format(silt / 1e6)} Mt/yr` : silt >= 1e3 ? `${n0.format(silt / 1e3)} kt/yr` : silt > 0 ? `${n0.format(silt)} t/yr` : 'none yet';
-  $('s-dams').textContent = st.dams ? `${n0.format(st.dams)}, ${n1.format((st.ponds || 0) * CELL_KM2)} km² of ponds` : 'none';
-  $('s-temp').textContent = `${n1.format(f.climate.seaT)} °C`;
+  $('s-q').textContent = `${n1.format(st.inflow)} m³/s`;
+  $('s-width').textContent = `${n0.format(st.width)} m`;
+  $('s-sin').textContent = n2.format(st.sinuosity);
+  $('s-deep').textContent = `${n1.format(st.deepest)} m`;
+  $('s-sand').textContent = `${n0.format(st.sand)} m³/day`;
+  $('s-sea').textContent = st.toSea >= 0.5 ? `${n0.format(st.toSea)} m³/day` : 'none yet';
+  $('s-delta').textContent = fmtVolume(st.delta);
+  $('s-plants').textContent = `${n0.format(st.plants * 100)}%`;
 
   if (!tokens) readTokens();
   const { water, soft, grid } = tokens;
-  drawSpark($('sp-sea'), f.history.sea, { color: water, fill: soft, grid, zeroLine: 0 });
-  drawSpark($('sp-q'), Array.from(f.history.mouthQ, (q) => q / 3.156e7), { color: water, fill: soft, grid });
-  $('sp-sea-v').textContent = `${n0.format(f.seaLevel)} m`;
-  $('sp-q-v').textContent = `${n0.format(st.mouthQ / 3.156e7)} m³/s`;
-  const span = (f.history.sea.length * f.history.everyYears) / 1000;
-  $('sp-from').textContent = span >= 1000 ? `−${n1.format(span / 1000)} Myr` : `−${n0.format(span)} kyr`;
-
+  drawSpark($('sp-q'), f.history.inflow, { color: water, fill: soft, grid });
+  drawSpark($('sp-s'), f.history.sinuosity, { color: water, fill: soft, grid, zeroLine: 1 });
+  $('sp-q-v').textContent = `${n1.format(st.inflow)} m³/s`;
+  $('sp-s-v').textContent = n2.format(st.sinuosity);
+  $('sp-from').textContent = `−${formatSpan(f.history.inflow.length * f.history.every)}`;
+  if (!$('pane-profile').hidden) drawCharts(f);
   updateScale();
+}
+
+function drawCharts(f) {
+  if (!tokens) readTokens();
+  const colors = { bed: tokens.bed, bedFill: tokens.bedFill, water: tokens.waterFill, start: tokens.muted, grid: tokens.grid, text: tokens.muted };
+  const p = f.profile;
+  drawProfile($('profile'), p, colors, ['inlet', `sea, ${n0.format(p.bed.length * p.cell)} m`]);
+  const s = f.section;
+  $('section').hidden = !s;
+  $('section-hint').hidden = !!s;
+  $('section-len').textContent = s ? `${n0.format(s.length)} m, A to B` : '';
+  if (s) drawProfile($('section'), s, colors, ['A', 'B']);
 }
 
 buildRateSelect();
@@ -392,7 +377,6 @@ $('rate-select').addEventListener('change', (e) => {
 });
 $('rate-slider').addEventListener('input', (e) => {
   const v = Number(e.target.value);
-  // Snap to a nearby preset, so the round numbers are easy to land on.
   const near = PRESETS.find((p) => Math.abs(rateToSlider(p.rate) - v) <= SNAP);
   setRate(near ? near.rate : sliderToRate(v));
 });
@@ -405,7 +389,6 @@ document.addEventListener('keydown', (e) => {
   else if (e.key === '=' || e.key === '+') stepPreset(1);
 });
 
-// The page keeps clear of the fixed time bar.
 new ResizeObserver(() => {
   document.documentElement.style.setProperty('--bar-h', `${$('timebar').offsetHeight}px`);
 }).observe($('timebar'));
@@ -439,153 +422,37 @@ setInterval(showSaved, 5000);
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') requestSave('hide'); });
 window.addEventListener('pagehide', () => requestSave('hide'));
 
-// --- life --------------------------------------------------------------------
-
-let selectedId = null;
-let listSig = '';
-let inspectAt = -1;
-let inspectTimer = null;
-
-const hueCss = (h) => `hsl(${Math.round(h * 360)} 62% 50%)`;
-function hslRgb(h, s = 0.62, l = 0.5) {
-  const a = s * Math.min(l, 1 - l);
-  const f = (n) => {
-    const k = (n + h * 12) % 12;
-    return l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1));
-  };
-  return [Math.round(f(0) * 255), Math.round(f(8) * 255), Math.round(f(4) * 255)];
-}
-function when(years) {
-  if (years < 1000) return `${n0.format(years)} yr`;
-  if (years < 1e6) return `${n0.format(years / 1000)} kyr`;
-  return `${(years / 1e6).toFixed(2)} Myr`;
-}
 function el(tag, cls, text) {
   const e = document.createElement(tag);
   if (cls) e.className = cls;
   if (text !== undefined) e.textContent = text;
   return e;
 }
-function swatch(h) {
-  const s = el('span', 'swatch');
-  s.style.background = hueCss(h);
-  return s;
-}
 
-function drawLife(f) {
-  const ls = f.lifeStats;
-  $('l-alive').textContent = n0.format(ls.alive);
-  $('l-land').textContent = ls.firstLandPlant === null ? 'not yet' : `${ls.landPlants} species, since ${when(ls.firstLandPlant)}`;
-  $('l-veg').textContent = `${n0.format(ls.vegetated)} km²`;
-  $('l-ever').textContent = `${n0.format(ls.everLived)} species`;
-  $('l-animals').textContent = ls.animals ? `${ls.animals} species` : 'none';
-  $('l-ashore').textContent = ls.firstLandAnimal === null ? 'not yet' : `${ls.landAnimals} species, since ${when(ls.firstLandAnimal)}`;
+// --- tabs and map modes ---------------------------------------------------------
 
-  const living = f.species.filter((s) => s.died === null).sort((a, b) => b.range - a.range);
-  const byId = new Map(f.species.map((s) => [s.id, s]));
-  const sig = living.map((s) => s.id).join(',');
-  const list = $('species-list');
-  if (sig !== listSig) {
-    listSig = sig;
-    list.innerHTML = '';
-    for (const sp of living) {
-      const li = el('li');
-      const b = el('button');
-      b.type = 'button';
-      b.dataset.id = sp.id;
-      b.setAttribute('aria-pressed', sp.id === selectedId ? 'true' : 'false');
-      const text = el('span', 'sp-text');
-      text.append(el('span', 'sp-name', sp.name), el('span', 'sp-form', sp.form));
-      b.append(swatch(sp.hue), text, el('span', 'sp-range'));
-      b.addEventListener('click', () => selectSpecies(sp.id === selectedId ? null : sp.id));
-      li.append(b);
-      list.append(li);
-    }
-  }
-  for (const b of list.querySelectorAll('button')) {
-    const sp = byId.get(Number(b.dataset.id));
-    if (!sp) continue;
-    const arrow = sp.trend > 0 ? '▲' : sp.trend < 0 ? '▼' : '';
-    const r = b.querySelector('.sp-range');
-    r.textContent = `${n0.format(sp.range)} km² ${arrow}`;
-    r.className = `sp-range ${sp.trend > 0 ? 'trend-up' : sp.trend < 0 ? 'trend-down' : ''}`;
-    b.querySelector('.sp-form').textContent = sp.form;
-  }
-
-  const card = $('species-card');
-  const sel = selectedId ? byId.get(selectedId) : null;
-  card.hidden = !sel;
-  if (sel) renderCard(card, sel, byId);
-
-}
-
-function renderCard(card, sp, byId) {
-  const t = sp.traits;
-  const parent = sp.parent ? byId.get(sp.parent) : null;
-  card.innerHTML = '';
-  const h = el('h3');
-  h.append(swatch(sp.hue), el('span', '', sp.name));
-  card.append(h);
-  card.append(el('p', '', `${sp.form} · appeared ${when(sp.born)}${parent ? ` from ${parent.name}` : sp.arrivedAt != null ? ', arriving from beyond the valley' : sp.seededAt != null ? ', seeded by hand' : ', seeded at the start'}. Lives over ${n0.format(sp.range)} km².`));
-  const dl = el('dl', 'traits');
-  const row = (label, v, text) => {
-    const d = el('div');
-    const m = el('span', 'meter');
-    const bar = el('span');
-    bar.style.width = `${Math.round(v * 100)}%`;
-    m.append(bar);
-    d.append(el('dt', '', label), m, el('dd', '', text));
-    dl.append(d);
-  };
-  row('Water ↔ land', t.habitat, t.habitat < 0.4 ? 'water' : t.habitat < 0.62 ? 'edge' : 'land');
-  row('Fresh ↔ salt', t.salinity, t.salinity < 0.35 ? 'fresh' : t.salinity < 0.65 ? 'brackish' : 'marine');
-  row('Warmth', t.tempOpt, `${n0.format(t.tempOptC)} ± ${n0.format(t.tempWidthC)} °C`);
-  row('Complexity', t.complexity, t.complexity < 0.3 ? 'simple' : t.complexity < 0.6 ? 'moderate' : 'complex');
-  row('Spread', t.dispersal, t.dispersal < 0.35 ? 'slow' : t.dispersal < 0.7 ? 'medium' : 'fast');
-  if (t.animal) {
-    row('Food: tiny ↔ plants', t.diet, t.diet < 0.35 ? 'filters plankton' : t.diet < 0.65 ? 'a bit of both' : 'grazes plants');
-    row('Fins ↔ legs', t.limbs, t.limbs < 0.25 ? 'fins' : t.limbs < 0.6 ? 'fleshy fins' : 'legs');
-    row('Gills ↔ lungs', t.lungs, t.lungs < 0.25 ? 'gills' : t.lungs < 0.6 ? 'gulps air' : 'lungs');
-    row('Eggs: water ↔ land', t.eggs || 0, (t.eggs || 0) < 0.3 ? 'in water' : (t.eggs || 0) < 0.6 ? 'damp places' : 'shelled, on land');
-    row('Blood: cold ↔ warm', t.warm || 0, (t.warm || 0) < 0.3 ? 'cold' : (t.warm || 0) < 0.5 ? 'warming' : 'warm');
-    row('Eats: plants ↔ animals', t.prey || 0, (t.prey || 0) < 0.25 ? 'plants' : (t.prey || 0) < 0.5 ? 'some meat' : 'hunts');
-    row('Builds dams', t.build || 0, (t.build || 0) < 0.25 ? 'no' : (t.build || 0) < 0.5 ? 'gnaws wood' : 'dams streams');
-  } else {
-    row('Spores ↔ seeds', t.seeds || 0, (t.seeds || 0) < 0.4 ? 'spores' : (t.seeds || 0) < 0.75 ? 'seeds' : 'flowers');
-  }
-  card.append(dl);
-}
-
-function selectSpecies(id) {
-  selectedId = id;
-  syncSeedPicked();
-  lastSlow = 0;
-  worker.postMessage({ type: 'select', id });
-  for (const b of document.querySelectorAll('#species-list button')) {
-    b.setAttribute('aria-pressed', Number(b.dataset.id) === id ? 'true' : 'false');
-  }
-}
+let inspectAt = -1;
+let inspectTimer = null;
 
 function showTab(name) {
-  for (const t of ['river', 'life']) {
+  for (const t of ['river', 'profile']) {
     $(`tab-${t}`).setAttribute('aria-selected', t === name ? 'true' : 'false');
     $(`pane-${t}`).hidden = t !== name;
   }
   if (last) drawSlow(last);
 }
-for (const t of ['river', 'life']) $(`tab-${t}`).addEventListener('click', () => showTab(t));
+for (const t of ['river', 'profile']) $(`tab-${t}`).addEventListener('click', () => showTab(t));
 
-const LAYER_NAMES = { heat: 'Temperature', rain: 'Rainfall', flow: 'River flow', erode: 'Erosion' };
-const LAYER_SHORT = { heat: 'Heat', rain: 'Rain', flow: 'Flow', erode: 'Erosion' };   // fits the mode switch
+const LAYER_NAMES = { depth: 'Water depth', speed: 'Current', drag: 'Drag on the bed (times what moves sand)', change: 'Cutting and filling now', cutfill: 'Cut and fill since the start' };
+const LAYER_SHORT = { depth: 'Depth', speed: 'Current', drag: 'Drag', change: 'Change', cutfill: 'Cut/fill' };
 function setMode(mode) {
   renderer.mode = mode;
   const layer = LAYERS[mode] ? mode : null;
-  for (const m of ['landscape', 'species', 'ground']) $(`mode-${m}`).setAttribute('aria-pressed', mode === m ? 'true' : 'false');
+  $('mode-landscape').setAttribute('aria-pressed', mode === 'landscape' ? 'true' : 'false');
   $('mode-layers').setAttribute('aria-pressed', layer ? 'true' : 'false');
   $('mode-layers').textContent = layer ? LAYER_SHORT[layer] : 'Layers';
   $('mode-layers').setAttribute('aria-label', layer ? `Layer: ${LAYER_NAMES[layer]}` : 'Layers');
   for (const b of document.querySelectorAll('#layer-menu button')) b.setAttribute('aria-checked', b.dataset.layer === layer ? 'true' : 'false');
-  // The layer's key, in the same colours.
   $('layer-key').hidden = !layer;
   if (layer) {
     const L = LAYERS[layer];
@@ -604,35 +471,17 @@ function setLayerMenu(open) {
 $('mode-layers').addEventListener('click', () => setLayerMenu($('layer-menu').hidden));
 for (const b of document.querySelectorAll('#layer-menu button')) b.addEventListener('click', () => setMode(b.dataset.layer));
 $('mode-landscape').addEventListener('click', () => setMode('landscape'));
-$('mode-species').addEventListener('click', () => setMode('species'));
-$('mode-ground').addEventListener('click', () => setMode('ground'));
-
-// The ground key, in the map's own colours.
-{
-  const rgb = (c) => `rgb(${c[0]}, ${c[1]}, ${c[2]})`;
-  const items = [['Granite', ROCK_RGB[0]], ['Sandstone', ROCK_RGB[1]], ['Shale', ROCK_RGB[2]], ['Limestone', ROCK_RGB[3]],
-    ['Basalt', ROCK_RGB[4]], ['Sand & silt', COVER_RGB[1]], ['Soil', COVER_RGB[2]], ['Scree', COVER_RGB[3]]];
-  for (const [name, c] of items) {
-    const li = el('li');
-    const sw = el('span', 'swatch');
-    sw.style.background = rgb(c);
-    li.append(sw, el('span', '', name));
-    $('ground-key').append(li);
-  }
-}
 
 // --- zoom and pan -------------------------------------------------------------
 
 const canvas = $('map-canvas');
-const TAP_PX = 6;            // a press that moves less than this is a tap
+const TAP_PX = 6;
 const DOUBLE_TAP_MS = 300;
 const ZOOM_STEP = 2;
 let viewDrawPending = false;
 let settleTimer = null;
 let composedKey = '';
 
-// Redraws the map for the current view from the last frame, without waiting
-// for the worker, and again once the view has settled so the rivers sharpen.
 function viewChanged() {
   if (in3d) {
     const c = view3d.cam;
@@ -706,14 +555,14 @@ $('view-3d').addEventListener('click', () => set3d(!in3d));
 // A round distance whose bar fits the corner left of the map-mode switch.
 function updateScale() {
   const width = $('map').clientWidth;
-  if (!width) return;
-  const kmPerPx = ((renderer.W / renderer.zoom) * 0.5) / width;
+  if (!width || !last) return;
+  const mPerPx = ((renderer.W / renderer.zoom) * last.cell) / width;
   const room = Math.min(80, width * 0.2);
-  const steps = [0.2, 0.5, 1, 2, 5, 10, 20];
-  let km = steps[0];
-  for (const s of steps) if (s / kmPerPx <= room) km = s;
-  $('scale-bar').style.width = `${km / kmPerPx}px`;
-  $('scale-label').textContent = km < 1 ? `${km * 1000} m` : `${km} km`;
+  const steps = [5, 10, 20, 50, 100, 200, 500];
+  let m = steps[0];
+  for (const s of steps) if (s / mPerPx <= room) m = s;
+  $('scale-bar').style.width = `${m / mPerPx}px`;
+  $('scale-label').textContent = `${m} m`;
 }
 
 function fractions(clientX, clientY) {
@@ -721,8 +570,6 @@ function fractions(clientX, clientY) {
   return [(clientX - r.left) / r.width, (clientY - r.top) / r.height];
 }
 
-// The world point (cells) under a point on screen, in either view; null for
-// the sky in 3D.
 function worldAt(clientX, clientY) {
   if (in3d) {
     const r = glCanvas.getBoundingClientRect();
@@ -732,8 +579,8 @@ function worldAt(clientX, clientY) {
 }
 
 const pointers = new Map();
-let press = null;            // one finger or the mouse: where it went down, and whether it moved
-let pinch = null;            // two fingers: their spread and midpoint when the pinch began
+let press = null;
+let pinch = null;
 let lastTap = null;
 
 function pinchState() {
@@ -750,7 +597,6 @@ function onDown(e) {
     pinch = null;
     if (armed && SHAPERS.has(armed)) startShaping(e);
   } else if (pointers.size === 2) {
-    // A second finger: it's a pinch, not a stroke.
     endShaping(true);
     const p = pinchState();
     const [fx, fy] = fractions(p.mx, p.my);
@@ -772,7 +618,6 @@ function onMove(e) {
     return;
   }
   if (in3d) {
-    // 3D: one finger turns and tilts, two pinch to zoom and slide the land.
     if (pinch && pointers.size >= 2) {
       const p = pinchState();
       view3d.cam.dist = pinch.camDist;
@@ -794,7 +639,6 @@ function onMove(e) {
     return;
   }
   if (pinch && pointers.size >= 2) {
-    // Keep the world point that started under the fingers' midpoint under it.
     const p = pinchState();
     const [fx, fy] = fractions(p.mx, p.my);
     const z = Math.max(1, Math.min(8, pinch.zoom * (p.dist / pinch.dist)));
@@ -828,7 +672,6 @@ function release(e, cancelled) {
     return;
   }
   if (pinch) {
-    // Lifting one finger of a pinch doesn't start a drag or count as a tap.
     if (pointers.size === 0) pinch = null;
     return;
   }
@@ -851,7 +694,6 @@ function tap(clientX, clientY) {
   if (lastTap && now - lastTap.t < DOUBLE_TAP_MS && Math.hypot(clientX - lastTap.x, clientY - lastTap.y) < 30) {
     lastTap = null;
     if (in3d) {
-      // Double-tap in 3D: centre on that spot and move in.
       if (world) { view3d.lookAt(...world); view3d.zoomBy(ZOOM_STEP); }
     } else {
       renderer.zoomAt(ZOOM_STEP, fx, fy);
@@ -863,10 +705,8 @@ function tap(clientX, clientY) {
   if (world) inspectCell(...world);
 }
 
-// Wheel and trackpad zoom around the pointer. At the limits the wheel is left
-// to scroll the page.
 canvas.addEventListener('wheel', (e) => {
-  let dy = e.deltaY * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1);
+  const dy = e.deltaY * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1);
   if (!dy) return;
   if ((dy > 0 && renderer.zoom <= 1.001) || (dy < 0 && renderer.zoom >= 7.999)) return;
   e.preventDefault();
@@ -886,10 +726,9 @@ $('zoom-in').addEventListener('click', () => { if (in3d) view3d.zoomBy(ZOOM_STEP
 $('zoom-out').addEventListener('click', () => { if (in3d) view3d.zoomBy(1 / ZOOM_STEP); else renderer.zoomAt(1 / ZOOM_STEP, 0.5, 0.5); viewChanged(); });
 $('zoom-reset').addEventListener('click', () => { if (in3d) view3d.resetCamera(); else renderer.resetView(); viewChanged(); });
 
-// --- disasters ------------------------------------------------------------------
+// --- notes ---------------------------------------------------------------------
 
-let armed = null;            // the tool waiting for a tap on the map
-let toolSize = 'big';
+let armed = null;
 let pendingNotes = [];
 let noteEv = null;
 let noteAt = 0;
@@ -897,24 +736,17 @@ let noteTimer = null;
 let fxRunning = false;
 const NOTE_MS = 6000;
 const NOTE_GAP_MS = 1000;
-const eventLog = [];         // for the test hooks
+const eventLog = [];
 
 renderer.setEffectsCanvas($('fx-canvas'));
 
 function onEvent(ev) {
-  eventLog.push({ ...ev, cells: ev.cells ? ev.cells.length : 0 });
+  eventLog.push({ ...ev });
   if (eventLog.length > 50) eventLog.shift();
-  // Quiet events (nature's fires, floods, the bombardment) only animate
-  // when time runs slowly enough to watch one: at a year a tick or more,
-  // they'd keep the effects layer redrawing for nothing anyone could follow.
-  if (!ev.quiet || !(last && last.tickYears > 1)) {
-    renderer.addEffect(ev, ev.quiet);
-    startEffects();
-  }
-  if (!ev.quiet) {
-    pendingNotes.push(ev);
-    pumpNotes();
-  }
+  renderer.addEffect(ev);
+  startEffects();
+  pendingNotes.push(ev);
+  pumpNotes();
 }
 
 function startEffects() {
@@ -927,17 +759,13 @@ function startEffects() {
   requestAnimationFrame(tick);
 }
 
-// One note at a time, at most one new one a second; when several arrive
-// together the most serious shows, with a count of the rest.
 function pumpNotes() {
   const now = performance.now();
   clearTimeout(noteTimer);
-  // One you set off yourself is answered at once.
   const own = pendingNotes.some((e) => e.byHand);
   if (pendingNotes.length && (own || now - noteAt >= NOTE_GAP_MS)) {
-    const rank = (e) => (e.byHand ? 4 : e.catastrophic || e.kind === 'milestone' ? 3 : e.kind === 'meteor' || e.kind === 'volcano' ? 2 : e.missed ? 0 : 1);
     let pick = pendingNotes[pendingNotes.length - 1];
-    for (const e of pendingNotes) if (rank(e) > rank(pick)) pick = e;
+    for (const e of pendingNotes) if (e.byHand && !pick.byHand) pick = e;
     showNote(pick, pendingNotes.length - 1);
     pendingNotes = [];
     noteAt = now;
@@ -951,8 +779,7 @@ function showNote(ev, more) {
   noteEv = ev;
   b.textContent = ev.label;
   if (more > 0) b.append(el('span', 'more', `+${more} more`));
-  b.classList.toggle('catastrophic', !!ev.catastrophic);
-  b.setAttribute('aria-label', ev.missed ? ev.label : `${ev.label}. Show on the map.`);
+  b.setAttribute('aria-label', `${ev.label}. Show on the map.`);
   b.hidden = false;
 }
 
@@ -966,14 +793,17 @@ $('event-note').addEventListener('click', () => {
   if (!ev) return;
   if (in3d) {
     view3d.lookAt(ev.x, ev.y);
-    view3d.cam.dist = Math.min(view3d.cam.dist, Math.max(40, 14 * ev.r));
+    view3d.cam.dist = Math.min(view3d.cam.dist, 120);
   } else {
-    renderer.lookAt(ev.x, ev.y, Math.max(renderer.zoom, Math.min(6, renderer.W / Math.max(20, 5 * ev.r))));
+    renderer.lookAt(ev.x, ev.y, Math.max(renderer.zoom, 3));
   }
   viewChanged();
-  if (!ev.missed) { renderer.addEffect({ ...ev, quiet: false }); startEffects(); }
+  renderer.addEffect(ev);
+  startEffects();
   hideNote();
 });
+
+// --- tools ---------------------------------------------------------------------
 
 function cellAt(wx, wy) {
   if (!last) return -1;
@@ -986,68 +816,48 @@ function dropAt(wx, wy) {
   if (!last || !armed) return;
   const i = cellAt(wx, wy);
   if (i < 0) return;
-  if (armed === 'seed') {
-    worker.postMessage({ type: 'seed', i, id: seedKind === 'picked' ? selectedId : null, kind: seedKind });
-    return;
-  }
   if (armed === 'storm') {
-    // A storm only shows where there's weather: at a day a second or
-    // slower. Faster than that, slow down to an hour a second to watch it.
-    if (rate === MAX_RATE || rate > DAY) setRate(HOUR);
+    // Slow enough to watch the flood come down.
+    if (rate === MAX_RATE || rate > 6 * HOUR) setRate(6 * HOUR);
     worker.postMessage({ type: 'storm', i });
-    return;
   }
-  if (SHAPERS.has(armed)) return;
-  const sized = armed === 'volcano' || armed === 'meteor';
-  worker.postMessage({ type: 'disaster', kind: armed, i, size: sized ? toolSize : 'big' });
+  else if (armed === 'block') worker.postMessage({ type: 'block', i });
 }
 
-const SHAPERS = new Set(['raise', 'lower', 'dig']);
-const BRUSH_MS = 100;        // a held brush sends a nudge this often
-const BRUSH_M = 5;           // metres per nudge at the brush's centre: 50 m a second
+const SHAPERS = new Set(['raise', 'lower', 'dig', 'section']);
+const BRUSH_MS = 100;
 let brushSize = 'big';
-let seedKind = 'plant';      // what Seed drops: 'plant', 'animal', or the 'picked' species
-let shaping = null;          // a brush held down or a channel being drawn
+let shaping = null;
 
 function setArmed(kind) {
   armed = kind;
   for (const b of document.querySelectorAll('.tools .tool')) b.setAttribute('aria-pressed', b.dataset.kind === kind ? 'true' : 'false');
-  $('size-row').hidden = !(kind === 'volcano' || kind === 'meteor');
   $('brush-row').hidden = !(kind === 'raise' || kind === 'lower');
-  $('seed-row').hidden = kind !== 'seed';
   const names = {
-    flood: 'Tap the map to flood a river.', lightning: 'Tap the map to strike with lightning.', volcano: 'Tap the map to raise a volcano.',
-    meteor: 'Tap the map to drop a meteor.', raise: 'Hold a finger on the map to raise the ground.', lower: 'Hold a finger on the map to lower the ground.',
-    dig: 'Draw a line on the map to dig a channel.', storm: 'Tap the map to park a storm there.',
-    seed: seedKind === 'picked' ? 'Tap the map to seed the species picked in the Life tab.' : `Tap the map to seed ${seedKind === 'animal' ? 'an animal' : 'a plant'} there.`,
+    raise: 'Hold a finger on the map to pile sand there.', lower: 'Hold a finger on the map to scoop sand away.',
+    dig: 'Draw a line on the map to dig a channel.', block: 'Tap the map to drop a block of rock there.',
+    storm: 'Tap the map to park a storm over the valley.', section: 'Draw a line across the river to see its cross-section.',
   };
   $('tools-hint').textContent = kind ? names[kind] : 'Pick a tool, then use it on the map.';
-  const label = { flood: 'Tap map: Flood', lightning: 'Tap map: Lightning', volcano: 'Tap map: Volcano', meteor: 'Tap map: Meteor',
-    raise: 'Brush: Raise', lower: 'Brush: Lower', dig: 'Draw: Dig', storm: 'Tap map: Storm', seed: 'Tap map: Seed' };
+  const label = { raise: 'Brush: Raise', lower: 'Brush: Lower', dig: 'Draw: Dig', block: 'Tap map: Block', storm: 'Tap map: Storm', section: 'Draw: Section' };
   $('tools-toggle').textContent = kind ? label[kind] : 'Tools';
   canvas.classList.toggle('armed', !!kind);
   glCanvas.classList.toggle('armed', !!kind);
-  // Safari decides whether a touch scrolls the page as it starts, so a map
-  // that's about to be shaped has to say so before the finger comes down.
   canvas.classList.toggle('shaping', SHAPERS.has(kind));
   glCanvas.classList.toggle('shaping', SHAPERS.has(kind));
 }
 
-// And while a stroke is under way, no touch on the map scrolls the page.
 for (const c of [canvas, glCanvas]) {
   c.addEventListener('touchstart', (e) => { if (armed && SHAPERS.has(armed)) e.preventDefault(); }, { passive: false });
   c.addEventListener('touchmove', (e) => { if (shaping || (armed && SHAPERS.has(armed) && e.touches.length === 1)) e.preventDefault(); }, { passive: false });
 }
 
-// --- shaping by hand ---------------------------------------------------------
-
-// One finger with a shaping tool armed shapes the land instead of moving the
-// view: a brush raises or lowers the ground while held, Dig draws a line.
 function startShaping(e) {
   const world = worldAt(e.clientX, e.clientY);
-  shaping = { kind: armed, x: e.clientX, y: e.clientY, world, pts: world ? [world] : [], timer: null };
-  if (armed === 'dig') {
+  shaping = { kind: armed, world, pts: world ? [world] : [], timer: null };
+  if (armed === 'dig' || armed === 'section') {
     renderer.digPath = shaping.pts;
+    renderer.digKind = armed;
     startEffects();
     return;
   }
@@ -1055,8 +865,8 @@ function startShaping(e) {
     const w = shaping && shaping.world;
     if (!w) return;
     const i = cellAt(...w);
-    if (i >= 0) worker.postMessage({ type: 'sculpt', i, size: brushSize, dz: shaping.kind === 'raise' ? BRUSH_M : -BRUSH_M });
-    renderer.brush = { x: w[0], y: w[1], r: brushSize === 'big' ? 4 : 1.5, t: performance.now() };
+    if (i >= 0) worker.postMessage({ type: 'sculpt', i, size: brushSize, dir: shaping.kind === 'raise' ? 1 : -1 });
+    renderer.brush = { x: w[0], y: w[1], r: brushSize === 'big' ? 5 : 2, t: performance.now() };
     startEffects();
   };
   nudge();
@@ -1064,24 +874,25 @@ function startShaping(e) {
 }
 
 function moveShaping(e) {
-  shaping.x = e.clientX;
-  shaping.y = e.clientY;
   const world = worldAt(e.clientX, e.clientY);
   if (!world) return;
   shaping.world = world;
-  if (shaping.kind === 'dig') {
+  if (shaping.kind === 'dig' || shaping.kind === 'section') {
     const p = shaping.pts[shaping.pts.length - 1];
     if (!p || Math.hypot(world[0] - p[0], world[1] - p[1]) >= 0.4) shaping.pts.push(world);
     startEffects();
   }
 }
 
-// Ends a stroke; a finished line is dug, a cancelled one dropped.
 function endShaping(cancelled) {
   if (!shaping) return;
   clearInterval(shaping.timer);
-  if (shaping.kind === 'dig' && !cancelled && shaping.pts.length >= 2) {
-    worker.postMessage({ type: 'dig', points: shaping.pts });
+  if (!cancelled && shaping.pts.length >= 2) {
+    if (shaping.kind === 'dig') worker.postMessage({ type: 'dig', points: shaping.pts });
+    if (shaping.kind === 'section') {
+      worker.postMessage({ type: 'section', points: shaping.pts });
+      showTab('profile');
+    }
   }
   shaping = null;
   renderer.digPath = null;
@@ -1089,38 +900,20 @@ function endShaping(cancelled) {
   startEffects();
 }
 
-// The world sliders: each sets one of the world's settings, is sent when
+// The table's sliders: each sets one of the world's settings, is sent when
 // let go, and is saved with the world. [slider id]: [setting, slider units
 // per setting unit, label].
-const pct = (v) => `${Math.round(v)}%`;
-const signed = (v, unit) => (v === 0 ? `±0 ${unit}` : `${v > 0 ? '+' : '−'}${Math.abs(v)} ${unit}`);
+const signed = (v, unit) => (Math.abs(v) < 1e-9 ? `±0 ${unit}` : `${v > 0 ? '+' : '−'}${n1.format(Math.abs(v))} ${unit}`);
 const SLIDERS = {
-  wetness: ['wetness', 100, pct],
-  meteors: ['meteor', 100, pct],
-  volcanoes: ['volcano', 100, pct],
-  uplift: ['uplift', 100, pct],
-  warmth: ['warmth', 1, (v) => signed(v, '°C')],
+  flow: ['flow', 1, (v) => `${v} m³/s`],
+  tilt: ['tilt', 1000, (v) => `${n1.format(v)} m/km`],
   sea: ['sea', 1, (v) => signed(v, 'm')],
-  hardness: ['hardness', 100, pct],
+  supply: ['supply', 100, (v) => `${Math.round(v)}%`],
 };
 for (const [id, [key, scale, label]] of Object.entries(SLIDERS)) {
   $(id).addEventListener('input', () => { $(`${id}-out`).textContent = label(Number($(id).value)); });
   $(id).addEventListener('change', () => { if (worker) worker.postMessage({ type: 'setting', key, value: Number($(id).value) / scale }); });
 }
-// What Seed drops. Picking a species in the Life tab offers it, and
-// chooses it; unpicking it goes back to a plant.
-function setSeedKind(k) {
-  seedKind = k;
-  for (const o of document.querySelectorAll('#seed-row button')) o.setAttribute('aria-pressed', o.dataset.seed === k ? 'true' : 'false');
-  if (armed === 'seed') setArmed('seed');
-}
-function syncSeedPicked() {
-  const picked = document.querySelector('#seed-row [data-seed="picked"]');
-  picked.hidden = !selectedId;
-  if (selectedId && seedKind !== 'picked') setSeedKind('picked');
-  else if (!selectedId && seedKind === 'picked') setSeedKind('plant');
-}
-for (const b of document.querySelectorAll('#seed-row button')) b.addEventListener('click', () => setSeedKind(b.dataset.seed));
 for (const b of document.querySelectorAll('#brush-row button')) {
   b.addEventListener('click', () => {
     brushSize = b.dataset.brush;
@@ -1138,14 +931,9 @@ $('tools-toggle').addEventListener('click', () => setTray($('tools').hidden));
 for (const b of document.querySelectorAll('.tools .tool')) {
   b.addEventListener('click', () => setArmed(armed === b.dataset.kind ? null : b.dataset.kind));
 }
-for (const b of document.querySelectorAll('#size-row button')) {
-  b.addEventListener('click', () => {
-    toolSize = b.dataset.size;
-    for (const o of document.querySelectorAll('#size-row button')) o.setAttribute('aria-pressed', o === b ? 'true' : 'false');
-  });
-}
 
-// Tap the map: what lives here?
+// --- tap to inspect ------------------------------------------------------------
+
 function inspectCell(wx, wy) {
   if (!last) return;
   const x = Math.floor(wx), y = Math.floor(wy);
@@ -1164,82 +952,45 @@ $('inspect-close').addEventListener('click', () => {
 function renderInspect(info) {
   if (!info || inspectAt < 0) return;
   $('inspect').hidden = false;
-  const where = info.dam ? 'Dam' : info.water === 'sea' ? 'Sea' : info.pond ? 'Beaver pond' : info.water === 'lake' ? 'Lake' : info.water === 'river' ? 'River' : 'Land';
-  $('inspect-title').textContent = info.water === 'sea' ? `${where}, ${n0.format(-info.elevation)} m deep` : `${where}, ${n0.format(info.elevation)} m up`;
-  const gt = info.ground.text;
-  $('inspect-ground').textContent = info.water === 'sea' || info.water === 'lake' ? `Bed: ${gt}` : `Ground: ${gt}`;
-  const damLine = $('inspect-dam');
-  damLine.hidden = !info.dam;
-  if (info.dam) {
-    const d = info.dam;
-    const age = d.age < 1 ? 'this year' : d.age < 2 ? 'a year ago' : `${n0.format(d.age)} years ago`;
-    damLine.textContent = `A ${n1.format(d.h)} m dam, built ${age} by ${d.name}${d.form ? ` (${d.form})` : ''}.`;
-  }
+  const title = info.water === 'sea' ? `Sea, ${n1.format(info.depth)} m deep`
+    : info.water === 'river' ? `River, ${n1.format(info.depth)} m deep`
+      : info.water === 'shallows' ? `Shallows, ${n0.format(info.depth * 100)} cm deep`
+        : info.block ? 'Block of rock' : `Land, ${n1.format(info.elevation)} m above the sea`;
+  $('inspect-title').textContent = title;
+  $('inspect-ground').textContent = info.block ? 'Rock the river can’t wear away.'
+    : `Sand and gravel, ${n1.format(info.rockBelow)} m deep over bedrock.`;
   const facts = $('inspect-facts');
   facts.innerHTML = '';
   const fact = (k, v) => { const d = el('div'); d.append(el('dt', '', k), el('dd', '', v)); facts.append(d); };
-  fact('Now', `${n1.format(info.temp)} °C`);
-  fact('Year avg', `${n1.format(info.meanTemp)} °C`);
-  if (info.water !== 'sea') fact('Flow', `${n1.format(info.flow / 3.156e7)} m³/s`);
-  if ((info.water === 'river' || info.water === 'lake') && info.silt >= 0.5) fact('Silt', `${n0.format(info.silt)} t a day`);
+  if (info.depth > 0) fact('Current', `${n1.format(info.speed)} m/s`);
+  if (info.sand > 0.01) fact('Sand moving', `${n1.format(info.sand)} m³/day per m`);
+  const ch = info.change;
+  fact(ch >= 0 ? 'Built up' : 'Cut down', `${n1.format(Math.abs(ch))} m since the start`);
+  const r = info.rate;
+  if (Math.abs(r) > 0.01) fact(r < 0 ? 'Cutting' : 'Filling', `${n1.format(Math.abs(r) * 100)} cm a year`);
   fact('Plant cover', `${n0.format(info.cover * 100)}%`);
-  if (info.snow > 0.005) fact('Snow', `${n0.format(info.snow * 100)} cm`);
-  if (info.ice) fact('Ice', 'glacier');
-  const ul = $('inspect-life');
-  ul.innerHTML = '';
-  if (!info.species.length) ul.append(el('li', 'empty', 'Nothing lives here yet.'));
-  for (const sp of info.species.slice(0, 6)) {
-    const li = el('li');
-    li.append(swatch(sp.hue), el('span', 'sp-name', sp.name), el('span', 'sp-form', sp.form));
-    ul.append(li);
-  }
-}
-
-// The elevation key uses the map's own colours.
-{
-  const stops = [0, 250, 500, 750, 1000, 1300, 1600, 1900, 2200, 2500, 2900];
-  // Ticks sit at 0, 500, 1000, 2000, 2900 — spaced as the ramp below spaces them.
-  const pos = (m) => (m <= 1000 ? (m / 1000) * 0.5 : m <= 2000 ? 0.5 + ((m - 1000) / 1000) * 0.25 : 0.75 + ((m - 2000) / 900) * 0.25);
-  $('ramp').style.background = `linear-gradient(to right, ${stops.map((m) => `${elevationColor(m)} ${(pos(m) * 100).toFixed(1)}%`).join(', ')})`;
 }
 
 window.addEventListener('resize', () => { if (last) draw(last, true); updateScale(); });
 
 // Test hooks.
 window.Headwaters = {
-  state: () => (last ? {
-    years: last.years, stats: last.stats, climate: last.climate, paused: last.paused,
-    stepMs: last.stepMs, targetRate: last.targetRate, actualRate: last.actualRate, tickYears: last.tickYears,
-  } : null),
-  runTo: (years, tick) => new Promise((resolve) => {
-    pendingRunTo = resolve;
-    worker.postMessage({ type: 'runTo', years, tick });
-  }),
+  state: () => (last ? { years: last.years, stats: last.stats, climate: last.climate, paused: last.paused, stepMs: last.stepMs, targetRate: last.targetRate, actualRate: last.actualRate, tickYears: last.tickYears } : null),
+  runTo: (years, morph) => new Promise((resolve) => { pendingRunTo = resolve; worker.postMessage({ type: 'runTo', years, morph }); }),
   setRate: (r) => setRate(r),
-  life: () => (last ? { stats: last.lifeStats, species: last.species } : null),
   fps: () => ({ fps: drawnAt.length / 2, paceMs, frameCost }),
   saveNow: () => new Promise((resolve) => { pendingSave = resolve; requestSave('test'); }),
-  select: (id) => selectSpecies(id),
   view: () => ({ zoom: renderer.zoom, x0: renderer.x0, y0: renderer.y0, inspectAt }),
   events: () => eventLog.slice(),
   note: () => (noteEv ? $('event-note').textContent : null),
-  effects: () => renderer.effects.length,
-  disaster: (kind, x, y, size) => worker.postMessage({ type: 'disaster', kind, i: y * last.W + x, size }),
-  cooling: () => (last ? last.climate.cooling : 0),
   lookAt: (x, y, zoom) => { renderer.lookAt(x, y, zoom); viewChanged(); },
   set3d: (on) => set3d(on),
   cam: (c) => { if (c) Object.assign(view3d.cam, c); viewChanged(); return view3d && view3d.cam ? { ...view3d.cam } : null; },
   pick3d: (px, py) => view3d.pick(px, py),
   arm: (kind) => { setTray(true); setArmed(kind); },
+  tab: (t) => showTab(t),
+  mode: (m) => setMode(m),
   frame: () => last,
-  // The main thread's share of drawing a new frame in 3D, in ms.
-  cost3d: (n = 10) => {
-    const t0 = performance.now();
-    for (let k = 0; k < n; k++) { view3d.frameOf = null; renderer.paint(last); view3d.render(last); }
-    return (performance.now() - t0) / n;
-  },
-  // Renders the 3D view and reads it back at once (before the browser
-  // clears it): the mean colour and the share that's sky.
   shot3d: () => {
     composeView();
     const gl = view3d.gl, w = glCanvas.width, h = glCanvas.height;
@@ -1247,29 +998,14 @@ window.Headwaters = {
     gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
     let r = 0, g = 0, b = 0, sky = 0, n = 0;
     const s0 = view3d.skyRgb || [0, 0, 0];
-    const grid = new Array(64 * 3).fill(0), gn = new Array(64).fill(0);
     for (let k = 0; k < px.length; k += 4 * 7) {
       r += px[k]; g += px[k + 1]; b += px[k + 2]; n++;
       if (Math.abs(px[k] - s0[0]) + Math.abs(px[k + 1] - s0[1]) + Math.abs(px[k + 2] - s0[2]) < 6) sky++;
-      const p = k / 4, cell = Math.min(7, Math.floor(((p / w) | 0) / h * 8)) * 8 + Math.min(7, Math.floor((p % w) / w * 8));
-      grid[cell * 3] += px[k]; grid[cell * 3 + 1] += px[k + 1]; grid[cell * 3 + 2] += px[k + 2]; gn[cell]++;
     }
-    // An 8 × 8 grid of mean colours, to tell pictures apart that average alike.
-    for (let c = 0; c < 64; c++) for (let j = 0; j < 3; j++) grid[c * 3 + j] /= Math.max(1, gn[c]);
-    return { mean: [r / n, g / n, b / n], sky: sky / n, grid };
-  },
-  project3d: (x, y) => { const r = glCanvas.getBoundingClientRect(); return view3d.project(x, y, r.width, r.height); },
-  cloudy: () => !!(last && last.cloud),
-  // The most thickly vegetated spot, in world cells.
-  greenest: () => {
-    const v = last.life.veg;
-    let best = 0;
-    for (let c = 1; c < v.length; c++) if (v[c] > v[best]) best = c;
-    return { x: (best % last.life.LW) * 2 + 1, y: Math.floor(best / last.life.LW) * 2 + 1, veg: v[best] / 255 };
+    return { mean: [r / n, g / n, b / n], sky: sky / n };
   },
 };
 
-// Editing the seed in the link starts that world.
 window.addEventListener('hashchange', () => {
   const seed = cleanSeed(decodeURIComponent(location.hash.slice(1)));
   if (seed && seed !== $('seed').value) start(seed);
@@ -1286,6 +1022,6 @@ window.addEventListener('hashchange', () => {
     saveOff = true;
     saveNote('Saving is off: this browser isn’t letting the page store the world.');
   }
-  if (saved && saved.state && (!hashSeed || hashSeed === saved.state.seed)) resume(saved.state, saved.savedAt);
+  if (saved && saved.state && saved.state.kind === 'stream' && (!hashSeed || hashSeed === saved.state.seed)) resume(saved.state, saved.savedAt);
   else start(hashSeed || randomSeed());
 }());

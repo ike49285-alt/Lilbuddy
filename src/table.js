@@ -1,0 +1,72 @@
+// table.js — the starting landscape: a stretch of valley half a kilometre
+// wide and a kilometre long, tilted gently from the top of the map down to
+// the sea at the bottom. A floodplain of sand and gravel runs down the
+// middle with grassy terraces rising either side, a shallow, nearly
+// straight channel cut down it for the river to start in, and a beach
+// shelving into the sea.
+
+import { makeNoise2D, fbm } from './rng.js';
+
+export const GRID_W = 128;
+export const GRID_H = 256;
+export const CELL_M = 4;              // metres per cell side
+export const SHORE = 0.86;            // fraction of the way down where the sea begins
+export const INLET_X = GRID_W / 2;    // where the river comes in at the top
+export const INLET_HALF = 4;          // cells either side of it
+
+// The valley floor's fall, metres per metre, as set by the tilt.
+export const TILT = 0.002;
+
+export function makeTable(rng, tilt = TILT) {
+  const W = GRID_W, H = GRID_H, N = W * H;
+  const z = new Float32Array(N);
+  const rock = new Float32Array(N);
+  const cover = new Float32Array(N);
+  const rough = makeNoise2D(rng.fork('rough'));
+  const lumps = makeNoise2D(rng.fork('lumps'));
+  const sides = makeNoise2D(rng.fork('sides'));
+  const wig = makeNoise2D(rng.fork('wiggle'));
+  const shoreY = Math.round(SHORE * H);
+  const plainHalf = 0.36 * W;          // the floodplain's half-width, cells
+  for (let y = 0; y < H; y++) {
+    // The terraces wander in and out a little down the valley.
+    const half = plainHalf * (1 + 0.12 * fbm(sides, y / 40, 3.1, 3));
+    const centre = W / 2 + 6 * fbm(sides, y / 60, 7.7, 3);
+    for (let x = 0; x < W; x++) {
+      const i = y * W + x;
+      // Height above sea level at the shore, falling toward it.
+      let h = tilt * (shoreY - y) * CELL_M + 0.6;
+      // Bumps on the floodplain: old bars and swales.
+      h += 0.18 * fbm(lumps, x / 14, y / 14, 3) + 0.05 * fbm(rough, x / 3, y / 3, 2);
+      // Terraces rising either side.
+      const out = Math.abs(x - centre) - half;
+      if (out > 0) h += Math.min(6, 0.08 * out * out / 4 + 0.15 * out) + 0.3 * fbm(rough, x / 8, y / 8, 2);
+      // Below the shore, the beach shelves into the sea.
+      if (y > shoreY) h = Math.max(-2.2 + 0.1 * fbm(rough, x / 6, y / 6, 2), h - (y - shoreY) * 0.12);
+      z[i] = h;
+      // Bedrock deep under the floodplain, close under the terraces.
+      rock[i] = out > 0 ? h - 1.5 - 0.5 * out / 10 : h - 6;
+      // Grass and shrubs on the plain and terraces; bare below the tide.
+      cover[i] = y > shoreY - 2 ? 0 : out > 0 ? 0.85 : 0.6;
+    }
+  }
+  // The river's channel to start in: gently winding, as a river left to
+  // itself would be, about 16 m wide and a metre and a half deep, down to
+  // the sea. It starts straight from the inlet and swings more as it goes.
+  const phase = rng.range(0, Math.PI * 2);
+  const wave = rng.range(46, 58);
+  for (let y = 0; y < shoreY + 6; y++) {
+    const swing = Math.min(1, y / 40);
+    const cx = INLET_X + swing * (7 * Math.sin((2 * Math.PI * y) / wave + phase) + 3 * fbm(wig, y / 50, 1.3, 2));
+    for (let x = Math.floor(cx - 4); x <= Math.ceil(cx + 4); x++) {
+      if (x < 0 || x >= W) continue;
+      const i = y * W + x;
+      const d = Math.abs(x - cx);
+      const cut = d < 2 ? 1.5 : d < 3 ? 0.9 : d < 4 ? 0.3 : 0;
+      if (cut <= 0) continue;
+      z[i] -= cut;
+      cover[i] = Math.min(cover[i], d < 3 ? 0 : 0.3);
+    }
+  }
+  return { W, H, N, z, rock, cover, shoreY };
+}
