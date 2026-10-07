@@ -1,8 +1,10 @@
 # Headwaters
 
 A stream table you can carry around. A kilometre of valley, half a kilometre
-wide, tilts gently toward the sea. A pump at the top sends a river in, and
-the river shapes its own channel: it cuts the outsides of its bends and
+wide, tilts gently toward the sea. A pump at the top pours a river onto a
+bare sand plain. It spreads out at first, then cuts its own channels, first
+braided and then gathering into one, while grass takes the dry ground. From
+there the river keeps shaping its course: it cuts the outsides of its bends and
 builds bars on the insides, breaks its banks in a flood, and builds a delta
 where it meets the sea. Plants grow on the dry ground and hold the banks
 together.
@@ -23,7 +25,7 @@ then open http://localhost:8000/.
 
 ## Layout
 
-- `src/table.js` — the starting landscape: floodplain, terraces, the river's first channel, the beach
+- `src/table.js` — the starting landscape: a bare sand floodplain, terraces, the beach
 - `src/flow.js` — the water, the sand, the banks and the plants
 - `src/weather.js` — clouds, rain, and the floods that come down from upstream
 - `src/sim.js` — one world: the clock, the seasons, the tools, measuring, saving
