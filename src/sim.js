@@ -108,6 +108,12 @@ export class Simulation {
     // the lone ones are quiet.
     for (const a of this.life.arrived) {
       if (a.trickle) continue;
+      if (a.restock) {
+        this.disasters.milestone(this, a.restock === 'plant'
+          ? `Plants return to the bare land: ${a.names[0]} spreads in from beyond the valley`
+          : `Animals return to the empty land: ${a.names[0]} walks in from beyond the valley`, a.at);
+        continue;
+      }
       const kinds = [];
       if (a.plants) kinds.push(`${a.plants} ${a.plants === 1 ? 'plant' : 'plants'}`);
       if (a.animals) kinds.push(`${a.animals} ${a.animals === 1 ? 'animal' : 'animals'}`);

@@ -35,7 +35,7 @@ const ARRIVE_LAG = 5000;            // years animals wait, if there's no food fo
 const ARRIVE_TRIES = 5;
 const SEED_DENSITY = 0.1;           // a species seeded by hand starts this dense
 const FORCE_LAND_YEARS = 5e6;       // by now, if nothing has walked ashore, something does
-const FORCE_RETRY = 250000;         // and if it dies out, another tries this much later
+const REPOP_WAIT = 50000;           // after life is put back on land, years before it's checked on again
 const FORCE_WAIT = 20000;           // years between steps of it (plants first, then animals)
 const FRONTIER_RANGE = 10;          // km²: a species this widespread counts toward the frontier
 
@@ -637,7 +637,7 @@ export class Life {
           let k = food * kMult * edge * lutT[tempIndex(T)] * (1 - ice[c]);
           // Builders live by the water, best by still water, and do worse
           // away from it: the banks of a stream are a start, a pond better.
-          if (build > 0) k *= (1 - 0.2 * build) * (1 + 1.5 * build * Math.min(1, 2 * still[c] + 2 * fresh[c]));
+          if (build > 0) k *= (1 - 0.1 * build) * (1 + 1.5 * build * Math.min(1, 2 * still[c] + 2 * fresh[c]));
           K[c] = k;
           if (N[c] > RANGE_DENSITY && k > dom[c]) dom[c] = k;
         }
@@ -1017,15 +1017,21 @@ export class Life {
     if (land > 0 && this.stats.firstLandPlant === null) this.stats.firstLandPlant = years;
   }
 
-  // Life on land by 5 Myr: if no animal has walked ashore by then, the most
-  // land-ward fish gives rise to amphibians on the shore, a real descendant;
-  // if no plant has made it onto land either, the most land-ward plant goes
-  // first, and the animals follow once there's something to eat. If the
-  // newcomers die out, it tries again later.
+  // Life on land from 5 Myr on: if no animal has walked ashore by then, the
+  // most land-ward fish gives rise to amphibians on the shore, a real
+  // descendant; if no plant has made it onto land either, the most
+  // land-ward plant goes first, and the animals follow once there's
+  // something to eat. Either one counts at once as what lived here, so if
+  // land life dies out later, newcomers like it walk back in from beyond
+  // the valley.
   forceLand(years) {
-    if (years < FORCE_LAND_YEARS || this.stats.firstLandAnimal !== null) return;
+    if (years < FORCE_LAND_YEARS) return;
     if (this.nextForce !== null && years < this.nextForce) return;
-    this.nextForce = years + FORCE_RETRY;
+    const living = (kind) => this.species.some((p) => p.died === null && p.total > EXTINCT_TOTAL
+      && !!p.traits.animal === (kind === 'animal') && realmOf(p.traits) === 'land' && !isHunter(p.traits));
+    const plantsAshore = living('plant');
+    if (plantsAshore && living('animal')) return;
+    this.nextForce = years + REPOP_WAIT;
     const { NL, LW, landF, damp, cover, tempMean } = this;
     // Damp shore within reach of a parent's range.
     const near = (parent, ok) => {
@@ -1052,13 +1058,15 @@ export class Life {
       traits.tempOpt = toTempTrait(T / cells.length);
       traits.hue = (parent.traits.hue + 0.15 + 0.2 * this.rng.next()) % 1;
       const sp = this.addSpecies(traits, parent, years);
+      this.reach(sp.traits);     // what comes back, if it dies out
       for (const c of cells) sp.N[c] = SEED_DENSITY;
       sp.seededAt = years;       // the same chance to settle as a newcomer
       this.species.sort((a, b) => a.id - b.id);
       this.forced.push({ kind, name: sp.name, parent: parent.name, at: cells[cells.length >> 1] });
       return sp;
     };
-    if (!this.stats.landPlants) {
+    if (!plantsAshore) {
+      if (this.restock('plant', years)) { this.nextForce = years + FORCE_WAIT; return; }
       const plants = this.species.filter((p) => !p.traits.animal && p.total > EXTINCT_TOTAL);
       if (!plants.length) return;
       plants.sort((a, b) => b.traits.habitat - a.traits.habitat || b.total - a.total);
@@ -1072,6 +1080,7 @@ export class Life {
     }
     // The animals wait until there's a little green to eat.
     if (this.stats.vegetated < 20) { this.nextForce = years + FORCE_WAIT; return; }
+    if (this.restock('animal', years)) return;
     const fish = this.species.filter((p) => p.traits.animal && !isHunter(p.traits) && p.total > EXTINCT_TOTAL);
     if (!fish.length) return;
     const score = (t) => t.habitat + t.limbs + t.lungs;
@@ -1083,6 +1092,16 @@ export class Life {
     const t = parent.traits;
     land(parent, { ...t, habitat: 0.75, salinity: 0.15, diet: 0.8, eggs: 0, warm: 0, prey: 0,
       limbs: Math.max(t.limbs, WALK + 0.1), lungs: Math.max(t.lungs, WALK + 0.1) }, cells, 'animal');
+  }
+
+  // Land life back from beyond the valley, as advanced as it ever was here.
+  restock(kind, years) {
+    if (!this.frontier[kind].land) return false;
+    const sp = this.newcomer(kind, 'land', years);
+    if (!sp) return false;
+    this.species.sort((a, b) => a.id - b.id);
+    this.arrived.push({ names: [sp.name], plants: kind === 'plant' ? 1 : 0, animals: kind === 'animal' ? 1 : 0, at: sp.landedAt, trickle: false, restock: kind });
+    return true;
   }
 
   // The first of a new kind of life, for its milestone: when, who, and a
@@ -1464,7 +1483,8 @@ function tierOf(t) {
 function advance(t) {
   if (!t.animal) return t.complexity + (t.seeds || 0);
   const r = realms(t);
-  return (2 * r.land) / (r.fresh + r.sea + r.land || 1) + t.limbs + t.lungs + t.complexity + (t.eggs || 0) + (t.warm || 0);
+  return (2 * r.land) / (r.fresh + r.sea + r.land || 1) + t.limbs + t.lungs + t.complexity + (t.eggs || 0) + (t.warm || 0)
+    + (isHunter(t) ? 0 : t.build || 0);
 }
 
 const REALM_RANK = { land: 2, fresh: 1, sea: 0 };

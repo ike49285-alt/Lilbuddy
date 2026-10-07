@@ -106,8 +106,10 @@ It usually happens on its own, but not always in time: if nothing has
 walked ashore by 5 million years, the most land-ward fish living by a green
 shore gives rise to amphibians there, a real descendant in its line (and if
 no plant has made it onto land yet, the most land-ward plant goes first,
-and the animals follow once there's something to eat). If that line dies
-out, another try comes 250,000 years later. Each gets a note.
+and the animals follow once there's something to eat). They count at once
+as what has lived on land here, so from then on, if the land is ever left
+without plants or animals, newcomers like them come back in from beyond
+the valley as soon as there's something for them to eat. Each gets a note.
 
 The first walkers are amphibians: they lay their eggs in water, so they do
 well only near streams, lakes or heavy rain. Shelled eggs (reptiles) free
@@ -143,6 +145,9 @@ the pond is full, the dam falls in and the pond drains, leaving a flat,
 fertile meadow that the stream slowly cuts back down through. A big flood,
 or a storm surge at slow speeds, bursts the dams in its way and sends the
 pond down the river.
+
+Once dam builders have lived here, newcomers after an extinction build
+dams too.
 
 On the map a dam is a short brown bar across its stream, and the pond
 behind it is a lake; tap one to see who built it and when. The River tab
