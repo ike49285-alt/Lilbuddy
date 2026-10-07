@@ -10,7 +10,7 @@ import { makeNoise2D, fbm } from './rng.js';
 export const GRID_W = 128;
 export const GRID_H = 256;
 export const CELL_M = 4;              // metres per cell side
-export const SHORE = 0.86;            // fraction of the way down where the sea begins
+export const SHORE = 0.72;            // fraction of the way down where the sea begins
 export const INLET_X = GRID_W / 2;    // where the river comes in at the top
 export const INLET_HALF = 4;          // cells either side of it
 
@@ -41,16 +41,18 @@ export function makeTable(rng, tilt = TILT) {
       // toward the valley floor rather than along a wall.
       const out = Math.abs(x - centre) - half;
       h += 0.8 * Math.min(1, Math.abs(x - centre) / half) ** 1.5;
-      // Terraces rising either side.
-      if (out > 0) h += Math.min(6, 0.08 * out * out / 4 + 0.15 * out) + 0.3 * fbm(rough, x / 8, y / 8, 2);
-      // Below the shore, the beach shelves into the sea.
-      if (y > shoreY) h = Math.max(-2.2 + 0.1 * fbm(rough, x / 6, y / 6, 2), h - (y - shoreY) * 0.12);
+      // Terraces rising either side, ending in low headlands at the coast.
+      const headland = Math.max(0, Math.min(1, 1 - (y - shoreY + 6) / 14));
+      if (out > 0) h += headland * (Math.min(6, 0.08 * out * out / 4 + 0.15 * out) + 0.3 * fbm(rough, x / 8, y / 8, 2));
+      // Below the shore, a wide, shallow shelf for the river to build its
+      // delta out over, deepening slowly to a couple of metres.
+      if (y > shoreY) h = Math.max(-2.6 + 0.1 * fbm(rough, x / 6, y / 6, 2), h - (y - shoreY) * 0.045);
       z[i] = h;
       // Bedrock deep under the floodplain, close under the terraces.
-      rock[i] = out > 0 ? h - 1.5 - 0.5 * out / 10 : h - 6;
+      rock[i] = out > 0 && headland > 0.5 ? h - 1.5 - 0.5 * out / 10 : h - 6;
       // Grass and shrubs on the terraces; the plain and the beach are bare
       // sand, and grass takes the dry ground as the years go by.
-      cover[i] = y > shoreY - 2 ? 0 : out > 0 ? 0.85 : 0;
+      cover[i] = y > shoreY - 2 ? 0 : out > 0 ? 0.85 * headland : 0;
     }
   }
   return { W, H, N, z, rock, cover, shoreY };

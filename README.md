@@ -25,7 +25,7 @@ then open http://localhost:8000/.
 
 ## Layout
 
-- `src/table.js` — the starting landscape: a bare sand floodplain, terraces, the beach
+- `src/table.js` — the starting landscape: a bare sand floodplain, terraces, and a wide shallow sea for the delta
 - `src/flow.js` — the water, the sand, the banks and the plants
 - `src/weather.js` — clouds, rain, and the floods that come down from upstream
 - `src/sim.js` — one world: the clock, the seasons, the tools, measuring, saving
