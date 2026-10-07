@@ -116,6 +116,10 @@ Profile tab draws the river's long profile, from the inlet to the sea:
 
 Under it is the cross-section along the line from the Section tool.
 
+## Tests
+
+`node tests/stream.test.mjs` checks the model. With the built page served (`node tools/build-artifact.mjs dist/headwaters.html`, then `python3 -m http.server 8112` in `dist`), `node tests/ui.test.mjs` drives the page on a phone-sized screen and `node tests/speed.test.mjs http://localhost:8112/headwaters.html` checks it stays responsive with the CPU slowed four times. The browser tests need Playwright; set `CHROMIUM` to a Chromium binary if it can't find one.
+
 ## Saving
 
 The world saves itself in the browser every 30 seconds and when you leave,

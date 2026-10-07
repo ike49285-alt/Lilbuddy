@@ -48,19 +48,20 @@ const POROSITY = 0.4;
 // Tunable: how hard the banks are, how much plants hold them, how far a
 // step may move the bed. (An object so tests can try other values.)
 export const TUNE = {
-  bank: 0.5,                      // share of a channel's scour taken from a dry bank beside it
-  bankK: 1e-7,                    // m/s a bank wears back per unit of Shields stress past the threshold
-  rootHold: 0.8,                  // how much full plant cover cuts what a bank loses
-  dzMax: 0.02,                    // metres: the most the bed may change in one step
-  held: 0.03,                     // share of busy cells allowed to hit that limit before the bed slows
-  spiral: 7,                      // how far a bend's spiral flow turns the sand inward (Engelund)
+  bank: 0.3,                      // share of a channel's scour taken from a dry bank beside it
+  bankK: 2e-6,                    // m/s a bank wears back per unit of Shields stress past its threshold
+  bankCrit: 2.5,                  // a bank's threshold, as a multiple of the bed's (more with plants: ×(1 + 3·cover))
+  growYears: 0.8,                 // years for bare ground to green over
+  rootHold: 0.9,                  // how much full plant cover cuts what a bank loses
+  dzMax: 0.04,                    // metres: the most the bed may change in one step
+  held: 0.06,                     // share of busy cells allowed to hit that limit before the bed slows
+  spiral: 11,                     // how far a bend's spiral flow turns the sand inward (Engelund)
   bedSlope: 1.2,                  // how much the sand rolls downhill as it goes
 };
 const SLOPE_WET = 0.35;           // the steepest slope sand stands at under water
 const SLOPE_DRY = 0.8;            // and out of it (damp sand stands steep)
 const SLUMP = 0.5;                // share of the excess that slumps each step
 export const SEC_PER_YR = 3.156e7;
-const PLANT_GROW_YR = 1.5;        // years for bare ground to green over
 const PLANT_DROWN_YR = 0.4;       // years under water to drown them
 const PLANT_UPROOT = 1.6;         // times the threshold stress that tears them out
 const PLANT_EVERY = 16;           // steps between the plants' slow updates
@@ -454,12 +455,14 @@ export class Flow {
         for (let x = Math.max(1, lo[y]); x <= Math.min(W - 2, hi[y]); x++) {
           const i = y * W + x;
           if (h[i] <= WET) continue;
-          const ex = theta[i] - SHIELDS_C;
-          if (ex <= 0) continue;
+          const th = theta[i];
+          if (th <= SHIELDS_C * TUNE.bankCrit) continue;
           const zi = z[i] + dz[i];
           for (let q = 0; q < 4; q++) {
             const j = q === 0 ? i - 1 : q === 1 ? i + 1 : q === 2 ? i - W : i + W;
             if (h[j] > WET) continue;
+            const ex = th - SHIELDS_C * TUNE.bankCrit * (1 + 3 * cover[j]);
+            if (ex <= 0) continue;
             const top = z[j] + dz[j];
             const room = top - (zi > rock[j] ? zi : rock[j]);
             if (room <= 0) continue;
@@ -538,7 +541,7 @@ export class Flow {
     // Growth, over the whole valley now and then.
     this.plantYears += years;
     if (this.steps % PLANT_EVERY !== 0) return;
-    const grow = Math.min(1, (this.growth * this.plantYears) / PLANT_GROW_YR);
+    const grow = Math.min(1, (this.growth * this.plantYears) / TUNE.growYears);
     this.plantYears = 0;
     if (grow <= 0) return;
     const N = this.N;

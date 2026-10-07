@@ -54,10 +54,10 @@ export function makeTable(rng, tilt = TILT) {
   // itself would be, about 16 m wide and a metre and a half deep, down to
   // the sea. It starts straight from the inlet and swings more as it goes.
   const phase = rng.range(0, Math.PI * 2);
-  const wave = rng.range(46, 58);
+  const wave = rng.range(88, 104);           // cells: a bend's length, about a dozen channel widths
   for (let y = 0; y < shoreY + 6; y++) {
     const swing = Math.min(1, y / 40);
-    const cx = INLET_X + swing * (7 * Math.sin((2 * Math.PI * y) / wave + phase) + 3 * fbm(wig, y / 50, 1.3, 2));
+    const cx = INLET_X + swing * (11 * Math.sin((2 * Math.PI * y) / wave + phase) + 3 * fbm(wig, y / 50, 1.3, 2));
     for (let x = Math.floor(cx - 4); x <= Math.ceil(cx + 4); x++) {
       if (x < 0 || x >= W) continue;
       const i = y * W + x;

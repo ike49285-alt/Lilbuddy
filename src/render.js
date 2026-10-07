@@ -153,6 +153,12 @@ export class MapRenderer {
   // exaggerated so a metre of bank reads at this scale.
   hillshade(f) {
     const { W, H, z, h } = f;
+    // The relief changes slowly: a few times a second is plenty, but at once
+    // when the ground has been reshaped by hand.
+    const now = performance.now();
+    if (this.shade && this.shade.length === W * H && f.terrainEpoch === this.shadeEpoch && now - this.shadeAt < 400) return;
+    this.shadeAt = now;
+    this.shadeEpoch = f.terrainEpoch;
     if (!this.shade || this.shade.length !== W * H) { this.shade = new Float32Array(W * H); this.surf = new Float32Array(W * H); }
     const out = this.shade, sf = this.surf;
     // The surface the light falls on: the water's where there's water.
@@ -248,7 +254,7 @@ export class MapRenderer {
     const ctx = this.ctx;
     const vw = this.W / this.zoom, vh = this.H / this.zoom;
     ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = 'high';
+    ctx.imageSmoothingQuality = 'low';
     ctx.drawImage(this.terrain, this.x0, this.y0, vw, vh, 0, 0, w, h);
     const s = w / vw;
     const dpr = Math.min(1.5, window.devicePixelRatio || 1);
