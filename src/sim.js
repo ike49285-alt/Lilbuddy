@@ -13,8 +13,9 @@ const HOUR = DAY / 24;
 export const WEATHER_RATE = DAY;           // sim-years per second at or below which the weather shows
 const HISTORY_LEN = 240;
 const MEAN_RAIN = 1 / SEC_PER_YR;          // a metre a year, in metres a second
-const BRUSH_R = { small: 2, big: 5 };      // cells
-const BRUSH_DZ = 0.15;                     // metres per nudge at the brush's centre
+const BRUSH_R = { small: 2, big: 5, huge: 10 };              // cells
+export const BRUSH_RATE = { gentle: 0.5, strong: 3, bulldozer: 10 };   // metres a second at the brush's centre
+const BRUSH_NUDGE = 0.1;                   // seconds of brushing each nudge from the page stands for
 const DIG_DEPTH = 1.2;                     // metres below the ground either side
 const BLOCK_H = 1.5;                       // metres a dropped block stands above the bed
 const NOTE_GAP = 30 * DAY;                 // the least time between two notes of a kind
@@ -128,20 +129,23 @@ export class Simulation {
     this.flow.ranges();
   }
 
-  // Raises or lowers the ground under a soft brush. Lowering stops at the rock.
-  sculpt(i, size, dir) {
+  // Raises or lowers the ground under a soft brush, one nudge's worth.
+  // Lowering stops at the rock. Fresh sand, or ground dug into, is bare.
+  sculpt(i, size, dir, strength = 'strong') {
     const { W, H } = this;
-    const { z, rock } = this.flow;
+    const { z, rock, cover } = this.flow;
     if (!(i >= 0 && i < this.N)) return false;
     const r = BRUSH_R[size] || BRUSH_R.big;
+    const peak = (BRUSH_RATE[strength] || BRUSH_RATE.strong) * BRUSH_NUDGE;
     const cx = i % W, cy = (i / W) | 0, R = Math.ceil(2 * r);
     for (let y = Math.max(0, cy - R); y <= Math.min(H - 1, cy + R); y++) {
       for (let x = Math.max(0, cx - R); x <= Math.min(W - 1, cx + R); x++) {
         const d2 = (x - cx) ** 2 + (y - cy) ** 2;
         if (d2 > R * R) continue;
         const j = y * W + x;
-        const dz = dir * BRUSH_DZ * Math.exp(-d2 / (r * r));
+        const dz = dir * peak * Math.exp(-d2 / (r * r));
         z[j] = dir > 0 ? z[j] + dz : Math.max(rock[j], z[j] + dz);
+        cover[j] *= 1 - Math.min(1, Math.abs(dz) / 0.2);
       }
     }
     this.reshaped();

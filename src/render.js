@@ -163,7 +163,7 @@ export class MapRenderer {
     const out = this.shade, sf = this.surf;
     // The surface the light falls on: the water's where there's water.
     for (let i = 0; i < W * H; i++) sf[i] = z[i] + (h[i] > 0.05 ? h[i] : 0);
-    const EXAG = 1.6 / (8 * f.cell);
+    const EXAG = 3.5 / (8 * f.cell);
     const L = Math.hypot(1, 1, 1.4);
     const flat = 1.4 / L;
     for (let y = 0; y < H; y++) {
@@ -228,6 +228,13 @@ export class MapRenderer {
         }
       }
       r *= shade; g *= shade; b *= shade;
+      // Contours on dry ground every half metre, so a mound or a pit shows
+      // as rings.
+      if (d <= 0.01 && !this.flat) {
+        const band = Math.floor(z[i] * 2);
+        const x = i % W;
+        if ((x < W - 1 && Math.floor(z[i + 1] * 2) !== band) || (i + W < N && Math.floor(z[i + W] * 2) !== band)) { r *= 0.94; g *= 0.94; b *= 0.94; }
+      }
       if (d > 0.01) {
         // Water over it: tinted by depth, browned by the sand it carries.
         const a = Math.min(0.92, 0.25 + d * 0.9);
@@ -355,7 +362,8 @@ export class MapRenderer {
     ctx.clearRect(0, 0, w, h);
     const now = performance.now();
     this.effects = this.effects.filter((e) => now - e.t0 < e.dur);
-    if (!this.effects.length && !this.digPath && !this.brush) return false;
+    const marking = this.marked && now - this.marked.until < 0;
+    if (!this.effects.length && !this.digPath && !this.brush && !marking) return false;
     const vw = this.W / this.zoom;
     const flatS = w / vw;
     const at = this.projector
@@ -380,8 +388,35 @@ export class MapRenderer {
         ctx.beginPath(); ctx.arc(c.x, c.y, r * (0.3 + 0.7 * Math.min(1, t * 2)), 0, Math.PI * 2); ctx.stroke();
       }
     }
+    if (marking) this.drawMarked(ctx, at, dpr, Math.min(1, (this.marked.until - now) / 600));
     this.drawShaping(ctx, at, dpr);
     return true;
+  }
+
+  // The ground a brush stroke has moved: an outline round the cells changed
+  // by more than a quarter of a metre since the stroke began.
+  drawMarked(ctx, at, dpr, alpha) {
+    const { base, box, frame } = this.marked;
+    if (!frame || !base) return;
+    const W = frame.W, z = frame.z;
+    const [x0, y0, x1, y1] = box;
+    const moved = (x, y) => x >= 0 && y >= 0 && x < W && y < frame.H && Math.abs(z[y * W + x] - base[y * W + x]) > 0.25;
+    ctx.beginPath();
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
+        if (!moved(x, y)) continue;
+        // Edges between a moved cell and an unmoved one.
+        const p = at(x, y), q = at(x + 1, y + 1);
+        if (!p || !q) continue;
+        if (!moved(x - 1, y)) { ctx.moveTo(p.x, p.y); ctx.lineTo(p.x, q.y); }
+        if (!moved(x + 1, y)) { ctx.moveTo(q.x, p.y); ctx.lineTo(q.x, q.y); }
+        if (!moved(x, y - 1)) { ctx.moveTo(p.x, p.y); ctx.lineTo(q.x, p.y); }
+        if (!moved(x, y + 1)) { ctx.moveTo(p.x, q.y); ctx.lineTo(q.x, q.y); }
+      }
+    }
+    ctx.lineWidth = 1.5 * dpr;
+    ctx.strokeStyle = `rgba(255, 244, 214, ${0.9 * alpha})`;
+    ctx.stroke();
   }
 
   // While shaping by hand: the line being drawn, or the brush.

@@ -76,7 +76,10 @@ the catchment upstream comes down the river as a flood some hours later.
 
 ## Using it
 
-**Map.** The map shows the land, or one of five layers:
+**Map.** The controls sit in rails either side of the map: zoom, reset,
+3D and north on the right; Land, Layers and the scale on the left. The map
+shows the land, with contours every half metre on dry ground, or one of
+five layers:
 - water depth;
 - the current;
 - the drag on the bed, as a multiple of what moves sand;
@@ -89,8 +92,12 @@ has moved and the plant cover there. The 3D button stands the valley up,
 heights exaggerated four times.
 
 **Tools.**
-- **Raise** and **Lower:** brushes that pile up or scoop away sand while
-  you hold a finger on the map. Lower stops at the bedrock.
+- **Raise** and **Lower:** brushes that pile up or scoop away sand for as
+  long as you hold a finger on the map. Small, Big or Huge; Gentle, Strong or
+  Bulldozer (half a metre, three or ten metres a second at the centre).
+  While your finger is down the river's bed runs in real time, so what you
+  build stays put until you let go; the ground you've moved is outlined.
+  Lower stops at the bedrock.
 - **Dig:** cuts a channel along a line you draw.
 - **Block:** drops a block of rock the river can't wear away.
 - **Storm:** parks a storm over the valley for a day and a half, and slows

@@ -15,41 +15,46 @@
 <div class="app">
   <main class="layout">
     <div class="map-col">
-    <figure class="map" id="map">
-      <canvas id="map-canvas" role="img" aria-label="Map of the river valley, the river coming in at the top and running down to the sea at the bottom. Tap a spot to see what's there; pinch or use the buttons to zoom, and drag to move around when zoomed in."></canvas>
-      <canvas id="gl-canvas" class="gl" role="img" aria-label="The valley in 3D. Drag to turn and tilt it, pinch or use the buttons to zoom, double-tap to centre on a spot, tap to see what's there." hidden></canvas>
-      <canvas id="fx-canvas" class="fx" aria-hidden="true"></canvas>
-      <span id="phase" class="chip on-map">spring</span>
-      <div class="north" aria-hidden="true">N<span id="north-arrow">↑</span></div>
-      <div class="map-mode" role="group" aria-label="Map shows">
-        <button type="button" id="mode-landscape" aria-pressed="true">Land</button>
-        <button type="button" id="mode-layers" aria-pressed="false" aria-haspopup="true" aria-expanded="false">Layers</button>
+    <div class="map-frame" id="map-frame">
+      <div class="rail left">
+        <div class="map-mode" role="group" aria-label="Map shows">
+          <button type="button" id="mode-landscape" aria-pressed="true">Land</button>
+          <button type="button" id="mode-layers" aria-pressed="false" aria-haspopup="true" aria-expanded="false" aria-controls="layer-menu">Layers</button>
+        </div>
+        <div class="scale" aria-hidden="true"><span id="scale-bar" class="bar"></span><span id="scale-label">100 m</span></div>
       </div>
-      <div class="layer-menu" id="layer-menu" role="menu" aria-label="Map layers" hidden>
-        <button type="button" role="menuitem" data-layer="depth">Water depth</button>
-        <button type="button" role="menuitem" data-layer="speed">Current</button>
-        <button type="button" role="menuitem" data-layer="drag">Drag on the bed</button>
-        <button type="button" role="menuitem" data-layer="change">Cutting and filling</button>
-        <button type="button" role="menuitem" data-layer="cutfill">Cut and fill since the start</button>
-      </div>
-      <div class="zoom" role="group" aria-label="Zoom">
-        <button type="button" id="zoom-in" aria-label="Zoom in" title="Zoom in">+</button>
-        <button type="button" id="zoom-out" aria-label="Zoom out" title="Zoom out">−</button>
-        <button type="button" id="zoom-reset" aria-label="Show the whole valley" title="Show the whole valley">
-          <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><path d="M3 8V3h5M12 3h5v5M17 12v5h-5M8 17H3v-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        </button>
+      <figure class="map" id="map">
+        <canvas id="map-canvas" role="img" aria-label="Map of the river valley, the river coming in at the top and running down to the sea at the bottom. Tap a spot to see what's there; pinch or use the buttons to zoom, and drag to move around when zoomed in."></canvas>
+        <canvas id="gl-canvas" class="gl" role="img" aria-label="The valley in 3D. Drag to turn and tilt it, pinch or use the buttons to zoom, double-tap to centre on a spot, tap to see what's there." hidden></canvas>
+        <canvas id="fx-canvas" class="fx" aria-hidden="true"></canvas>
+      </figure>
+      <div class="rail right">
+        <div class="north" aria-hidden="true">N<span id="north-arrow">↑</span></div>
+        <div class="zoom" role="group" aria-label="Zoom">
+          <button type="button" id="zoom-in" aria-label="Zoom in" title="Zoom in">+</button>
+          <button type="button" id="zoom-out" aria-label="Zoom out" title="Zoom out">−</button>
+          <button type="button" id="zoom-reset" aria-label="Show the whole valley" title="Show the whole valley">
+            <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><path d="M3 8V3h5M12 3h5v5M17 12v5h-5M8 17H3v-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+        </div>
         <button type="button" id="view-3d" class="view-3d" aria-pressed="false" aria-label="Show the valley in 3D" title="3D view" hidden>3D</button>
       </div>
-      <div class="scale" aria-hidden="true"><span id="scale-bar" class="bar"></span><span id="scale-label">100 m</span></div>
-      <div class="inspect" id="inspect" hidden>
-        <div class="inspect-head">
-          <span id="inspect-title">Here</span>
-          <button type="button" id="inspect-close" class="close" aria-label="Close">×</button>
-        </div>
-        <p id="inspect-ground" class="ground-line"></p>
-        <dl id="inspect-facts" class="facts"></dl>
+    </div>
+    <div class="layer-menu" id="layer-menu" role="menu" aria-label="Map layers" hidden>
+      <button type="button" role="menuitem" data-layer="depth">Water depth</button>
+      <button type="button" role="menuitem" data-layer="speed">Current</button>
+      <button type="button" role="menuitem" data-layer="drag">Drag on the bed</button>
+      <button type="button" role="menuitem" data-layer="change">Cutting and filling</button>
+      <button type="button" role="menuitem" data-layer="cutfill">Cut and fill since the start</button>
+    </div>
+    <div class="inspect" id="inspect" hidden>
+      <div class="inspect-head">
+        <span id="inspect-title">Here</span>
+        <button type="button" id="inspect-close" class="close" aria-label="Close">×</button>
       </div>
-    </figure>
+      <p id="inspect-ground" class="ground-line"></p>
+      <dl id="inspect-facts" class="facts"></dl>
+    </div>
     <div class="toolbar">
       <button type="button" id="tools-toggle" class="tools-toggle" aria-expanded="false" aria-controls="tools">Tools</button>
       <div class="tools" id="tools" hidden>
@@ -64,8 +69,14 @@
           <button type="button" class="tool" data-kind="section" aria-pressed="false">Section</button>
         </div>
         <div class="size-row brush-row" id="brush-row" role="group" aria-label="Brush size" hidden>
-          <button type="button" data-brush="small" aria-pressed="false">Small brush</button>
-          <button type="button" data-brush="big" aria-pressed="true">Big brush</button>
+          <button type="button" data-brush="small" aria-pressed="false">Small</button>
+          <button type="button" data-brush="big" aria-pressed="true">Big</button>
+          <button type="button" data-brush="huge" aria-pressed="false">Huge</button>
+        </div>
+        <div class="size-row strength-row" id="strength-row" role="group" aria-label="Brush strength" hidden>
+          <button type="button" data-strength="gentle" aria-pressed="false">Gentle</button>
+          <button type="button" data-strength="strong" aria-pressed="true">Strong</button>
+          <button type="button" data-strength="bulldozer" aria-pressed="false">Bulldozer</button>
         </div>
         <p class="tray-head">The table</p>
         <label class="wet-row" for="flow"><span>Pump</span><input type="range" id="flow" min="2" max="80" step="1" value="15"><output id="flow-out" for="flow">15 m³/s</output></label>
@@ -155,7 +166,7 @@
       <input id="rate-slider" type="range" min="0" max="1000" step="1" value="0" aria-label="Time rate" />
       <button type="button" id="faster" class="step" aria-label="Faster" title="Faster (+)">+</button>
     </div>
-    <div class="tb-status"><span id="tick">bed ×1</span><span id="lag" class="lag"></span></div>
+    <div class="tb-status"><span id="phase">spring</span><span id="tick">bed ×1</span><span id="lag" class="lag"></span></div>
   </div>
 </div>
 <!-- app:end -->

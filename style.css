@@ -669,3 +669,53 @@ body {
 .legend .lg-start { border-top-style: dashed; border-color: var(--muted); }
 .tool-row.shape-row { grid-template-columns: repeat(4, 1fr); }
 .tool-row.shape-row:nth-of-type(2) { grid-template-columns: repeat(2, 1fr); }
+
+/* The map with its controls in rails either side, so nothing covers the
+   river: zoom, reset, 3D and north on the right; Land/Layers and the scale
+   on the left. The layer menu and the inspect card open below. */
+.map-col { width: min(100%, calc(62vh * 128 / 256 + 2 * 54px)); }
+.map-frame {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr) 48px;
+  gap: 6px;
+  align-items: start;
+}
+.map-frame .map { margin: 0; }
+.rail { display: flex; flex-direction: column; align-items: center; gap: 8px; min-width: 0; }
+.rail.left { height: 100%; justify-content: space-between; }
+.rail .north, .rail .zoom, .rail .map-mode, .rail .scale { position: static; }
+.rail .north { box-shadow: 0 0 0 1px var(--line); background: var(--panel); color: var(--ink); width: 44px; box-sizing: border-box; justify-content: center; }
+.rail .zoom, .rail .map-mode { box-shadow: 0 0 0 1px var(--line); }
+.rail .zoom button, .rail .view-3d { background: var(--panel); color: var(--ink); }
+.rail .zoom button:disabled { color: var(--line); }
+.rail .view-3d {
+  width: 44px; height: 44px; border: 0; border-radius: 6px; box-shadow: 0 0 0 1px var(--line);
+  font: 700 13px/1 var(--font-display); letter-spacing: 0.04em; cursor: pointer;
+}
+.rail .view-3d[aria-pressed="true"] { background: var(--ink); color: var(--panel); }
+.rail .map-mode { flex-direction: column; width: 44px; }
+.rail .map-mode button {
+  min-height: 44px; padding: 0; background: var(--panel); color: var(--ink);
+  font-size: 11px; letter-spacing: 0.04em; border-top: 1px solid var(--line);
+}
+.rail .map-mode button:first-child { border-top: 0; }
+.rail .map-mode button[aria-pressed="true"] { background: var(--ink); color: var(--panel); }
+#mode-layers { white-space: normal; line-height: 1.1; }
+.rail .map-mode button { font-size: 10px; letter-spacing: 0.02em; }
+/* The scale: a vertical bar, the map's height scale is its width scale. */
+.rail .scale {
+  flex-direction: column; gap: 4px; padding: 6px 2px; width: 44px; box-sizing: border-box;
+  background: var(--panel); color: var(--ink); box-shadow: 0 0 0 1px var(--line); font-size: 11px; text-align: center;
+}
+.rail .scale .bar { width: 6px; height: 40px; border: 1.5px solid currentColor; border-right: 0; }
+.map-frame.in3d .scale { visibility: hidden; }
+.layer-menu { position: static; box-shadow: 0 0 0 1px var(--line); }
+.layer-menu button { background: var(--panel); color: var(--ink); }
+.layer-menu button[aria-checked="true"] { background: var(--ink); color: var(--panel); }
+.map-col > .inspect { position: static; max-height: none; box-shadow: 0 0 0 1px var(--line); background: var(--panel); }
+.tb-status #phase { text-transform: none; }
+
+@media (min-width: 860px) {
+  .map-col { width: min(100%, calc((100vh - 170px) * 128 / 256 + 2 * 54px)); }
+  .map { width: 100%; }
+}

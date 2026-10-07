@@ -31,6 +31,7 @@ export function createHost(post) {
   let stepMs = 1;           // what a hydraulic step costs, smoothed
   let paceMs = 1000 / 30;
   let inFlight = 0;
+  let held = false;         // a brush is down on the map
   const MAX_IN_FLIGHT = 2;
   let dirty = true;
   let urgent = false;
@@ -45,6 +46,9 @@ export function createHost(post) {
 
   // How much faster than the water the bed must run to keep up with the rate.
   function morphFor() {
+    // While the page is shaping the ground, the bed runs in real time, so
+    // what's built stays put until the finger lifts.
+    if (held) return 1;
     if (rate === Infinity) return MAX_MORPH;
     const steps = (1000 / Math.max(0.05, stepMs)) * (BUDGET_MS / LOOP_MS);
     const water = steps * sim.flow.dt;                 // hydraulic seconds per real second
@@ -62,6 +66,7 @@ export function createHost(post) {
     f.targetRate = rate;
     f.actualRate = paused ? 0 : actualRate();
     f.tickYears = tickYears();
+    f.held = held;
     post({ type: 'frame', frame: f }, transferList(f));
     lastFrame = performance.now();
     inFlight++;
@@ -156,7 +161,13 @@ export function createHost(post) {
         post({ type: 'state', state, reason: msg.reason }, stateTransferList(state));
         break;
       }
-      case 'sculpt': sim.sculpt(msg.i, msg.size, msg.dir); changed(); break;
+      case 'sculpt': sim.sculpt(msg.i, msg.size, msg.dir, msg.strength); changed(); break;
+      case 'hold':
+        held = !!msg.on;
+        // Afterwards the bed's speed-up builds back up from real time.
+        if (!held && sim) sim.flow.mNow = 1;
+        changed();
+        break;
       case 'dig': sim.dig(msg.points || []); changed(); break;
       case 'block': sim.block(msg.i); changed(); break;
       case 'storm': sim.storm(msg.i); changed(); break;

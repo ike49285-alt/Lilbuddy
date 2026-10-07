@@ -30,6 +30,30 @@ await page.waitForTimeout(600);
 const z1 = await page.evaluate(() => { const f = window.Headwaters.frame(); return f.z[100 * f.W + 25]; });
 const scroll1 = await page.evaluate(() => window.scrollY);
 check(z1 > z0 + 0.2 && scroll1 === scroll0, 'a Raise stroke piles up sand and the page stays put', `+${(z1 - z0).toFixed(2)} m, scrolled ${scroll1 - scroll0}px`);
+// Nothing sits on top of the map.
+const overlaps = await page.evaluate(() => {
+  const m = document.getElementById('map').getBoundingClientRect();
+  const hit = [];
+  for (const id of ['zoom-in', 'zoom-out', 'zoom-reset', 'view-3d', 'mode-landscape', 'mode-layers', 'scale-bar', 'phase']) {
+    const el = document.getElementById(id);
+    if (!el || el.hidden) continue;
+    const r = el.getBoundingClientRect();
+    if (r.width && r.left < m.right && r.right > m.left && r.top < m.bottom && r.bottom > m.top) hit.push(id);
+  }
+  return hit;
+});
+check(overlaps.length === 0, 'no controls sit on top of the map', overlaps.join(', '));
+// A two-second Strong stroke holds the river and raises the ground metres.
+const z2 = await page.evaluate(() => { const f = window.Headwaters.frame(); return f.z[60 * f.W + 25]; });
+const p2 = at(25.5 / 128, 60.5 / 256);
+await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: p2.x, y: p2.y }] });
+await page.waitForTimeout(900);
+const heldNote = await page.evaluate(() => document.getElementById('tick').textContent);
+await page.waitForTimeout(1100);
+await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+await page.waitForTimeout(600);
+const z3 = await page.evaluate(() => { const f = window.Headwaters.frame(); return f.z[60 * f.W + 25]; });
+check(z3 - z2 > 3 && /held/.test(heldNote), 'a held Strong brush raises metres while the river waits', `+${(z3 - z2).toFixed(1)} m; "${heldNote}"`);
 // Section by drawing a line across the river.
 await page.evaluate(() => window.Headwaters.arm('section'));
 const a = at(20 / 128, 120 / 256), b = at(108 / 128, 120 / 256);

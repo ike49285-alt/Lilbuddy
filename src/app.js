@@ -284,6 +284,7 @@ function readTokens() {
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { tokens = null; lastSlow = 0; });
 
 function draw(f, force) {
+  if (renderer.marked) renderer.marked.frame = f;
   if (view3d && in3d) {
     renderer.paint(f);
     view3d.render(f);
@@ -299,7 +300,7 @@ function draw(f, force) {
   $('time').textContent = clock;
   $('time').classList.toggle('two', clock.includes('\n'));
   const m = f.stats.morph;
-  $('tick').textContent = m > 1.5 ? `bed ×${n0.format(m)}` : 'bed in real time';
+  $('tick').textContent = f.held ? 'bed held while you shape' : m > 1.5 ? `bed ×${n0.format(m)}` : 'bed in real time';
   const lag = $('lag');
   if (f.paused) {
     lag.textContent = 'paused';
@@ -544,6 +545,7 @@ function set3d(on) {
   glCanvas.hidden = !on;
   canvas.hidden = on;
   $('map').classList.toggle('in3d', on);
+  $('map-frame').classList.toggle('in3d', on);
   $('view-3d').setAttribute('aria-pressed', on ? 'true' : 'false');
   $('view-3d').textContent = on ? '2D' : '3D';
   $('view-3d').setAttribute('aria-label', on ? 'Show the flat map' : 'Show the valley in 3D');
@@ -557,11 +559,11 @@ function updateScale() {
   const width = $('map').clientWidth;
   if (!width || !last) return;
   const mPerPx = ((renderer.W / renderer.zoom) * last.cell) / width;
-  const room = Math.min(80, width * 0.2);
+  const room = Math.min(90, $('map').clientHeight * 0.25);
   const steps = [5, 10, 20, 50, 100, 200, 500];
   let m = steps[0];
   for (const s of steps) if (s / mPerPx <= room) m = s;
-  $('scale-bar').style.width = `${m / mPerPx}px`;
+  $('scale-bar').style.height = `${m / mPerPx}px`;
   $('scale-label').textContent = `${m} m`;
 }
 
@@ -827,12 +829,15 @@ function dropAt(wx, wy) {
 const SHAPERS = new Set(['raise', 'lower', 'dig', 'section']);
 const BRUSH_MS = 100;
 let brushSize = 'big';
+let brushStrength = 'strong';
+const BRUSH_CELLS = { small: 2, big: 5, huge: 10 };
 let shaping = null;
 
 function setArmed(kind) {
   armed = kind;
   for (const b of document.querySelectorAll('.tools .tool')) b.setAttribute('aria-pressed', b.dataset.kind === kind ? 'true' : 'false');
   $('brush-row').hidden = !(kind === 'raise' || kind === 'lower');
+  $('strength-row').hidden = !(kind === 'raise' || kind === 'lower');
   const names = {
     raise: 'Hold a finger on the map to pile sand there.', lower: 'Hold a finger on the map to scoop sand away.',
     dig: 'Draw a line on the map to dig a channel.', block: 'Tap the map to drop a block of rock there.',
@@ -855,6 +860,12 @@ for (const c of [canvas, glCanvas]) {
 function startShaping(e) {
   const world = worldAt(e.clientX, e.clientY);
   shaping = { kind: armed, world, pts: world ? [world] : [], timer: null };
+  // While shaping the ground, the river's bed runs in real time.
+  if (armed !== 'section') worker.postMessage({ type: 'hold', on: true });
+  if (armed === 'raise' || armed === 'lower') {
+    // Remember the ground as it was, to outline what the stroke moves.
+    renderer.marked = last ? { base: Float32Array.from(last.z), frame: last, box: null, until: Infinity } : null;
+  }
   if (armed === 'dig' || armed === 'section') {
     renderer.digPath = shaping.pts;
     renderer.digKind = armed;
@@ -865,8 +876,14 @@ function startShaping(e) {
     const w = shaping && shaping.world;
     if (!w) return;
     const i = cellAt(...w);
-    if (i >= 0) worker.postMessage({ type: 'sculpt', i, size: brushSize, dir: shaping.kind === 'raise' ? 1 : -1 });
-    renderer.brush = { x: w[0], y: w[1], r: brushSize === 'big' ? 5 : 2, t: performance.now() };
+    if (i >= 0) worker.postMessage({ type: 'sculpt', i, size: brushSize, strength: brushStrength, dir: shaping.kind === 'raise' ? 1 : -1 });
+    const r = BRUSH_CELLS[brushSize];
+    renderer.brush = { x: w[0], y: w[1], r, t: performance.now() };
+    const m = renderer.marked;
+    if (m) {
+      const R = 2 * r + 1, bx0 = Math.floor(w[0] - R), by0 = Math.floor(w[1] - R), bx1 = Math.ceil(w[0] + R), by1 = Math.ceil(w[1] + R);
+      m.box = m.box ? [Math.min(m.box[0], bx0), Math.min(m.box[1], by0), Math.max(m.box[2], bx1), Math.max(m.box[3], by1)] : [bx0, by0, bx1, by1];
+    }
     startEffects();
   };
   nudge();
@@ -887,6 +904,8 @@ function moveShaping(e) {
 function endShaping(cancelled) {
   if (!shaping) return;
   clearInterval(shaping.timer);
+  if (shaping.kind !== 'section') worker.postMessage({ type: 'hold', on: false });
+  if (renderer.marked) renderer.marked.until = performance.now() + 1800;
   if (!cancelled && shaping.pts.length >= 2) {
     if (shaping.kind === 'dig') worker.postMessage({ type: 'dig', points: shaping.pts });
     if (shaping.kind === 'section') {
@@ -913,6 +932,12 @@ const SLIDERS = {
 for (const [id, [key, scale, label]] of Object.entries(SLIDERS)) {
   $(id).addEventListener('input', () => { $(`${id}-out`).textContent = label(Number($(id).value)); });
   $(id).addEventListener('change', () => { if (worker) worker.postMessage({ type: 'setting', key, value: Number($(id).value) / scale }); });
+}
+for (const b of document.querySelectorAll('#strength-row button')) {
+  b.addEventListener('click', () => {
+    brushStrength = b.dataset.strength;
+    for (const o of document.querySelectorAll('#strength-row button')) o.setAttribute('aria-pressed', o === b ? 'true' : 'false');
+  });
 }
 for (const b of document.querySelectorAll('#brush-row button')) {
   b.addEventListener('click', () => {
