@@ -17,15 +17,18 @@
 //   eggs        0 eggs laid in water … 1 shelled eggs laid on dry land
 //   warm        0 cold-blooded … 1 warm-blooded
 //   prey        0 eats plants … 1 hunts other animals
+//   build       0 … 1 dams streams into ponds (beavers)
 //
 // and plants one:
 //   seeds       0 spores, which need damp ground … 1 seeds and flowers
 
 export const TRAITS = ['habitat', 'salinity', 'tempOpt', 'tempTol', 'complexity', 'dispersal', 'hue'];
 
-export const ANIMAL_TRAITS = ['diet', 'limbs', 'lungs', 'eggs', 'warm', 'prey'];
+export const ANIMAL_TRAITS = ['diet', 'limbs', 'lungs', 'eggs', 'warm', 'prey', 'build'];
 export const HUNTER = 0.5;               // an animal this far toward eating animals is a hunter
 export const isHunter = (t) => !!t.animal && (t.prey || 0) >= HUNTER;
+export const BUILDER = 0.5;              // an animal this far along dams streams
+export const isBuilder = (t) => !!t.animal && (t.build || 0) >= BUILDER && !isHunter(t);
 export const PLANT_TRAITS = ['seeds'];
 export const SHELLED = 0.6;              // eggs this far along can be laid on dry land
 export const SEEDED = 0.4;               // seeds this far along free a plant from damp ground
@@ -79,8 +82,12 @@ export function mutate(rng, traits, sd, innovate) {
       // A key innovation for an animal: toward the shore, between fresh and
       // salt water, a bigger, more complex body, a change of food, a step
       // toward legs or lungs, eggs that can be laid on land, warm blood, or
-      // a taste for other animals.
-      const which = rng.int(9);
+      // a taste for other animals, or for building dams.
+      let which = rng.int(10);
+      // An animal already sure on its legs gains little from better ones;
+      // on land the step it takes instead is to start building.
+      const strides = Math.min(traits.limbs, traits.lungs) >= WALK + 0.08;   // fully at home on land (see realms)
+      if (strides && (which === 4 || which === 5)) which = 9;
       if (which === 0) t.habitat = clamp01(t.habitat + rng.range(0.1, 0.3));
       else if (which === 1) t.salinity = clamp01(t.salinity + rng.range(-0.5, 0.5));
       else if (which === 2) t.complexity = clamp01(t.complexity + rng.range(0.05, 0.15));
@@ -89,7 +96,8 @@ export function mutate(rng, traits, sd, innovate) {
       else if (which === 5) t.lungs = clamp01(t.lungs + rng.range(0.1, 0.25));
       else if (which === 6) t.eggs = clamp01(t.eggs + rng.range(0.15, 0.3));
       else if (which === 7) t.warm = clamp01(t.warm + rng.range(0.15, 0.3));
-      else t.prey = clamp01(t.prey + rng.range(0.3, 0.6));
+      else if (which === 8) t.prey = clamp01(t.prey + rng.range(0.3, 0.6));
+      else t.build = clamp01(t.build + rng.range(0.3, 0.6));
       t.hue = (t.hue + rng.range(0.12, 0.3)) % 1;
     }
     // They come in order: eggs for dry land only once an animal can walk,
@@ -97,6 +105,8 @@ export function mutate(rng, traits, sd, innovate) {
     const walks = Math.min(t.limbs, t.lungs) >= WALK;
     if (!walks) t.eggs = Math.min(t.eggs, traits.eggs || 0);
     if (t.eggs < SHELLED) t.warm = Math.min(t.warm, traits.warm || 0);
+    // Dams only by grazers that walk.
+    if (!walks || t.prey >= HUNTER) t.build = Math.min(t.build, traits.build || 0);
     return t;
   }
   t.seeds = reflect01((t.seeds || 0) + rng.normal(0, sd));
@@ -120,7 +130,7 @@ export function traitDistance(a, b) {
     a.tempOpt - b.tempOpt, a.complexity - b.complexity);
   if (!a.animal || !b.animal) return Math.hypot(base, (a.seeds || 0) - (b.seeds || 0));
   return Math.hypot(base, a.diet - b.diet, a.limbs - b.limbs, a.lungs - b.lungs,
-    (a.eggs || 0) - (b.eggs || 0), (a.warm || 0) - (b.warm || 0), (a.prey || 0) - (b.prey || 0));
+    (a.eggs || 0) - (b.eggs || 0), (a.warm || 0) - (b.warm || 0), (a.prey || 0) - (b.prey || 0), (a.build || 0) - (b.build || 0));
 }
 
 // --- names -----------------------------------------------------------------
@@ -151,7 +161,7 @@ export function epithet(rng) {
 // A plain-language description from the traits. Labels, not taxonomy.
 export function formOf(t) {
   if (isHunter(t)) {
-    const f = baseForm({ ...t, prey: 0 });
+    const f = baseForm({ ...t, prey: 0, build: 0 });
     if (f === 'birds') return 'birds of prey';
     if (f === 'amphibians' || f === 'reptiles' || f === 'mammals' || f === 'fishapods') return `hunting ${f}`;
     return 'predatory fish';
@@ -165,6 +175,7 @@ function baseForm(t) {
   if (t.animal) {
     const onLand = r.land / (r.fresh + r.sea + r.land || 1);
     if (onLand > 0.5) {
+      if (isBuilder(t)) return (t.eggs || 0) < SHELLED ? 'dam-building amphibians' : (t.warm || 0) < 0.5 ? 'dam-building reptiles' : 'beavers';
       if ((t.eggs || 0) < SHELLED) return 'amphibians';
       if ((t.warm || 0) < 0.5) return 'reptiles';
       return t.dispersal >= 0.7 ? 'birds' : 'mammals';

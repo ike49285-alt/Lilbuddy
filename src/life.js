@@ -18,7 +18,7 @@ import { CHANNEL_Q } from './landscape.js';
 import {
   realms, mutate, genusName, epithet, formOf, isLandPlant, isLandAnimal,
   tempOptC, tempWidthC, toTempTrait, traitDistance, withDefaults, clamp01, SHELLED, SEEDED, isHunter,
-  LAND_COMPLEXITY, WALK,
+  LAND_COMPLEXITY, WALK, isBuilder,
 } from './species.js';
 
 export const LIFE_SCALE = 2;
@@ -93,6 +93,7 @@ export class Life {
     this.nutSea = new Float32Array(NL);
     this.nutLand = new Float32Array(NL);
     this.barrier = new Float32Array(NL);
+    this.still = new Float32Array(NL);      // still fresh water (lakes, ponds) in or beside the cell, 0..1
     this.count = new Float32Array(NL);
     this.zSum = new Float32Array(NL);
     this.zMin = new Float32Array(NL);
@@ -174,6 +175,7 @@ export class Life {
     const { sea, fresh, landF, ice, snow, temp, tempMean, nutFresh, nutSea, nutLand, barrier } = this;
     count.fill(0); zSum.fill(0); fertSum.fill(0); erodeSum.fill(0); soilSum.fill(0);
     sea.fill(0); fresh.fill(0); landF.fill(0); ice.fill(0); snow.fill(0); barrier.fill(0);
+    const still = this.still; still.fill(0);
     zMin.fill(Infinity); zMax.fill(-Infinity);
     for (let i = 0; i < land.N; i++) {
       const c = toLife[i];
@@ -183,6 +185,7 @@ export class Life {
       if (z < zMin[c]) zMin[c] = z;
       if (z > zMax[c]) zMax[c] = z;
       if (land.ocean[i]) { sea[c]++; continue; }
+      if (land.lake[i]) still[c]++;
       if (land.lake[i] || land.Q[i] >= CHANNEL_Q) fresh[c]++;
       else { landF[c]++; soilSum[c] += Math.min(2, land.loose[i]); }
       if (land.Q[i] >= BIG_RIVER_Q) barrier[c] = 1;
@@ -195,7 +198,7 @@ export class Life {
     const dtHint = this.lastDt || 1;
     for (let c = 0; c < NL; c++) {
       const n = count[c];
-      sea[c] /= n; fresh[c] /= n; landF[c] /= n; ice[c] /= n; snow[c] /= n;
+      sea[c] /= n; fresh[c] /= n; landF[c] /= n; ice[c] /= n; snow[c] /= n; still[c] /= n;
       const zAvg = zSum[c] / n;
       const above = Math.max(0, zAvg - climate.seaLevel);
       temp[c] = climate.tempAt(above);
@@ -232,13 +235,32 @@ export class Life {
       }
     }
     for (let c = 0; c < NL; c++) nutLand[c] *= 0.75 + 0.5 * Math.min(1, tmp[c] * 2);
+    // Still water reaches a cell further: ponds and lakes and the marsh
+    // around them, a three-cell halo.
+    const pass = this.pass;
+    for (let k = 0; k < 3; k++) {
+      for (let y = 0; y < LH; y++) {
+        for (let x = 0; x < LW; x++) {
+          const c = y * LW + x;
+          let v = still[c];
+          if (x > 0) v = Math.max(v, 0.7 * still[c - 1]);
+          if (x < LW - 1) v = Math.max(v, 0.7 * still[c + 1]);
+          if (y > 0) v = Math.max(v, 0.7 * still[c - LW]);
+          if (y < LH - 1) v = Math.max(v, 0.7 * still[c + LW]);
+          pass[c] = v;
+        }
+      }
+      still.set(pass);
+    }
     // Damp ground, for spores and for eggs laid in water: by streams and
     // lakes, or where the rain is heavy.
     const damp = this.damp;
     for (let c = 0; c < NL; c++) {
       const above = Math.max(0, zSum[c] / count[c] - climate.seaLevel);
       const rain = Math.min(1, climate.meanPrecip * (1 + above / 1400) / 1.6);
-      damp[c] = Math.min(1, 0.35 * rain + 1.2 * Math.min(1, tmp[c] * 3));
+      damp[c] = Math.min(1, Math.max(0.35 * rain + 1.2 * Math.min(1, tmp[c] * 3), 6 * still[c]));
+      // Wetland round still water: rich, wet ground.
+      nutLand[c] *= 1 + 0.3 * Math.min(1, 2 * still[c]);
     }
     // Day length: short winter days, long summer ones.
     if (climate.seasonal) {
@@ -584,7 +606,8 @@ export class Life {
     const finCost = 0.3 * t.limbs;
     // Eggs laid in water tie an animal on land to damp ground; shelled eggs free it.
     const freed = clamp01((t.eggs - 0.3) / (SHELLED - 0.3));
-    const { sea, fresh, landF, ice, tempMean, kmAFresh, kmASea, kmALand, damp } = this;
+    const { sea, fresh, landF, ice, tempMean, kmAFresh, kmASea, kmALand, damp, still } = this;
+    const build = hunter ? 0 : t.build || 0;
     const [bF0, bF1] = this.bFresh, [bS0, bS1] = this.bSea, [bL0, bL1] = this.bLand;
     const N = sp.N, K = sp.K;
     const landDom = r.land >= r.fresh && r.land >= r.sea, seaDom = r.sea > r.fresh;
@@ -611,7 +634,10 @@ export class Life {
           // a fin that can prop and push helps through the weed.
           const warm = Math.max(0, Math.min(1, (T - 8) / 14));
           const edge = 1 + margin * (0.35 * t.lungs * warm + 0.35 * t.limbs);
-          const k = food * kMult * edge * lutT[tempIndex(T)] * (1 - ice[c]);
+          let k = food * kMult * edge * lutT[tempIndex(T)] * (1 - ice[c]);
+          // Builders live by the water, best by still water, and do worse
+          // away from it: the banks of a stream are a start, a pond better.
+          if (build > 0) k *= (1 - 0.2 * build) * (1 + 1.5 * build * Math.min(1, 2 * still[c] + 2 * fresh[c]));
           K[c] = k;
           if (N[c] > RANGE_DENSITY && k > dom[c]) dom[c] = k;
         }
@@ -976,6 +1002,7 @@ export class Life {
       if (sp.traits.eggs >= SHELLED) this.first('reptile', sp, years, best);
       if (isHunter(sp.traits)) this.first('hunter', sp, years, best);
       if (sp.traits.eggs >= SHELLED && sp.traits.warm >= 0.5) this.first('warm', sp, years, best);
+      if (isBuilder(sp.traits)) this.first('builder', sp, years, best);
       if (this.stats.firstLandAnimal === null) {
         this.stats.firstLandAnimal = years;
         this.stats.firstLandAnimalAt = best;

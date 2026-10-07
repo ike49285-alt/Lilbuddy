@@ -85,6 +85,7 @@ export class Landscape {
     this.snow = new Float32Array(N);      // seasonal snowpack, metres of water
     this.cover = new Float32Array(N);     // plant cover 0..1, set by life — plants hold the soil
     this.lake = new Uint8Array(N);
+    this.dam = new Float32Array(N);       // metres of a cell's height that is a dam, kept up by its builders
     this.maxDonor = new Int32Array(N);
     this.share = new Float64Array(8);
     this.basin = new Int32Array(N);
@@ -603,7 +604,7 @@ export class Landscape {
     for (let s = 0; s < N; s++) {
       const i = tree[s];
       const r = rec[i];
-      if (r === i || ocean[i] || this.lake[i]) continue;
+      if (r === i || ocean[i] || this.lake[i] || this.dam[i]) continue;
       const dx = Math.abs((i % W) - (r % W)), dy = Math.abs(((i / W) | 0) - ((r / W) | 0));
       const dist = (dx && dy ? Math.SQRT2 : 1) * CELL_M;
       const zr = ocean[r] ? sea : this.lake[r] ? surf[r] : z[r];
@@ -654,7 +655,7 @@ export class Landscape {
         // channel takes it. (Letting sand gully at smaller flows splits the
         // plain into parallel streams at short ticks but not long ones.)
         const power = ice[i] ? sq : sq - SQRT_CHANNEL_Q;
-        if (power > 0 && loose[i] > 0 && cap > qs[i]) {
+        if (power > 0 && loose[i] > 0 && cap > qs[i] && !this.dam[i]) {
           const scour = LOOSE_K * K_FLUVIAL * power * slope * dt * (1 - 0.8 * this.cover[i]);
           // Never below the next cell down (or the water in it): scouring
           // sand doesn't dig pits.
@@ -747,7 +748,7 @@ export class Landscape {
           if (y < H - 1) steep = Math.max(steep, Math.abs(z[i] - z[i + W]));
           if (steep > SLIDE_SLOPE * (1 + 0.6 * this.cover[i]) * CELL_M && kSlide > k) { k = kSlide; slid[i] = 1; }
         }
-        tmp[i] = z[i] + k * (sum / n - z[i]);
+        tmp[i] = this.dam[i] ? z[i] : z[i] + k * (sum / n - z[i]);
       }
     }
     // What creeps in settles at the foot of the slope as cover. What creeps

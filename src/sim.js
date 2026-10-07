@@ -9,6 +9,7 @@ import { Disasters, BOMBARD_YEARS } from './disasters.js';
 import { Weather, WEATHER_TICK } from './weather.js';
 import { sculpt, dig, lineCells, parkStorm, BRUSH } from './tools.js';
 import { formOf } from './species.js';
+import { Dams } from './dams.js';
 
 export { MAX_STEP_YEARS };
 
@@ -17,6 +18,7 @@ export const HISTORY_EVERY = 5000;    // years between samples (240 × 5 kyr = 1
 const STORM_R_CELLS = 12;             // a parked storm's size on the map, for its note
 const MUD_DAYS = 1;                   // how long a river stays muddy after the load drops, days
 const SILT_T_PER_M3 = 2.65;           // tonnes of silt per cubic metre
+const BURST_NOTE_YEARS = 3 / 365.25;  // at most one note for burst dams in this long
 
 // The world's settings, as set on the page: [natural, least, most].
 export const SETTINGS = {
@@ -52,6 +54,7 @@ export class Simulation {
     this.disasters = new Disasters(this.rng.fork('disasters'));
     this.weather = new Weather(this.rng, this.life.LW, this.life.LH);
     this.land.toLife = this.life.toLife;
+    this.dams = new Dams();
     this.sentEvent = 0;       // the last event id handed to the page
     this.settings = Object.fromEntries(Object.entries(SETTINGS).map(([k, r]) => [k, r[0]]));
     this.sample();
@@ -81,6 +84,19 @@ export class Simulation {
     this.life.hold = this.years < BOMBARD_YEARS;
     this.life.step(this.land, this.climate, d, this.years);
     this.syncCover();
+    const firstDam = this.dams.first;
+    this.dams.step(this, this.years, d);
+    if (!firstDam && this.dams.first) {
+      this.disasters.milestone(this, `The first dam: ${this.dams.first.name} walls off a stream, and a pond fills behind it`, this.dams.first.at);
+    }
+    // Bursts get a note, gathered up so a wet spring doesn't bring dozens.
+    this.burstPending = (this.burstPending || 0) + this.dams.burst;
+    if (this.burstPending && !(this.years - (this.burstNoteAt ?? -Infinity) < BURST_NOTE_YEARS)) {
+      const n = this.burstPending;
+      this.disasters.milestone(this, `The surge bursts ${n === 1 ? 'a dam' : `${n} dams`}, and the pond goes down the river`, this.life.toLife[this.dams.burstAt]);
+      this.burstPending = 0;
+      this.burstNoteAt = this.years;
+    }
     const st = this.life.stats;
     // Life pushed onto land, if it hadn't got there by itself.
     for (const f of this.life.forced) {
@@ -105,6 +121,7 @@ export class Simulation {
       seed: (n) => `The first seed plants: ${n}`,
       flower: (n) => `The first flowers: ${n}`,
       hunter: (n) => `The first hunter: ${n} eats other animals`,
+      builder: (n) => `${n} starts building dams`,
     };
     for (const [k, f] of Object.entries(st.firsts || {})) {
       if (!firsts[k] && FIRSTS[k]) this.disasters.milestone(this, FIRSTS[k](f.name), f.at);
@@ -248,6 +265,7 @@ export class Simulation {
         lagActive: land.lagActive, lastDt: land.lastDt,
       },
       life: life.saveState(),
+      dams: this.dams.saveState(),
       disasters: this.disasters.saveState(),
       weather: this.weather.saveState(),
       settings: { ...this.settings },
@@ -302,6 +320,7 @@ export class Simulation {
     sim.climate.set(sim.years, false);
     land.prime(sim.climate);
     sim.life.restoreState(state.life);
+    sim.dams.restoreState(state.dams, land);
     return sim;
   }
 
@@ -333,7 +352,35 @@ export class Simulation {
       cover: life.cover[c],
       ground: this.groundAt(i),
       species: life.at(c),
+      dam: this.damAt(i),
+      pond: !!land.lake[i] && this.pondAt(i),
     };
+  }
+
+  // A dam at a cell, for the inspector: its height, who built it and when.
+  damAt(i) {
+    const d = this.dams.at(i);
+    if (!d) return null;
+    const sp = this.life.registry.get(d.by);
+    return { h: d.h, name: d.name, form: sp ? formOf(sp.traits) : null, age: this.years - d.built };
+  }
+
+  // Whether a lake cell is a pond behind a dam.
+  pondAt(i) {
+    const { region, regions, dam } = this.land;
+    const R = regions[region[i]];
+    return !!R && R.exit >= 0 && dam[R.exit] > 0;
+  }
+
+  // Cells of pond behind the dams.
+  pondCells() {
+    const { regions, dam, lake } = this.land;
+    let n = 0;
+    for (const R of regions) {
+      if (R.exit < 0 || !(dam[R.exit] > 0)) continue;
+      for (const c of R.cells) if (lake[c]) n++;
+    }
+    return n;
   }
 
   // Events the page hasn't been sent yet.
@@ -505,7 +552,8 @@ export class Simulation {
         settings: { ...this.settings },
         yearFrac: climate.yearFrac,
       },
-      stats: { ...land.stats, toSea: (this.toSea || 0) * SILT_T_PER_M3 },
+      stats: { ...land.stats, toSea: (this.toSea || 0) * SILT_T_PER_M3, dams: this.dams.list.length, ponds: this.pondCells() },
+      dams: this.dams.frameData(land),
       life: this.life.frameData(selectedId),
       lifeStats: { ...this.life.stats },
       terrainEpoch: this.disasters.epoch,
@@ -539,7 +587,7 @@ export function transferList(frame) {
   const list = [frame.z.buffer, frame.Q.buffer, frame.rec.buffer, frame.ocean.buffer, frame.rock.buffer, frame.ground.buffer,
     ...(frame.cloud ? [frame.cloud.buffer] : []),
     ...(frame.layer ? [frame.layer.buffer] : []),
-    frame.mud.buffer,
+    frame.mud.buffer, frame.dams.buffer,
     frame.lake.buffer, frame.ice.buffer, frame.snow.buffer, frame.history.sea.buffer, frame.history.mouthQ.buffer,
     L.aqua.buffer, L.veg.buffer, L.vegC.buffer, L.rgb.buffer, L.fishes.buffer, L.herds.buffer, ...(L.hunters ? [L.hunters.buffer] : [])];
   if (L.selected) list.push(L.selected.buffer);

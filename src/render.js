@@ -422,6 +422,12 @@ export class MapRenderer {
       }
       px[o] = r; px[o + 1] = g; px[o + 2] = b; px[o + 3] = 255;
     }
+    // Dams, a dark speck of sticks on the ground (the 3D view's mark; the
+    // flat map draws a bar over it).
+    if (f.dams && this.projector) for (let k = 0; k < f.dams.length; k += 2) {
+      const o = f.dams[k] * 4;
+      px[o] = 96; px[o + 1] = 60; px[o + 2] = 30;
+    }
     this.tctx.putImageData(this.image, 0, 0);
     this.painted = (this.painted || 0) + 1;
   }
@@ -819,6 +825,34 @@ export class MapRenderer {
         ctx.stroke(paths[slot]);
       }
     }
+    this.drawDams(f, ctx, sx, sy, ox, oy);
+  }
+
+  // Each dam as a short bar of sticks across its stream.
+  drawDams(f, ctx, sx, sy, ox, oy) {
+    const dams = f.dams;
+    if (!dams || !dams.length) return;
+    const { W } = f;
+    const { px: X, py: Y } = this;
+    const half = Math.max(3, 0.55 * Math.min(sx, sy));
+    const bar = new Path2D();
+    for (let k = 0; k < dams.length; k += 2) {
+      const i = dams[k], r = dams[k + 1];
+      const xi = (X[i] - ox) * sx, yi = (Y[i] - oy) * sy;
+      let dx = ((r % W) - (i % W)) * sx, dy = (((r / W) | 0) - ((i / W) | 0)) * sy;
+      const len = Math.hypot(dx, dy) || 1;
+      dx /= len; dy /= len;
+      // Across the flow.
+      bar.moveTo(xi - dy * half, yi + dx * half);
+      bar.lineTo(xi + dy * half, yi - dx * half);
+    }
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = 'rgba(236, 222, 190, 0.9)';
+    ctx.lineWidth = Math.max(3.5, 0.32 * Math.min(sx, sy));
+    ctx.stroke(bar);
+    ctx.strokeStyle = 'rgb(96, 60, 30)';
+    ctx.lineWidth = Math.max(2, 0.2 * Math.min(sx, sy));
+    ctx.stroke(bar);
   }
 }
 

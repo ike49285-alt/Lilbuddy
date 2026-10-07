@@ -366,6 +366,7 @@ function drawSlow(f) {
   // Tonnes a year; at a few million and up, in megatonnes.
   const silt = st.toSea || 0;
   $('s-silt').textContent = silt >= 1e6 ? `${n1.format(silt / 1e6)} Mt/yr` : silt >= 1e3 ? `${n0.format(silt / 1e3)} kt/yr` : silt > 0 ? `${n0.format(silt)} t/yr` : 'none yet';
+  $('s-dams').textContent = st.dams ? `${n0.format(st.dams)}, ${n1.format((st.ponds || 0) * CELL_KM2)} km² of ponds` : 'none';
   $('s-temp').textContent = `${n1.format(f.climate.seaT)} °C`;
 
   if (!tokens) readTokens();
@@ -548,6 +549,7 @@ function renderCard(card, sp, byId) {
     row('Eggs: water ↔ land', t.eggs || 0, (t.eggs || 0) < 0.3 ? 'in water' : (t.eggs || 0) < 0.6 ? 'damp places' : 'shelled, on land');
     row('Blood: cold ↔ warm', t.warm || 0, (t.warm || 0) < 0.3 ? 'cold' : (t.warm || 0) < 0.5 ? 'warming' : 'warm');
     row('Eats: plants ↔ animals', t.prey || 0, (t.prey || 0) < 0.25 ? 'plants' : (t.prey || 0) < 0.5 ? 'some meat' : 'hunts');
+    row('Builds dams', t.build || 0, (t.build || 0) < 0.25 ? 'no' : (t.build || 0) < 0.5 ? 'gnaws wood' : 'dams streams');
   } else {
     row('Spores ↔ seeds', t.seeds || 0, (t.seeds || 0) < 0.4 ? 'spores' : (t.seeds || 0) < 0.75 ? 'seeds' : 'flowers');
   }
@@ -1162,10 +1164,17 @@ $('inspect-close').addEventListener('click', () => {
 function renderInspect(info) {
   if (!info || inspectAt < 0) return;
   $('inspect').hidden = false;
-  const where = info.water === 'sea' ? 'Sea' : info.water === 'lake' ? 'Lake' : info.water === 'river' ? 'River' : 'Land';
+  const where = info.dam ? 'Dam' : info.water === 'sea' ? 'Sea' : info.pond ? 'Beaver pond' : info.water === 'lake' ? 'Lake' : info.water === 'river' ? 'River' : 'Land';
   $('inspect-title').textContent = info.water === 'sea' ? `${where}, ${n0.format(-info.elevation)} m deep` : `${where}, ${n0.format(info.elevation)} m up`;
   const gt = info.ground.text;
   $('inspect-ground').textContent = info.water === 'sea' || info.water === 'lake' ? `Bed: ${gt}` : `Ground: ${gt}`;
+  const damLine = $('inspect-dam');
+  damLine.hidden = !info.dam;
+  if (info.dam) {
+    const d = info.dam;
+    const age = d.age < 1 ? 'this year' : d.age < 2 ? 'a year ago' : `${n0.format(d.age)} years ago`;
+    damLine.textContent = `A ${n1.format(d.h)} m dam, built ${age} by ${d.name}${d.form ? ` (${d.form})` : ''}.`;
+  }
   const facts = $('inspect-facts');
   facts.innerHTML = '';
   const fact = (k, v) => { const d = el('div'); d.append(el('dt', '', k), el('dd', '', v)); facts.append(d); };

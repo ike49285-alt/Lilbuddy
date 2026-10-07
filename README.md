@@ -125,6 +125,29 @@ slower; they thin their prey, and starve without it. Fish show as silver
 specks in the water, land animals as dark specks on the ground, and hunters
 as rust-red specks.
 
+## Beavers
+
+Some animals change the valley to suit themselves. A plant-eating animal
+that walks on land can evolve a habit of building dams, like eggs or warm
+blood: a little helps it on the banks of a stream, and the more it builds,
+the better it does by still water and the worse away from it. Once it's
+far enough along, the animals read as dam-building amphibians or reptiles,
+or as beavers once they're warm-blooded, and they start walling off the
+gentle, wooded streams they live on. A dam is 2.5 m of sticks and mud
+across a small or medium stream (never a big river), and a pond fills
+behind it. The pond is a lake to the river, so it keeps the silt that comes
+down: below a dam the water runs clear. It wets the ground around it, so
+damp-loving plants and amphibians do well there, and the beavers best of
+all. Ponds fill up with silt over the years, and when the beavers leave, or
+the pond is full, the dam falls in and the pond drains, leaving a flat,
+fertile meadow that the stream slowly cuts back down through. A big flood,
+or a storm surge at slow speeds, bursts the dams in its way and sends the
+pond down the river.
+
+On the map a dam is a short brown bar across its stream, and the pond
+behind it is a lake; tap one to see who built it and when. The River tab
+counts the dams and the pond area.
+
 ## Disasters
 
 Nature sets them off as time runs: lightning fires in dry summers on

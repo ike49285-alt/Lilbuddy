@@ -308,9 +308,11 @@ export class Disasters {
     for (const j of wet) { z[j] += silt; loose[j] += silt; fert[j] += 0.05 + 0.03 * size; }
     for (const ch of channel) { z[ch] -= scour; loose[ch] = Math.max(0, loose[ch] - scour); }
     this.hurt(sim, wet, new Float32Array(wet.length).fill(0.7), true);
+    const burst = sim.dams ? sim.dams.flood(land, wet.concat(channel), sim.years) : 0;
     const area = wet.length * CELL_KM2;
     const ev = this.place(land, wet.length ? wet : channel, wet.concat(channel));
     ev.label = wet.length ? `The river floods ${km(area)} km² of its valley` : 'The river runs high but stays in its banks';
+    if (burst) ev.label += ` and bursts ${burst === 1 ? 'a dam' : `${burst} dams`}`;
     ev.hurt = true;
     return ev;
   }
