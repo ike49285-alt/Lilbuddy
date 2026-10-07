@@ -102,14 +102,18 @@ export class Simulation {
     for (const f of this.life.forced) {
       this.disasters.milestone(this, f.kind === 'plant'
         ? `Plants creep out of the water: ${f.name} takes root on the shore`
-        : `${f.name}, a descendant of ${f.parent}, hauls itself out of the water`, f.at);
+        : f.kind === 'builder'
+          ? `${f.name}, a descendant of ${f.parent}, starts damming the streams`
+          : `${f.name}, a descendant of ${f.parent}, hauls itself out of the water`, f.at);
     }
     // Newcomers after a deadly winter, or after the bombardment, get a note;
     // the lone ones are quiet.
     for (const a of this.life.arrived) {
       if (a.trickle) continue;
       if (a.restock) {
-        this.disasters.milestone(this, a.restock === 'plant'
+        this.disasters.milestone(this, a.restock === 'builder'
+          ? `Dam builders return: ${a.names[0]} comes in from beyond the valley`
+          : a.restock === 'plant'
           ? `Plants return to the bare land: ${a.names[0]} spreads in from beyond the valley`
           : `Animals return to the empty land: ${a.names[0]} walks in from beyond the valley`, a.at);
         continue;

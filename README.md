@@ -146,8 +146,10 @@ fertile meadow that the stream slowly cuts back down through. A big flood,
 or a storm surge at slow speeds, bursts the dams in its way and sends the
 pond down the river.
 
-Once dam builders have lived here, newcomers after an extinction build
-dams too.
+If none have evolved by 8 million years, the most land-ward plant-eater
+living by the water takes it up, and its descendants build. Whenever the
+builders die out, newcomers like the best of them come back from beyond
+the valley, and newcomers after an extinction build dams too.
 
 On the map a dam is a short brown bar across its stream, and the pond
 behind it is a lake; tap one to see who built it and when. The River tab

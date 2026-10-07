@@ -18,7 +18,7 @@ import { CHANNEL_Q } from './landscape.js';
 import {
   realms, mutate, genusName, epithet, formOf, isLandPlant, isLandAnimal,
   tempOptC, tempWidthC, toTempTrait, traitDistance, withDefaults, clamp01, SHELLED, SEEDED, isHunter,
-  LAND_COMPLEXITY, WALK, isBuilder,
+  LAND_COMPLEXITY, WALK, isBuilder, BUILDER,
 } from './species.js';
 
 export const LIFE_SCALE = 2;
@@ -35,6 +35,8 @@ const ARRIVE_LAG = 5000;            // years animals wait, if there's no food fo
 const ARRIVE_TRIES = 5;
 const SEED_DENSITY = 0.1;           // a species seeded by hand starts this dense
 const FORCE_LAND_YEARS = 5e6;       // by now, if nothing has walked ashore, something does
+const FORCE_BUILD_YEARS = 8e6;      // by now, if nothing has built a dam, something does
+const BUILD_WAIT = 50000;           // and then it's checked on this often
 const REPOP_WAIT = 50000;           // after life is put back on land, years before it's checked on again
 const FORCE_WAIT = 20000;           // years between steps of it (plants first, then animals)
 const FRONTIER_RANGE = 10;          // km²: a species this widespread counts toward the frontier
@@ -159,6 +161,8 @@ export class Life {
     this.arrived = [];      // this step's newcomers: { names, plants, animals, at, trickle }
     this.nextForce = null;  // when to next push life onto land, if it still hasn't got there
     this.forced = [];       // this step's pushes onto land: { kind, name, at }
+    this.nextBuild = null;  // when to next check that dam builders live here
+    this.frontierBuilder = null; // the most advanced dam builder that ever lived here: { score, traits }
     this.registry = new Map();
     this.nextId = 1;
     this.light = 0.8;
@@ -432,6 +436,7 @@ export class Life {
     this.evolve(dt, years);
     this.computeCover();
     this.forceLand(years);     // after the cover, which a restored world starts without
+    this.forceBuilders(years);
   }
 
   // Realm totals: how much biomass already lives in each realm of each cell.
@@ -1002,7 +1007,10 @@ export class Life {
       if (sp.traits.eggs >= SHELLED) this.first('reptile', sp, years, best);
       if (isHunter(sp.traits)) this.first('hunter', sp, years, best);
       if (sp.traits.eggs >= SHELLED && sp.traits.warm >= 0.5) this.first('warm', sp, years, best);
-      if (isBuilder(sp.traits)) this.first('builder', sp, years, best);
+      if (isBuilder(sp.traits)) {
+        this.first('builder', sp, years, best);
+        if (sp.range >= FRONTIER_RANGE) this.reachBuilder(sp.traits);
+      }
       if (this.stats.firstLandAnimal === null) {
         this.stats.firstLandAnimal = years;
         this.stats.firstLandAnimalAt = best;
@@ -1094,6 +1102,52 @@ export class Life {
       limbs: Math.max(t.limbs, WALK + 0.1), lungs: Math.max(t.lungs, WALK + 0.1) }, cells, 'animal');
   }
 
+  // Dam builders from 8 Myr on: if none has ever lived here, the most
+  // land-ward plant-eater living by the water gives rise to one, a real
+  // descendant; if they lived here once and have died out, newcomers like
+  // the best of them come back from beyond the valley.
+  forceBuilders(years) {
+    if (years < FORCE_BUILD_YEARS) return;
+    if (this.nextBuild !== null && years < this.nextBuild) return;
+    const alive = (p) => p.died === null && p.total > EXTINCT_TOTAL;
+    if (this.species.some((p) => alive(p) && isBuilder(p.traits))) return;
+    const grazers = this.species.filter((p) => alive(p) && p.traits.animal && !isHunter(p.traits) && realmOf(p.traits) === 'land');
+    if (!grazers.length) return;              // forceLand puts animals back first
+    this.nextBuild = years + BUILD_WAIT;
+    if (this.frontierBuilder) {
+      const sp = this.newcomer('animal', 'land', years, null, this.frontierBuilder.traits);
+      if (!sp) return;
+      this.species.sort((a, b) => a.id - b.id);
+      this.arrived.push({ names: [sp.name], plants: 0, animals: 1, at: sp.landedAt, trickle: false, restock: 'builder' });
+      return;
+    }
+    const { NL, fresh, still, landF } = this;
+    const byWater = (p) => { let n = 0; for (let c = 0; c < NL; c++) if (p.N[c] > RANGE_DENSITY) n += fresh[c] + still[c]; return n; };
+    const score = new Map(grazers.map((p) => [p, byWater(p)]));
+    grazers.sort((a, b) => realms(b.traits).land - realms(a.traits).land || score.get(b) - score.get(a) || b.total - a.total);
+    const parent = grazers[0];
+    let cells = [];
+    for (let c = 0; c < NL; c++) if (parent.N[c] > RANGE_DENSITY && landF[c] > 0.3 && (fresh[c] > 0.1 || still[c] > 0.05)) cells.push(c);
+    if (!cells.length) for (let c = 0; c < NL; c++) if (parent.N[c] > RANGE_DENSITY) cells.push(c);
+    if (!cells.length) return;
+    const traits = { ...parent.traits, build: Math.max(parent.traits.build || 0, BUILDER + 0.25) };
+    traits.hue = (parent.traits.hue + 0.15 + 0.2 * this.rng.next()) % 1;
+    const sp = this.addSpecies(traits, parent, years);
+    for (const c of cells) sp.N[c] = Math.max(sp.N[c], SEED_DENSITY);
+    sp.seededAt = years;
+    this.reach(sp.traits);
+    this.reachBuilder(sp.traits);
+    this.species.sort((a, b) => a.id - b.id);
+    this.forced.push({ kind: 'builder', name: sp.name, parent: parent.name, at: cells[cells.length >> 1] });
+  }
+
+  // Records the most advanced dam builder, for when they die out.
+  reachBuilder(t) {
+    const score = advance(t);
+    const f = this.frontierBuilder;
+    if (!f || score > f.score + 1e-9) this.frontierBuilder = { score, traits: { ...t } };
+  }
+
   // Land life back from beyond the valley, as advanced as it ever was here.
   restock(kind, years) {
     if (!this.frontier[kind].land) return false;
@@ -1174,9 +1228,9 @@ export class Life {
 
   // A newcomer of a kind, in a realm, landing along the edges, or with
   // `only`, in just those cells (seeding by hand).
-  newcomer(kind, realm, years, only = null) {
+  newcomer(kind, realm, years, only = null, like = null) {
     const { NL, LW, LH, sea, fresh, landF, tempMean, rng } = this;
-    const f = this.frontier[kind][realm];
+    const f = like ? { traits: like } : this.frontier[kind][realm];
     const edge = (c, w, sides) => {
       const x = c % LW, y = (c / LW) | 0;
       return x < w || x >= LW - w || (sides.top && y < w) || (sides.bottom && y >= LH - w);
@@ -1327,6 +1381,8 @@ export class Life {
       trickleKind: this.trickleKind,
       held: !!this.held,
       nextForce: this.nextForce,
+      nextBuild: this.nextBuild,
+      frontierBuilder: this.frontierBuilder ? { score: this.frontierBuilder.score, traits: { ...this.frontierBuilder.traits } } : null,
       lastDt: this.lastDt || 1,
       stats: { ...this.stats },
       // Registry order matters for pruning ties, so keep it.
@@ -1348,6 +1404,8 @@ export class Life {
     this.trickleKind = s.trickleKind || 'animal';
     this.held = !!s.held;
     this.nextForce = s.nextForce ?? null;
+    this.nextBuild = s.nextBuild ?? null;
+    this.frontierBuilder = s.frontierBuilder ? { score: s.frontierBuilder.score, traits: { ...s.frontierBuilder.traits } } : null;
     this.lastDt = s.lastDt;
     this.stats = { ...this.stats, ...s.stats };
     this.registry = new Map();
