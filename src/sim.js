@@ -17,6 +17,10 @@ export const BRUSH_RATE = { gentle: 0.5, strong: 3, bulldozer: 10 };   // metres
 const BRUSH_NUDGE = 0.1;                   // seconds of brushing each nudge from the page stands for
 const DIG_DEPTH = 1.2;                     // metres below the ground either side
 const BLOCK_H = 1.5;                       // metres a dropped block stands above the bed
+// Things to protect: their size in cells, and how many there may be.
+const HOUSE = 3, FIELD = 8, PIER_EVERY = 4, MAX_THINGS = 24;
+const CROP = 0.5;                          // a field's crop, as plant cover
+const LASTING = { undercut: 1, scoured: 1, lost: 2 };   // harms that don't heal, worse ones higher
 
 // The world's settings: [natural, least, most].
 export const SETTINGS = {
@@ -46,6 +50,8 @@ export class Simulation {
     this.nextEventId = 1;
     this.sentEvent = 0;
     this.section = null;         // a cross-section line: [x0, y0, x1, y1] in cells
+    this.things = [];            // houses, fields and bridges the river might threaten
+    this.nextThingId = 1;
     this.layer = null;
     this.history = { inflow: [], sinuosity: [], every: HOUR, next: 0 };
     this.mudSeaRate = 0;         // m³ a day of mud reaching the open sea, smoothed
@@ -213,6 +219,93 @@ export class Simulation {
     this.event('block', i);
   }
 
+  // --- things to protect -------------------------------------------------------
+
+  // Puts down a house or a field centred on cell i, or a bridge along a
+  // line: each remembers the ground under it, to tell how the river treats it.
+  place(kind, i, points) {
+    const { W, H } = this;
+    const f = this.flow;
+    if (this.things.length >= MAX_THINGS) this.things.shift();
+    let cells = [], piers = [], line = null;
+    if (kind === 'house' || kind === 'field') {
+      if (!(i >= 0 && i < this.N)) return null;
+      const n = kind === 'house' ? HOUSE : FIELD;
+      const cx = i % W, cy = (i / W) | 0;
+      const x0 = Math.max(0, Math.min(W - n, cx - (n >> 1))), y0 = Math.max(0, Math.min(H - SPONGE - n, cy - (n >> 1)));
+      for (let y = y0; y < y0 + n; y++) for (let x = x0; x < x0 + n; x++) cells.push(y * W + x);
+      if (kind === 'field') for (const j of cells) if (f.h[j] <= WET) f.cover[j] = Math.max(f.cover[j], CROP);
+    } else if (kind === 'bridge') {
+      cells = lineCells(W, H, points || []);
+      if (cells.length < 3) return null;
+      const a = points[0], b = points[points.length - 1];
+      line = [a[0], a[1], b[0], b[1]];
+      // Piers of rock along it, between its ends.
+      for (let k = PIER_EVERY >> 1; k < cells.length - 1; k += PIER_EVERY) {
+        const j = cells[k];
+        piers.push(j);
+        f.rock[j] = f.z[j];
+        f.fm[j] = 0;
+      }
+    } else return null;
+    // The ground around a pier, for its scour.
+    const watch = kind === 'bridge' ? [...new Set(piers.flatMap((j) => [j - 1, j + 1, j - W, j + W].filter((n) => n >= 0 && n < this.N)))] : cells;
+    const t = {
+      id: this.nextThingId++, kind, cells, piers, watch, line,
+      base: watch.map((j) => f.z[j]),
+      x: cells.reduce((s, j) => s + (j % W), 0) / cells.length + 0.5,
+      y: cells.reduce((s, j) => s + ((j / W) | 0), 0) / cells.length + 0.5,
+      state: 'fine', worst: 'fine', flooded: 0, eroded: 0, buried: 0,
+    };
+    this.things.push(t);
+    this.checkThings();
+    if (kind === 'bridge') this.reshaped();
+    this.event('place', cells[cells.length >> 1]);
+    return t;
+  }
+
+  // How each thing is faring. A house is flooded under water, undercut
+  // when the ground under it has dropped half a metre anywhere, and lost
+  // when it's dropped a metre and a half; a field counts its share flooded,
+  // washed away and buried in sand; a bridge's piers are scoured when the
+  // bed beside one has dropped a metre, and the bridge is stranded when no
+  // water runs under it. Undercut, lost and scoured stay so.
+  checkThings() {
+    const { z, h } = this.flow;
+    for (const t of this.things) {
+      let wet = 0, down = 0, up = 0, drop = 0;
+      t.watch.forEach((j, k) => {
+        const d = z[j] - t.base[k];
+        if (h[j] > 0.1) wet++;
+        if (d < -0.3) down++;
+        if (d > 0.3) up++;
+        if (-d > drop) drop = -d;
+      });
+      const n = t.watch.length || 1;
+      t.flooded = wet / n; t.eroded = down / n; t.buried = up / n;
+      let state = 'fine';
+      if (t.kind === 'house') {
+        state = drop > 1.5 ? 'lost' : drop > 0.5 ? 'undercut' : t.flooded > 0.3 ? 'flooded' : 'fine';
+      } else if (t.kind === 'field') {
+        state = t.eroded + t.buried > 0.25 ? 'damaged' : t.flooded > 0.25 ? 'flooded' : 'fine';
+      } else {
+        let under = 0;
+        for (const j of t.cells) if (h[j] > 0.2) under++;
+        state = drop > 1 ? 'scoured' : under === 0 ? 'stranded' : 'fine';
+      }
+      // The lasting harms stay, and only get worse.
+      if (LASTING[t.worst] && LASTING[t.worst] >= (LASTING[state] || 0)) state = t.worst;
+      if (LASTING[state]) t.worst = state;
+      t.state = state;
+    }
+  }
+
+  // Farmers keep their fields planted where the ground is dry.
+  tendFields() {
+    const { h, cover } = this.flow;
+    for (const t of this.things) if (t.kind === 'field') for (const j of t.cells) if (h[j] <= WET && cover[j] < CROP) cover[j] = CROP;
+  }
+
   // Moves the pump along the top edge: the river comes in over x.
   movePump(x) {
     const f = this.flow;
@@ -316,6 +409,7 @@ export class Simulation {
       hst.every *= 2;
     }
     hst.next = this.years + hst.every;
+    this.tendFields();
   }
 
   stats(m) {
@@ -412,6 +506,7 @@ export class Simulation {
   frame(tickYears = 0) {
     const f = this.flow;
     const m = this.measure();
+    this.checkThings();
     const yf = this.years % 1;
     return {
       W: this.W, H: this.H, cell: CELL_M, shoreY: this.shoreY,
@@ -438,6 +533,7 @@ export class Simulation {
       section: this.sectionData(),
       history: { inflow: this.history.inflow.slice(), sinuosity: this.history.sinuosity.slice(), every: this.history.every },
       events: this.takeEvents(),
+      things: this.things.map((t) => ({ id: t.id, kind: t.kind, x: t.x, y: t.y, state: t.state, line: t.line, piers: t.piers.map((j) => [(j % this.W) + 0.5, ((j / this.W) | 0) + 0.5]), flooded: t.flooded, eroded: t.eroded, buried: t.buried })),
     };
   }
 
@@ -483,6 +579,7 @@ export class Simulation {
       mudGround: f.fm[i],
       rockBelow: f.z[i] - f.rock[i],
       block: f.rock[i] >= f.z[i] - 0.01,
+      thing: (() => { const t = this.things.find((o) => o.cells.includes(i)); return t ? { kind: t.kind, state: t.state, flooded: t.flooded, eroded: t.eroded, buried: t.buried } : null; })(),
     };
   }
 
@@ -503,6 +600,8 @@ export class Simulation {
       mudSeaRate: this.mudSeaRate, lastMudSea: this.lastMudSea,
       toSeaRate: this.toSeaRate, sandRate: this.sandRate, lastToSea: this.lastToSea,
       nextEventId: this.nextEventId,
+      things: this.things.map((t) => ({ ...t, cells: t.cells.slice(), piers: t.piers.slice(), watch: t.watch.slice(), base: t.base.slice(), line: t.line && t.line.slice() })),
+      nextThingId: this.nextThingId,
       weather: this.weather.saveState(),
       flow: {
         z: f.z.slice(), h: f.h.slice(), qx: f.qx.slice(), qy: f.qy.slice(), cover: f.cover.slice(), rock: f.rock.slice(),
@@ -534,6 +633,7 @@ export class Simulation {
     if (s.mudSeaRate != null) { sim.mudSeaRate = s.mudSeaRate; sim.lastMudSea = s.lastMudSea; }
     sim.toSeaRate = s.toSeaRate; sim.sandRate = s.sandRate; sim.lastToSea = s.lastToSea;
     sim.nextEventId = s.nextEventId;
+    if (s.things) { sim.things = s.things.map((t) => ({ ...t, cells: t.cells.slice(), piers: t.piers.slice(), watch: t.watch.slice(), base: t.base.slice(), line: t.line && t.line.slice() })); sim.nextThingId = s.nextThingId; }
     sim.sentEvent = s.nextEventId - 1;
     sim.weather.restoreState(s.weather);
     sim.thalwegZ0 = sim.thalweg(f.z0, null);

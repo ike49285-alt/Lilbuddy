@@ -313,6 +313,9 @@ body {
   background: var(--line);
 }
 .size-row[hidden] { display: none; }
+.size-row.place-row { grid-template-columns: repeat(4, 1fr); }
+.things-line { margin: 8px 0 0; font: 400 13px/1.4 var(--font-body); color: var(--ink); }
+.things-line[hidden] { display: none; }
 .size-row button {
   min-height: 36px;
   padding: 0 3px;

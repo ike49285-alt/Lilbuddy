@@ -47,7 +47,7 @@
           <button type="button" class="tool" data-kind="raise" aria-pressed="false" aria-label="Raise: pile up sand" title="Raise: pile up sand"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><path d="M3 16h14M10 13V4M6.5 7.5 10 4l3.5 3.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Raise</span></button>
           <button type="button" class="tool" data-kind="lower" aria-pressed="false" aria-label="Lower: scoop sand away" title="Lower: scoop sand away"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><path d="M3 4h14M10 7v9M6.5 12.5 10 16l3.5-3.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Lower</span></button>
           <button type="button" class="tool" data-kind="dig" aria-pressed="false" aria-label="Dig a channel" title="Dig a channel"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><path d="M3 13c3-1 4 3 7 2s4-4 7-3M3 8c3-1 4 3 7 2s4-4 7-3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Dig</span></button>
-          <button type="button" class="tool" data-kind="block" aria-pressed="false" aria-label="Drop a block of rock" title="Drop a block of rock"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><path d="M4 15l2-8 5-3 5 4-1 7z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Block</span></button>
+          <button type="button" class="tool" data-kind="place" aria-pressed="false" aria-label="Place rock, a house, a field or a bridge" title="Place rock, a house, a field or a bridge"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><path d="M3 10 10 4l7 6M5 8.5V16h10V8.5M8.5 16v-4h3v4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Place</span></button>
           <button type="button" class="tool" data-kind="pump" aria-pressed="false" aria-label="Move the pump" title="Move the pump"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><path d="M4 3h12M10 3v4M10 7c-3 4-4 5.5-4 7.5a4 4 0 0 0 8 0c0-2-1-3.5-4-7.5z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Pump</span></button>
           <button type="button" class="tool" data-kind="storm" aria-pressed="false" aria-label="Park a storm" title="Park a storm"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><path d="M6 12a3.2 3.2 0 0 1 .4-6.4 4.2 4.2 0 0 1 8 1.4A2.6 2.6 0 0 1 14 12M10.5 10 8.5 14h3l-2 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Storm</span></button>
           <button type="button" class="tool" data-kind="section" aria-pressed="false" aria-label="Draw a cross-section" title="Draw a cross-section"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><path d="M3 17 17 3M3 13v6M1 17h4M17 1v6M15 3h4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Section</span></button>
@@ -56,6 +56,12 @@
     </div>
     <div class="tool-options" id="tool-options" hidden>
       <p class="tool-hint" id="tools-hint" aria-live="polite"></p>
+      <div class="size-row place-row" id="place-row" role="group" aria-label="What to place" hidden>
+        <button type="button" data-place="block" aria-pressed="false">Rock</button>
+        <button type="button" data-place="house" aria-pressed="true">House</button>
+        <button type="button" data-place="field" aria-pressed="false">Field</button>
+        <button type="button" data-place="bridge" aria-pressed="false">Bridge</button>
+      </div>
       <div class="size-row brush-row" id="brush-row" role="group" aria-label="Brush size" hidden>
         <button type="button" data-brush="small" aria-pressed="false">Small</button>
         <button type="button" data-brush="big" aria-pressed="true">Big</button>
@@ -100,6 +106,7 @@
         <div><dt>Mud to the sea</dt><dd id="s-mudsea">—</dd></div>
         <div><dt>Mud laid down</dt><dd id="s-mudlaid">—</dd></div>
       </dl>
+      <p class="things-line" id="things-line" hidden></p>
 
       <div class="sparks">
         <figure>

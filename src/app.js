@@ -283,9 +283,11 @@ matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { to
 
 function draw(f, force) {
   if (renderer.marked) renderer.marked.frame = f;
+  renderer.things = f.things;
   if (view3d && in3d) {
     renderer.paint(f);
     view3d.render(f);
+    if (f.things && f.things.length) startEffects();
   } else {
     renderer.draw(f);
   }
@@ -325,6 +327,20 @@ function fmtVolume(v) {
   return `${n0.format(v)} m³`;
 }
 
+// "Houses: 2 fine, 1 flooded. Fields: 1 fine."
+const THING_NAMES = { house: 'Houses', field: 'Fields', bridge: 'Bridges' };
+function thingsSummary(things) {
+  const parts = [];
+  for (const kind of ['house', 'field', 'bridge']) {
+    const of = things.filter((t) => t.kind === kind);
+    if (!of.length) continue;
+    const by = {};
+    for (const t of of) by[t.state] = (by[t.state] || 0) + 1;
+    parts.push(`${THING_NAMES[kind]}: ${Object.entries(by).map(([s, n]) => `${n} ${s}`).join(', ')}.`);
+  }
+  return parts.join(' ');
+}
+
 function drawSlow(f) {
   const st = f.stats;
   for (const [id, [key, scale, label]] of Object.entries(SLIDERS)) {
@@ -343,6 +359,8 @@ function drawSlow(f) {
   $('s-plants').textContent = `${n0.format(st.plants * 100)}%`;
   $('s-mudsea').textContent = st.mudToSea >= 0.5 ? `${n0.format(st.mudToSea)} m³/day` : 'none yet';
   $('s-mudlaid').textContent = st.mudLaid > 0 ? fmtVolume(st.mudLaid) : 'none yet';
+  $('things-line').hidden = !(f.things && f.things.length);
+  if (f.things && f.things.length) $('things-line').textContent = thingsSummary(f.things);
 
   if (!tokens) readTokens();
   const { water, soft, grid } = tokens;
@@ -508,7 +526,7 @@ function viewChanged() {
 }
 
 function composeView() {
-  if (in3d) view3d.render(last);
+  if (in3d) { view3d.render(last); if (last.things && last.things.length) startEffects(); }
   else renderer.compose(last);
   composedKey = viewKey();
 }
@@ -770,9 +788,12 @@ function dropAt(wx, wy) {
   }
   else if (armed === 'block') worker.postMessage({ type: 'block', i });
   else if (armed === 'pump') worker.postMessage({ type: 'pump', x: wx });
+  else if (armed === 'house' || armed === 'field') worker.postMessage({ type: 'place', kind: armed, i });
 }
 
-const SHAPERS = new Set(['raise', 'lower', 'dig', 'section']);
+const SHAPERS = new Set(['raise', 'lower', 'dig', 'section', 'bridge']);
+const PLACES = new Set(['block', 'house', 'field', 'bridge']);
+let placeKind = 'house';
 const BRUSH_MS = 100;
 let brushSize = 'big';
 let brushStrength = 'strong';
@@ -781,13 +802,18 @@ let shaping = null;
 
 function setArmed(kind) {
   armed = kind;
-  for (const b of document.querySelectorAll('.tool-rail .tool')) b.setAttribute('aria-pressed', b.dataset.kind === kind ? 'true' : 'false');
+  for (const b of document.querySelectorAll('.tool-rail .tool')) b.setAttribute('aria-pressed', b.dataset.kind === kind || (b.dataset.kind === 'place' && PLACES.has(kind)) ? 'true' : 'false');
   $('tool-options').hidden = !kind;
+  $('place-row').hidden = !PLACES.has(kind);
+  for (const b of document.querySelectorAll('#place-row button')) b.setAttribute('aria-pressed', b.dataset.place === kind ? 'true' : 'false');
   $('brush-row').hidden = !(kind === 'raise' || kind === 'lower');
   $('strength-row').hidden = !(kind === 'raise' || kind === 'lower');
   const names = {
     raise: 'Hold a finger on the map to pile sand there.', lower: 'Hold a finger on the map to scoop sand away.',
     dig: 'Draw a line on the map to dig a channel.', block: 'Tap the map to drop a block of rock there.',
+    house: 'Tap the map to put a house there. It turns amber when flooded, red when the river undercuts it.',
+    field: 'Tap the map to plant a field there. It turns amber when flooded or when the river cuts into it or buries it in sand.',
+    bridge: 'Draw a line across the river to build a bridge, with piers in it. It turns red when the river scours round its piers, amber when the river leaves it.',
     storm: 'Tap the map to park a storm over the valley.', pump: 'Tap the map to move the pump along the top edge, above where you tap.', section: 'Draw a line across the river to see its cross-section.',
   };
   $('tools-hint').textContent = kind ? `${names[kind]} Two fingers still move the map.` : '';
@@ -806,12 +832,12 @@ function startShaping(e) {
   const world = worldAt(e.clientX, e.clientY);
   shaping = { kind: armed, world, pts: world ? [world] : [], timer: null };
   // While shaping the ground, the river's bed runs in real time.
-  if (armed !== 'section') worker.postMessage({ type: 'hold', on: true });
+  if (armed !== 'section' && armed !== 'bridge') worker.postMessage({ type: 'hold', on: true });
   if (armed === 'raise' || armed === 'lower') {
     // Remember the ground as it was, to outline what the stroke moves.
     renderer.marked = last ? { base: Float32Array.from(last.z), frame: last, box: null, until: Infinity } : null;
   }
-  if (armed === 'dig' || armed === 'section') {
+  if (armed === 'dig' || armed === 'section' || armed === 'bridge') {
     renderer.digPath = shaping.pts;
     renderer.digKind = armed;
     startEffects();
@@ -839,7 +865,7 @@ function moveShaping(e) {
   const world = worldAt(e.clientX, e.clientY);
   if (!world) return;
   shaping.world = world;
-  if (shaping.kind === 'dig' || shaping.kind === 'section') {
+  if (shaping.kind === 'dig' || shaping.kind === 'section' || shaping.kind === 'bridge') {
     const p = shaping.pts[shaping.pts.length - 1];
     if (!p || Math.hypot(world[0] - p[0], world[1] - p[1]) >= 0.4) shaping.pts.push(world);
     startEffects();
@@ -849,10 +875,11 @@ function moveShaping(e) {
 function endShaping(cancelled) {
   if (!shaping) return;
   clearInterval(shaping.timer);
-  if (shaping.kind !== 'section') worker.postMessage({ type: 'hold', on: false });
+  if (shaping.kind !== 'section' && shaping.kind !== 'bridge') worker.postMessage({ type: 'hold', on: false });
   if (renderer.marked) renderer.marked.until = performance.now() + 1800;
   if (!cancelled && shaping.pts.length >= 2) {
     if (shaping.kind === 'dig') worker.postMessage({ type: 'dig', points: shaping.pts });
+    if (shaping.kind === 'bridge') worker.postMessage({ type: 'place', kind: 'bridge', points: [shaping.pts[0], shaping.pts[shaping.pts.length - 1]] });
     if (shaping.kind === 'section') {
       worker.postMessage({ type: 'section', points: shaping.pts });
       showTab('profile');
@@ -893,7 +920,13 @@ for (const b of document.querySelectorAll('#brush-row button')) {
 }
 
 for (const b of document.querySelectorAll('.tool-rail .tool')) {
-  b.addEventListener('click', () => setArmed(armed === b.dataset.kind ? null : b.dataset.kind));
+  b.addEventListener('click', () => {
+    const kind = b.dataset.kind === 'place' ? placeKind : b.dataset.kind;
+    setArmed(armed === kind || (b.dataset.kind === 'place' && PLACES.has(armed)) ? null : kind);
+  });
+}
+for (const b of document.querySelectorAll('#place-row button')) {
+  b.addEventListener('click', () => { placeKind = b.dataset.place; setArmed(placeKind); });
 }
 
 // --- tap to inspect ------------------------------------------------------------
@@ -935,6 +968,11 @@ function renderInspect(info) {
   const r = info.rate;
   if (Math.abs(r) > 0.01) fact(r < 0 ? 'Cutting' : 'Filling', `${n1.format(Math.abs(r) * 100)} cm a year`);
   fact('Plant cover', `${n0.format(info.cover * 100)}%`);
+  const t = info.thing;
+  if (t) {
+    const what = { house: 'A house', field: 'A field', bridge: 'A bridge' }[t.kind];
+    fact(what, t.kind === 'field' ? `${t.state}: ${n0.format(t.flooded * 100)}% flooded, ${n0.format(t.eroded * 100)}% washed away, ${n0.format(t.buried * 100)}% buried` : t.state);
+  }
 }
 
 window.addEventListener('resize', () => { if (last) draw(last, true); updateScale(); });

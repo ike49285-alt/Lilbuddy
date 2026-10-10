@@ -4,7 +4,7 @@
 // and cross-sections as charts.
 
 const MAX_ZOOM = 8;
-const EFFECT_MS = { storm: 5000, block: 1800, dig: 1600, pump: 1800 };
+const EFFECT_MS = { storm: 5000, block: 1800, dig: 1600, pump: 1800, place: 1800 };
 
 // Ground: sand and gravel by how high above the water table it stands
 // (darker and damper low down), grass and shrubs over it, grey rock.
@@ -252,6 +252,7 @@ export class MapRenderer {
       ctx.fillRect(ipx - (ihalf + 1) * s, ipy, (2 * ihalf + 2) * s, Math.max(3 * dpr, 0.8 * s));
     }
     if (f.section) this.drawSectionLine(ctx, f.section.line, s, dpr);
+    if (f.things && f.things.length) drawThings(ctx, f.things, (wx, wy) => ({ x: (wx - this.x0) * s, y: (wy - this.y0) * s, s }), dpr);
   }
 
   drawSectionLine(ctx, line, s, dpr) {
@@ -293,7 +294,12 @@ export class MapRenderer {
     const now = performance.now();
     this.effects = this.effects.filter((e) => now - e.t0 < e.dur);
     const marking = this.marked && now - this.marked.until < 0;
-    if (!this.effects.length && !this.digPath && !this.brush && !marking) return false;
+    // In 3D the things to protect are drawn here, over the valley.
+    const things = this.projector && this.things && this.things.length ? this.things : null;
+    if (!this.effects.length && !this.digPath && !this.brush && !marking) {
+      if (things) drawThings(ctx, things, (wx, wy) => this.projector(wx, wy, w, h), dpr);
+      return false;
+    }
     const vw = this.W / this.zoom;
     const flatS = w / vw;
     const at = this.projector
@@ -318,6 +324,7 @@ export class MapRenderer {
         ctx.beginPath(); ctx.arc(c.x, c.y, r * (0.3 + 0.7 * Math.min(1, t * 2)), 0, Math.PI * 2); ctx.stroke();
       }
     }
+    if (things) drawThings(ctx, things, at, dpr);
     if (marking) this.drawMarked(ctx, at, dpr, Math.min(1, (this.marked.until - now) / 600));
     this.drawShaping(ctx, at, dpr);
     return true;
@@ -353,7 +360,7 @@ export class MapRenderer {
   drawShaping(ctx, at, dpr) {
     const path = this.digPath;
     if (path && path.length) {
-      const section = this.digKind === 'section';
+      const section = this.digKind === 'section' || this.digKind === 'bridge';
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
       const pts = section ? [path[0], path[path.length - 1]] : path;
@@ -428,6 +435,72 @@ export function drawSpark(canvas, values, { color, fill, grid, zeroLine = null }
 
 // A profile chart: the bed now (filled), the water over it, and the bed at
 // the start (dashed), against distance in metres. Returns the y range drawn.
+// How a thing to protect is faring, by colour: fine, in trouble, harmed, gone.
+export const THING_COLOURS = {
+  fine: '#ffffff', flooded: '#f2b233', stranded: '#f2b233', damaged: '#f2b233',
+  undercut: '#e0552b', scoured: '#e0552b', lost: '#8c1d1d',
+};
+
+// Houses, fields and bridges, drawn over the map. at() takes a point in
+// cells to one on the canvas ({x, y, s}: s is pixels per cell there).
+export function drawThings(ctx, things, at, dpr) {
+  ctx.save();
+  ctx.lineJoin = 'round';
+  for (const t of things) {
+    const col = THING_COLOURS[t.state] || '#ffffff';
+    if (t.kind === 'bridge' && t.line) {
+      const a = at(t.line[0], t.line[1]), b = at(t.line[2], t.line[3]);
+      if (!a || !b) continue;
+      ctx.lineCap = 'butt';
+      for (const [wd, st] of [[7, 'rgba(29,40,39,0.8)'], [4, col]]) {
+        ctx.lineWidth = Math.max(wd * dpr, (wd / 5) * a.s);
+        ctx.strokeStyle = st;
+        ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+      }
+      ctx.fillStyle = 'rgba(29,40,39,0.9)';
+      for (const [x, y] of t.piers) {
+        const p = at(x, y);
+        if (p) { const r = Math.max(2.5 * dpr, 0.5 * p.s); ctx.fillRect(p.x - r, p.y - r, 2 * r, 2 * r); }
+      }
+      continue;
+    }
+    const c = at(t.x, t.y);
+    if (!c) continue;
+    if (t.kind === 'field') {
+      const half = Math.max(8 * dpr, 4 * c.s);
+      ctx.lineWidth = 1.5 * dpr;
+      ctx.strokeStyle = col;
+      ctx.setLineDash([4 * dpr, 3 * dpr]);
+      ctx.strokeRect(c.x - half, c.y - half, 2 * half, 2 * half);
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 0.6;
+      ctx.beginPath();
+      for (let k = -2; k <= 2; k++) { const o = (k * half) / 2.5; ctx.moveTo(c.x - half, c.y + o); ctx.lineTo(c.x + half, c.y + o); }
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+      continue;
+    }
+    // A house: a box with a roof, the house's own colour its state's.
+    const r = Math.max(6 * dpr, 1.5 * c.s);
+    ctx.lineWidth = 1.5 * dpr;
+    ctx.strokeStyle = 'rgba(29,40,39,0.9)';
+    ctx.fillStyle = col;
+    ctx.beginPath();
+    ctx.moveTo(c.x - r * 0.8, c.y + r * 0.8);
+    ctx.lineTo(c.x - r * 0.8, c.y - r * 0.1);
+    ctx.lineTo(c.x, c.y - r * 0.9);
+    ctx.lineTo(c.x + r * 0.8, c.y - r * 0.1);
+    ctx.lineTo(c.x + r * 0.8, c.y + r * 0.8);
+    ctx.closePath();
+    ctx.fill(); ctx.stroke();
+    if (t.state === 'lost') {
+      ctx.strokeStyle = '#ffffff';
+      ctx.beginPath(); ctx.moveTo(c.x - r * 0.5, c.y - r * 0.2); ctx.lineTo(c.x + r * 0.5, c.y + r * 0.6); ctx.moveTo(c.x + r * 0.5, c.y - r * 0.2); ctx.lineTo(c.x - r * 0.5, c.y + r * 0.6); ctx.stroke();
+    }
+  }
+  ctx.restore();
+}
+
 export function drawProfile(canvas, data, { bed, bedFill, water, start, grid, text }, labels) {
   const dpr = Math.min(2, window.devicePixelRatio || 1);
   const w = Math.round(canvas.clientWidth * dpr), h = Math.round(canvas.clientHeight * dpr);

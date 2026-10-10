@@ -112,7 +112,17 @@ it down; what it does, and a brush's size and strength, show under the map.
   build stays put until you let go; the ground you've moved is outlined.
   Lower stops at the bedrock.
 - **Dig:** cuts a channel along a line you draw.
-- **Block:** drops a block of rock the river can't wear away.
+- **Place:** puts down something for the river to threaten, or to stop it:
+  - **Rock:** a block of rock the river can't wear away.
+  - **House:** turns amber when flooded, red when the river undercuts it,
+    and is lost if the ground under it goes.
+  - **Field:** a crop the farmer keeps planted. It turns amber when it floods
+    or when the river cuts into it or buries it in sand.
+  - **Bridge:** drawn as a line across the river, with rock piers in it. It
+    turns red when the river scours round its piers and amber when the river
+    leaves it high and dry.
+
+  The River tab says how they're all faring, and tapping one tells you.
 - **Pump:** moves the pump along the top edge, above where you tap, like
   moving the hose on a stream table.
 - **Storm:** parks a storm over the valley for a day and a half, and slows

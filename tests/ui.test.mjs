@@ -74,12 +74,30 @@ const inked = await page.evaluate(() => {
 check(inked > 0.1, 'the long profile is drawn', `${(inked * 100).toFixed(0)}% of the chart`);
 await page.screenshot({ path: 'ui-profile.png', fullPage: false });
 // Block and Storm by tap.
-await page.tap('.tool-rail [data-kind="block"]');
+await page.tap('.tool-rail [data-kind="place"]');
+await page.tap('#place-row [data-place="block"]');
 const c = at(64.5 / 128, 60.5 / 256);
 await page.touchscreen.tap(c.x, c.y);
 await page.waitForTimeout(600);
 const blk = await page.evaluate(() => { const f = window.Headwaters.frame(); return f.rock[60 * f.W + 64]; });
 check(blk === 1, 'Block drops a block of rock where tapped');
+// A house by tap, and a bridge by drawing a line across.
+await page.tap('#place-row [data-place="house"]');
+const hc = at(30.5 / 128, 150.5 / 256);
+await page.touchscreen.tap(hc.x, hc.y);
+await page.waitForTimeout(600);
+await page.tap('#place-row [data-place="bridge"]');
+const ba = at(30 / 128, 165 / 256), bb = at(98 / 128, 165 / 256);
+await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: ba.x, y: ba.y }] });
+for (let k = 1; k <= 10; k++) await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: ba.x + (bb.x - ba.x) * k / 10, y: ba.y }] });
+await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+await page.waitForTimeout(1000);
+const things = await page.evaluate(() => window.Headwaters.frame().things);
+const house = things.find((t) => t.kind === 'house'), bridge = things.find((t) => t.kind === 'bridge');
+check(house && Math.abs(house.x - 31) < 2 && Math.abs(house.y - 151) < 2, 'Place puts a house where tapped', house ? house.state : 'none');
+check(bridge && bridge.piers.length >= 10, 'and draws a bridge with piers across', bridge ? `${bridge.piers.length} piers, ${bridge.state}` : 'none');
+const line = await page.evaluate(() => document.getElementById('things-line').textContent);
+check(/Houses: 1/.test(line) && /Bridges: 1/.test(line), 'and the River tab says how they fare', line);
 await page.tap('.tool-rail [data-kind="storm"]');
 await page.touchscreen.tap(c.x, c.y);
 await page.waitForTimeout(800);

@@ -170,6 +170,7 @@ export function createHost(post) {
         break;
       case 'dig': sim.dig(msg.points || []); changed(); break;
       case 'block': sim.block(msg.i); changed(); break;
+      case 'place': sim.place(msg.kind, msg.i, msg.points); changed(); break;
       case 'storm': sim.storm(msg.i); changed(); break;
       case 'pump': sim.movePump(msg.x); changed(); break;
       case 'section': sim.setSection(msg.points); changed(); break;

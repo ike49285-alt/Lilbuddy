@@ -130,6 +130,25 @@ const sum = (a) => { let s = 0; for (const v of a) s += v; return s; };
   check(pc('beside') > pc('far') + 3 && pc('beside') > pc('channel') + 3, 'floods leave mud beside the channel, more than far off or in it', `mud on top: beside ${pc('beside').toFixed(0)}%, far ${pc('far').toFixed(0)}%, channel ${pc('channel').toFixed(0)}%`);
 }
 
+// Things to protect: a house on the channel's bank is undercut, one far off
+// stays fine, and they come back through a save.
+{
+  const s = new Simulation('prof-1');
+  const W = s.W;
+  while (s.years < 0.3) s.step(20000);
+  const line = s.measure().line[100];
+  const near = s.place('house', 100 * W + line + 3), far = s.place('house', 100 * W + 10);
+  const field = s.place('field', 120 * W + 20);
+  const bridge = s.place('bridge', 0, [[line - 12, 140], [line + 12, 140]]);
+  check(near && far && field && bridge && field.cells.length === 64 && bridge.piers.length >= 5 && bridge.piers.every((j) => s.flow.rock[j] >= s.flow.z[j] - 1e-6), 'houses, fields and bridges go down, a bridge with piers of rock');
+  while (s.years < 0.8) s.step(20000);
+  const fr = s.frame(0);
+  const st = (t) => fr.things.find((o) => o.id === t.id).state;
+  check(['undercut', 'lost'].includes(st(near)) && st(far) === 'fine', 'the river undercuts a house on its bank and leaves one far off', `on the bank ${st(near)}, far off ${st(far)}`);
+  const r = Simulation.fromState(structuredClone(s.saveState()));
+  check(r.things.length === 4 && r.stateHash() === s.stateHash() && r.frame(0).things.map((t) => t.state).join() === fr.things.map((t) => t.state).join(), 'and they come back through a save');
+}
+
 // The pump moves along the top edge, and the river comes in where it is.
 {
   const s = new Simulation('pump-1');
