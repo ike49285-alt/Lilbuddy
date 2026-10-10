@@ -544,7 +544,6 @@ function set3d(on) {
   renderer.projector = on ? (wx, wy, w, h) => view3d.project(wx, wy, w, h) : null;
   glCanvas.hidden = !on;
   canvas.hidden = on;
-  $('map').classList.toggle('in3d', on);
   $('map-frame').classList.toggle('in3d', on);
   $('view-3d').setAttribute('aria-pressed', on ? 'true' : 'false');
   $('view-3d').textContent = on ? '2D' : '3D';

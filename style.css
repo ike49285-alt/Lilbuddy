@@ -8,7 +8,6 @@
   --line: #ccd4cf;
   --water: #2a6c9c;
   --water-soft: rgba(42, 108, 156, 0.14);
-  --ice: #8aa3b4;
   --chip: #dde5e1;
   --warn: #b5482f;
   --bar: rgba(247, 248, 245, 0.98);
@@ -27,7 +26,6 @@
     --line: #2b3739;
     --water: #6fb1df;
     --water-soft: rgba(111, 177, 223, 0.16);
-    --ice: #a9bfcc;
     --chip: #233032;
     --warn: #ef8a6f;
     --bar: rgba(24, 33, 34, 0.98);
@@ -42,7 +40,6 @@
   --line: #2b3739;
   --water: #6fb1df;
   --water-soft: rgba(111, 177, 223, 0.16);
-  --ice: #a9bfcc;
   --chip: #233032;
   --warn: #ef8a6f;
   --bar: rgba(24, 33, 34, 0.98);
@@ -69,18 +66,6 @@ body {
   gap: 12px;
 }
 
-.chip {
-  font: 500 12px/1 var(--font-display);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  padding: 6px 8px;
-  border-radius: 4px;
-  background: var(--chip);
-  color: var(--muted);
-  white-space: nowrap;
-}
-.chip.glacial { color: var(--ice); }
-
 .layout {
   display: grid;
   grid-template-columns: 1fr;
@@ -92,7 +77,7 @@ body {
   display: grid;
   gap: 8px;
   margin: 0 auto;
-  width: min(100%, calc(62vh * 128 / 256));
+  width: min(100%, calc(62vh * 128 / 256 + 2 * 54px));
   min-width: 0;
 }
 .map {
@@ -107,25 +92,35 @@ body {
   background: #2a5e84;
 }
 .map canvas { display: block; width: 100%; height: 100%; }
+
+/* The map with its controls in rails either side, so nothing covers the
+   river: zoom, reset, 3D and north on the right; Land/Layers and the scale
+   on the left. The layer menu and the inspect card open below. */
+.map-frame {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr) 48px;
+  gap: 6px;
+  align-items: start;
+}
+.map-frame .map { margin: 0; }
+.rail { display: flex; flex-direction: column; align-items: center; gap: 8px; min-width: 0; }
+.rail.left { height: 100%; justify-content: space-between; }
 .north, .scale {
-  position: absolute;
+  width: 44px;
+  box-sizing: border-box;
   font: 600 12px/1 var(--font-display);
   letter-spacing: 0.08em;
-  color: #1d2827;
-  background: rgba(247, 248, 245, 0.82);
+  color: var(--ink);
+  background: var(--panel);
   border-radius: 4px;
   padding: 5px 7px;
+  box-shadow: 0 0 0 1px var(--line);
 }
-.north { top: 8px; right: 8px; display: flex; gap: 3px; }
-/* Above the map-mode switch, which takes the bottom edge. */
-.scale { bottom: 52px; left: 8px; display: flex; align-items: center; gap: 6px; }
-.scale .bar {
-  display: inline-block;
-  height: 5px;
-  border: 1.5px solid #1d2827;
-  border-top: 0;
-  box-sizing: border-box;
-}
+.north { display: flex; justify-content: center; gap: 3px; }
+/* The scale: a vertical bar, the map's height scale is its width scale. */
+.scale { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 6px 2px; font-size: 11px; text-align: center; }
+.scale .bar { display: inline-block; width: 6px; height: 40px; border: 1.5px solid currentColor; border-right: 0; box-sizing: border-box; }
+.map-frame.in3d .scale { visibility: hidden; }
 
 .panel { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 
@@ -178,18 +173,6 @@ body {
 }
 
 .key .ramp { height: 10px; border-radius: 3px; box-shadow: 0 0 0 1px var(--line); }
-.ground-key {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 6px 10px;
-  font-size: 12px;
-  color: var(--muted);
-}
-.ground-key li { display: flex; align-items: center; gap: 6px; min-width: 0; white-space: nowrap; }
-.ground-key .swatch { width: 12px; height: 12px; border-radius: 3px; flex: none; box-shadow: 0 0 0 1px var(--line); }
 .ground-line { margin: 4px 0 0; font-size: 13px; color: var(--ink); }
 .key .ticks {
   display: flex;
@@ -236,52 +219,40 @@ body {
 
 @media (min-width: 860px) {
   .layout { grid-template-columns: auto minmax(320px, 420px); justify-content: center; gap: 28px; }
-  .map-col { width: min(100%, calc((100vh - 170px) * 128 / 256)); margin: 0; }
+  .map-col { width: min(100%, calc((100vh - 170px) * 128 / 256 + 2 * 54px)); margin: 0; }
 }
 
-/* On-map labels and controls share the north arrow's plate. */
-.chip.on-map {
-  position: absolute;
-  top: 8px;
-  left: 8px;
-  background: rgba(247, 248, 245, 0.85);
-  color: #1d2827;
-  max-width: calc(100% - 70px);
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.chip.on-map.glacial { color: #3d6a86; }
+/* Land or Layers, stacked in the left rail. */
 .map-mode {
-  position: absolute;
-  right: 8px;
-  bottom: 8px;
   display: flex;
+  flex-direction: column;
+  width: 44px;
   border-radius: 6px;
   overflow: hidden;
-  box-shadow: 0 0 0 1px rgba(29, 40, 39, 0.25);
+  box-shadow: 0 0 0 1px var(--line);
 }
 .map-mode button {
-  min-height: 36px;
-  padding: 0 8px;
+  min-height: 44px;
+  padding: 0;
   border: 0;
-  background: rgba(247, 248, 245, 0.85);
-  color: #1d2827;
-  font: 600 12px/1 var(--font-display);
-  letter-spacing: 0.08em;
+  border-top: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--ink);
+  font: 600 10px/1 var(--font-display);
+  letter-spacing: 0.02em;
   text-transform: uppercase;
   white-space: nowrap;
   cursor: pointer;
 }
-.map-mode button[aria-pressed="true"] { background: #1d2827; color: #f7f8f5; }
-/* The layers menu opens above the mode switch. */
+.map-mode button:first-child { border-top: 0; }
+.map-mode button[aria-pressed="true"] { background: var(--ink); color: var(--panel); }
+#mode-layers { white-space: normal; line-height: 1.1; }
+/* The layers menu opens under the map. */
 .layer-menu {
-  position: absolute;
-  right: 8px;
-  bottom: 52px;
   display: grid;
   border-radius: 6px;
   overflow: hidden;
-  box-shadow: 0 0 0 1px rgba(29, 40, 39, 0.25), 0 4px 14px rgba(0, 0, 0, 0.18);
+  box-shadow: 0 0 0 1px var(--line);
 }
 .layer-menu[hidden] { display: none; }
 .layer-menu button {
@@ -289,8 +260,8 @@ body {
   padding: 0 16px;
   border: 0;
   border-top: 1px solid rgba(29, 40, 39, 0.12);
-  background: rgba(247, 248, 245, 0.96);
-  color: #1d2827;
+  background: var(--panel);
+  color: var(--ink);
   font: 600 12px/1 var(--font-display);
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -298,7 +269,7 @@ body {
   cursor: pointer;
 }
 .layer-menu button:first-child { border-top: 0; }
-.layer-menu button[aria-checked="true"] { background: #1d2827; color: #f7f8f5; }
+.layer-menu button[aria-checked="true"] { background: var(--ink); color: var(--panel); }
 .layer-key[hidden] { display: none; }
 .layer-key .layer-name { margin: 0 0 6px; font: 600 12px/1 var(--font-display); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
 .map canvas { cursor: crosshair; touch-action: pan-y; }
@@ -308,10 +279,7 @@ body {
 .map canvas.dragging { cursor: grabbing; }
 .map canvas[hidden] { display: none; }
 .map canvas.gl { cursor: grab; touch-action: none; background: #9ebdd6; }
-.map.in3d .scale { display: none; }
 #north-arrow { display: inline-block; transition: transform 0.08s linear; }
-.zoom .view-3d { font: 700 13px/1 var(--font-display); letter-spacing: 0.04em; }
-.zoom .view-3d[hidden] { display: none; }
 
 /* Disaster effects sit over the map and let taps through. */
 .map canvas.fx { position: absolute; inset: 0; pointer-events: none; cursor: default; }
@@ -348,7 +316,6 @@ body {
 .tray-head { margin: 4px 0 0; color: var(--muted); font: 600 11px/1 var(--font-display); letter-spacing: 0.08em; text-transform: uppercase; }
 .tools .shape-row .tool[aria-pressed="true"] { background: #2b6c9e; }
 .size-row.brush-row { grid-template-columns: 1fr 1fr; }
-.size-row.seed-row { grid-auto-flow: column; grid-auto-columns: 1fr; grid-template-columns: none; }
 .size-row button[hidden] { display: none; }
 .wet-row {
   display: grid;
@@ -393,18 +360,14 @@ body {
   cursor: pointer;
 }
 .event-note .more { color: var(--muted); margin-left: 6px; white-space: nowrap; }
-.event-note.catastrophic { border-color: #b8461f; }
 
-/* Zoom buttons, stacked on the right under the north arrow. */
+/* Zoom buttons, stacked in the right rail under the north arrow, and 3D. */
 .zoom {
-  position: absolute;
-  top: 40px;
-  right: 8px;
   display: flex;
   flex-direction: column;
   border-radius: 6px;
   overflow: hidden;
-  box-shadow: 0 0 0 1px rgba(29, 40, 39, 0.25);
+  box-shadow: 0 0 0 1px var(--line);
 }
 .zoom button {
   width: 44px;
@@ -413,28 +376,29 @@ body {
   place-items: center;
   border: 0;
   border-top: 1px solid rgba(29, 40, 39, 0.15);
-  background: rgba(247, 248, 245, 0.85);
-  color: #1d2827;
+  background: var(--panel);
+  color: var(--ink);
   font: 500 22px/1 var(--font-body);
   cursor: pointer;
 }
 .zoom button:first-child { border-top: 0; }
-.zoom button:disabled { color: rgba(29, 40, 39, 0.35); cursor: default; }
+.zoom button:disabled { color: var(--line); cursor: default; }
 .zoom button:focus-visible { outline: 2px solid var(--water); outline-offset: -2px; }
+.view-3d {
+  width: 44px; height: 44px; border: 0; border-radius: 6px; box-shadow: 0 0 0 1px var(--line);
+  background: var(--panel); color: var(--ink);
+  font: 700 13px/1 var(--font-display); letter-spacing: 0.04em; cursor: pointer;
+}
+.view-3d[aria-pressed="true"] { background: var(--ink); color: var(--panel); }
 
+/* What's at a tapped spot, under the map. */
 .inspect {
-  position: absolute;
-  left: 8px;
-  right: 8px;
-  bottom: 52px;
-  max-height: 55%;
-  overflow: auto;
   box-sizing: border-box;
   padding: 10px 12px;
   border-radius: 6px;
-  background: var(--bar);
+  background: var(--panel);
   color: var(--ink);
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.25);
+  box-shadow: 0 0 0 1px var(--line);
 }
 .inspect-head {
   display: flex;
@@ -465,9 +429,6 @@ body {
 .facts div { display: flex; justify-content: space-between; gap: 8px; min-width: 0; }
 .facts dt { color: var(--muted); }
 .facts dd { margin: 0; font-family: var(--font-data); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.here-life { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 4px; font-size: 13px; }
-.here-life li { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.here-life .empty { color: var(--muted); }
 
 .tabs {
   display: grid;
@@ -496,58 +457,6 @@ body {
 }
 .pane { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 .pane[hidden] { display: none; }
-
-.swatch {
-  flex: none;
-  width: 12px;
-  height: 12px;
-  border-radius: 3px;
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.15);
-}
-.sp-name { font-style: italic; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sp-form { color: var(--muted); white-space: nowrap; }
-
-.species { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
-.species li + li { border-top: 1px solid var(--line); }
-.species button {
-  width: 100%;
-  min-height: 48px;
-  display: grid;
-  grid-template-columns: 12px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 4px 10px;
-  padding: 6px 12px;
-  border: 0;
-  background: var(--panel);
-  color: var(--ink);
-  text-align: left;
-  font: 400 14px/1.25 var(--font-body);
-  cursor: pointer;
-}
-.species button[aria-pressed="true"] { background: var(--chip); }
-.species .sp-text { display: flex; flex-direction: column; min-width: 0; }
-.species .sp-form { font-size: 12px; }
-.species .sp-range { font: 400 13px/1 var(--font-data); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.trend-up { color: #3f8a52; }
-.trend-down { color: var(--warn); }
-
-.species-card {
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--panel);
-  padding: 12px;
-  display: grid;
-  gap: 8px;
-}
-.species-card h3 { margin: 0; display: flex; align-items: center; gap: 8px; font: italic 500 17px/1.2 var(--font-body); }
-.species-card p { margin: 0; color: var(--muted); font-size: 13px; }
-.traits { display: grid; gap: 6px; margin: 0; }
-.traits div { display: grid; grid-template-columns: 8.5em minmax(0, 1fr) auto; align-items: center; gap: 8px; font-size: 13px; }
-.traits dt { color: var(--muted); }
-.traits dd { margin: 0; font-family: var(--font-data); font-size: 12px; white-space: nowrap; }
-.meter { height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
-.meter span { display: block; height: 100%; background: var(--water); }
-
 
 /* Time bar — fixed to the bottom, after Universe Sandbox's: play/pause, a
    log-scale rate slider between − and +, a rate list, and a note when the
@@ -650,7 +559,6 @@ body {
   .tb-slide { order: 1; }
   .tb-status { order: 2; flex-direction: column; justify-content: center; min-width: 16ch; }
   .timebar select { max-width: none; }
-  .map { width: min(100%, calc((100vh - 140px) * 128 / 256)); }
 }
 
 /* The profile and cross-section charts. */
@@ -669,53 +577,4 @@ body {
 .legend .lg-start { border-top-style: dashed; border-color: var(--muted); }
 .tool-row.shape-row { grid-template-columns: repeat(4, 1fr); }
 .tool-row.shape-row:nth-of-type(2) { grid-template-columns: repeat(2, 1fr); }
-
-/* The map with its controls in rails either side, so nothing covers the
-   river: zoom, reset, 3D and north on the right; Land/Layers and the scale
-   on the left. The layer menu and the inspect card open below. */
-.map-col { width: min(100%, calc(62vh * 128 / 256 + 2 * 54px)); }
-.map-frame {
-  display: grid;
-  grid-template-columns: 48px minmax(0, 1fr) 48px;
-  gap: 6px;
-  align-items: start;
-}
-.map-frame .map { margin: 0; }
-.rail { display: flex; flex-direction: column; align-items: center; gap: 8px; min-width: 0; }
-.rail.left { height: 100%; justify-content: space-between; }
-.rail .north, .rail .zoom, .rail .map-mode, .rail .scale { position: static; }
-.rail .north { box-shadow: 0 0 0 1px var(--line); background: var(--panel); color: var(--ink); width: 44px; box-sizing: border-box; justify-content: center; }
-.rail .zoom, .rail .map-mode { box-shadow: 0 0 0 1px var(--line); }
-.rail .zoom button, .rail .view-3d { background: var(--panel); color: var(--ink); }
-.rail .zoom button:disabled { color: var(--line); }
-.rail .view-3d {
-  width: 44px; height: 44px; border: 0; border-radius: 6px; box-shadow: 0 0 0 1px var(--line);
-  font: 700 13px/1 var(--font-display); letter-spacing: 0.04em; cursor: pointer;
-}
-.rail .view-3d[aria-pressed="true"] { background: var(--ink); color: var(--panel); }
-.rail .map-mode { flex-direction: column; width: 44px; }
-.rail .map-mode button {
-  min-height: 44px; padding: 0; background: var(--panel); color: var(--ink);
-  font-size: 11px; letter-spacing: 0.04em; border-top: 1px solid var(--line);
-}
-.rail .map-mode button:first-child { border-top: 0; }
-.rail .map-mode button[aria-pressed="true"] { background: var(--ink); color: var(--panel); }
-#mode-layers { white-space: normal; line-height: 1.1; }
-.rail .map-mode button { font-size: 10px; letter-spacing: 0.02em; }
-/* The scale: a vertical bar, the map's height scale is its width scale. */
-.rail .scale {
-  flex-direction: column; gap: 4px; padding: 6px 2px; width: 44px; box-sizing: border-box;
-  background: var(--panel); color: var(--ink); box-shadow: 0 0 0 1px var(--line); font-size: 11px; text-align: center;
-}
-.rail .scale .bar { width: 6px; height: 40px; border: 1.5px solid currentColor; border-right: 0; }
-.map-frame.in3d .scale { visibility: hidden; }
-.layer-menu { position: static; box-shadow: 0 0 0 1px var(--line); }
-.layer-menu button { background: var(--panel); color: var(--ink); }
-.layer-menu button[aria-checked="true"] { background: var(--ink); color: var(--panel); }
-.map-col > .inspect { position: static; max-height: none; box-shadow: 0 0 0 1px var(--line); background: var(--panel); }
 .tb-status #phase { text-transform: none; }
-
-@media (min-width: 860px) {
-  .map-col { width: min(100%, calc((100vh - 170px) * 128 / 256 + 2 * 54px)); }
-  .map { width: 100%; }
-}

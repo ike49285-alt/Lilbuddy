@@ -35,6 +35,7 @@ const N_BARE = 0.03;              // Manning's n on bare sand and gravel
 const N_PLANT = 0.05;             // added by full plant cover
 const CFL = 0.7;
 const MAX_DT = 2;                 // seconds
+const FILM = 0.1;                 // water shallower than this doesn't set the step, m
 const MARGIN = 3;                 // dry cells worked on beside the water
 export const SPONGE = 6;          // rows along the bottom edge where the open sea soaks up waves and sand
 const BED_EVERY = 2;              // hydraulic steps between moves of the bed
@@ -248,11 +249,20 @@ export class Flow {
         if (d > WET) {
           if (x < wa) wa = x;
           wb = x;
-          const u = (qL + qR) / (2 * d), v = (qT + qB) / (2 * d);
-          ux[i] = u; uy[i] = v;
+          let u = (qL + qR) / (2 * d), v = (qT + qB) / (2 * d);
           if (d > deepest) deepest = d;
-          const s = (u < 0 ? -u : u) + (v < 0 ? -v : v);
-          if (s > fastest) fastest = s;
+          if (d > FILM) {
+            const s = (u < 0 ? -u : u) + (v < 0 ? -v : v);
+            if (s > fastest) fastest = s;
+          } else {
+            // A thin film's speed (flow over a tiny depth) is no guide to
+            // anything: its faces are already held to what it holds, so it
+            // doesn't set the step, and its speed is kept to a sensible one.
+            const m = 2 * Math.sqrt(G * d);
+            if (u > m) u = m; else if (u < -m) u = -m;
+            if (v > m) v = m; else if (v < -m) v = -m;
+          }
+          ux[i] = u; uy[i] = v;
         } else {
           ux[i] = 0; uy[i] = 0;
         }

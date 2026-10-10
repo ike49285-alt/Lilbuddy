@@ -33,7 +33,6 @@ void main() {
 const TERRAIN_FS = `
 precision mediump float;
 uniform sampler2D uColor;
-uniform sampler2D uRiver;
 uniform vec3 uSun;
 uniform vec3 uEye;
 varying vec2 vUV;
@@ -42,8 +41,6 @@ varying vec3 vP;
 varying float vWet;
 void main() {
   vec3 c = texture2D(uColor, vUV).rgb;
-  vec4 r = texture2D(uRiver, vUV);
-  c = mix(c, r.rgb, r.a);
   vec3 n = normalize(vN);
   float shade = clamp(dot(n, uSun) / max(uSun.y, 0.25), 0.45, 1.35);
   vec3 col = c * shade;
@@ -72,11 +69,6 @@ export class View3D {
     this.H = 0;
     this.heights = null;     // what's drawn, per cell, in cells
     this.frameOf = null;
-    this.rivers = document.createElement('canvas');
-    this.riverAt = 0;
-    this.riverYears = -Infinity;
-    this.riverEpoch = null;
-    this.riverDirty = true;
     this.lost = false;
     this.cam = null;
     canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); this.lost = true; });
@@ -91,7 +83,6 @@ export class View3D {
     this.gl = gl;
     this.terrainProg = program(gl, TERRAIN_VS, TERRAIN_FS);
     this.tColor = texture(gl);
-    this.tRiver = texture(gl);
     this.bPos = gl.createBuffer();
     this.bHN = gl.createBuffer();
     this.bWet = gl.createBuffer();
@@ -296,9 +287,6 @@ export class View3D {
     return { w, h, dpr };
   }
 
-  // The rivers, drawn by the flat map's code over the whole valley, a few
-  // pixels per cell, about once a second.
-
   // Draws a frame (the flat map's cell image must already be painted for
   // it). Called for every new frame and whenever the camera moves.
   render(f) {
@@ -333,7 +321,6 @@ export class View3D {
     this.skyRgb = sky.map((v) => Math.round(v * 255));
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     gl.enable(gl.DEPTH_TEST);
-    gl.disable(gl.BLEND);
 
     // The ground.
     let p = this.terrainProg;
@@ -346,15 +333,9 @@ export class View3D {
     gl.uniform3fv(p.u.uSun, L);
     gl.uniform3fv(p.u.uEye, this.eye);
     bindTex(gl, 0, this.tColor, p.u.uColor);
-    bindTex(gl, 1, this.tRiver, p.u.uRiver);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.bIdx);
     gl.drawElements(gl.TRIANGLES, this.nIdx, gl.UNSIGNED_SHORT, 0);
     disable(gl, p);
-
-    gl.enable(gl.BLEND);
-    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-
-
   }
 }
 
