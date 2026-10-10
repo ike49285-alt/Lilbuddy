@@ -55,7 +55,7 @@ export const TUNE = {
   growYears: 0.8,                 // years for bare ground to green over
   rootHold: 0.9,                  // how much full plant cover cuts what a bank loses
   dzMax: 0.04,                    // metres: the most the bed may change in one step
-  held: 0.06,                     // share of busy cells allowed to hit that limit before the bed slows
+  held: 0.1,                      // share of busy cells allowed to hit that limit before the bed slows
   spiral: 11,                     // how far a bend's spiral flow turns the sand inward (Engelund)
   bedSlope: 1.2,                  // how much the sand rolls downhill as it goes
 };
