@@ -147,9 +147,10 @@ zoom it.
   more).
 
 **Readings.** The River tab gives the flow, the channel's width, its
-sinuosity (the length of its line over the valley's), the sand moving, the
-sand reaching the sea, the delta built, the mud reaching the sea and the
-mud laid down, with sparklines over time. The
+sinuosity (the length of its line over the valley's), the sand and gravel
+moving and reaching the sea, the delta built, the mud reaching the sea and
+the mud laid down, how any houses, fields and bridges are faring, and
+sparklines over time. The Table tab holds the table's sliders. The
 Profile tab draws the river's long profile, from the inlet to the sea:
 - the bed;
 - the water over it;
