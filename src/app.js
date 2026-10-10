@@ -75,8 +75,6 @@ function afterStart(seed) {
   $('inspect').hidden = true;
   renderer.resetView();
   renderer.effects = [];
-  pendingNotes = [];
-  hideNote();
   viewChanged();
   $('seed').value = seed;
   try { history.replaceState(null, '', `#${seed}`); } catch { /* some hosts forbid it */ }
@@ -723,27 +721,20 @@ $('zoom-in').addEventListener('click', () => { if (in3d) view3d.zoomBy(ZOOM_STEP
 $('zoom-out').addEventListener('click', () => { if (in3d) view3d.zoomBy(1 / ZOOM_STEP); else renderer.zoomAt(1 / ZOOM_STEP, 0.5, 0.5); viewChanged(); });
 $('zoom-reset').addEventListener('click', () => { if (in3d) view3d.resetCamera(); else renderer.resetView(); viewChanged(); });
 
-// --- notes ---------------------------------------------------------------------
+// --- events --------------------------------------------------------------------
 
 let armed = null;
-let pendingNotes = [];
-let noteEv = null;
-let noteAt = 0;
-let noteTimer = null;
 let fxRunning = false;
-const NOTE_MS = 6000;
-const NOTE_GAP_MS = 1000;
 const eventLog = [];
 
 renderer.setEffectsCanvas($('fx-canvas'));
 
+// A tool used or a storm parked: a ring flashes where it happened.
 function onEvent(ev) {
   eventLog.push({ ...ev });
   if (eventLog.length > 50) eventLog.shift();
   renderer.addEffect(ev);
   startEffects();
-  pendingNotes.push(ev);
-  pumpNotes();
 }
 
 function startEffects() {
@@ -755,50 +746,6 @@ function startEffects() {
   };
   requestAnimationFrame(tick);
 }
-
-function pumpNotes() {
-  const now = performance.now();
-  clearTimeout(noteTimer);
-  const own = pendingNotes.some((e) => e.byHand);
-  if (pendingNotes.length && (own || now - noteAt >= NOTE_GAP_MS)) {
-    let pick = pendingNotes[pendingNotes.length - 1];
-    for (const e of pendingNotes) if (e.byHand && !pick.byHand) pick = e;
-    showNote(pick, pendingNotes.length - 1);
-    pendingNotes = [];
-    noteAt = now;
-  }
-  if (pendingNotes.length) noteTimer = setTimeout(pumpNotes, NOTE_GAP_MS - (now - noteAt));
-  else if (noteEv) noteTimer = setTimeout(() => { if (performance.now() - noteAt >= NOTE_MS - 20) hideNote(); else pumpNotes(); }, NOTE_MS - (now - noteAt));
-}
-
-function showNote(ev, more) {
-  const b = $('event-note');
-  noteEv = ev;
-  b.textContent = ev.label;
-  if (more > 0) b.append(el('span', 'more', `+${more} more`));
-  b.setAttribute('aria-label', `${ev.label}. Show on the map.`);
-  b.hidden = false;
-}
-
-function hideNote() {
-  noteEv = null;
-  $('event-note').hidden = true;
-}
-
-$('event-note').addEventListener('click', () => {
-  const ev = noteEv;
-  if (!ev) return;
-  if (in3d) {
-    view3d.lookAt(ev.x, ev.y);
-    view3d.cam.dist = Math.min(view3d.cam.dist, 120);
-  } else {
-    renderer.lookAt(ev.x, ev.y, Math.max(renderer.zoom, 3));
-  }
-  viewChanged();
-  renderer.addEffect(ev);
-  startEffects();
-  hideNote();
-});
 
 // --- tools ---------------------------------------------------------------------
 
@@ -1002,7 +949,6 @@ window.Headwaters = {
   saveNow: () => new Promise((resolve) => { pendingSave = resolve; requestSave('test'); }),
   view: () => ({ zoom: renderer.zoom, x0: renderer.x0, y0: renderer.y0, inspectAt }),
   events: () => eventLog.slice(),
-  note: () => (noteEv ? $('event-note').textContent : null),
   lookAt: (x, y, zoom) => { renderer.lookAt(x, y, zoom); viewChanged(); },
   set3d: (on) => set3d(on),
   cam: (c) => { if (c) Object.assign(view3d.cam, c); viewChanged(); return view3d && view3d.cam ? { ...view3d.cam } : null; },

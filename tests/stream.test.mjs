@@ -86,7 +86,7 @@ const sum = (a) => { let s = 0; for (const v of a) s += v; return s; };
   s.setSection([[5, 100], [120, 100]]);
   const fr = s.frame(0.001);
   check(fr.section && fr.section.bed.length === 96 && Math.abs(fr.section.length - 115 * 4) < 1, 'Section gives a cross-section along the line', `${fr.section.length.toFixed(0)} m`);
-  check(fr.events.some((e) => /dug/.test(e.label)) && fr.events.some((e) => /block/.test(e.label)) && fr.events.some((e) => /storm/.test(e.label)), 'each tool leaves a note');
+  check(['dig', 'block', 'storm'].every((k) => fr.events.some((e) => e.kind === k)) && fr.events.every((e) => !('label' in e)), 'each tool sends an event for the map, and nothing sends a note');
 }
 
 // Settings.

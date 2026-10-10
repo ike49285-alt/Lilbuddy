@@ -17,7 +17,6 @@ export const BRUSH_RATE = { gentle: 0.5, strong: 3, bulldozer: 10 };   // metres
 const BRUSH_NUDGE = 0.1;                   // seconds of brushing each nudge from the page stands for
 const DIG_DEPTH = 1.2;                     // metres below the ground either side
 const BLOCK_H = 1.5;                       // metres a dropped block stands above the bed
-const NOTE_GAP = 30 * DAY;                 // the least time between two notes of a kind
 
 // The world's settings: [natural, least, most].
 export const SETTINGS = {
@@ -44,11 +43,9 @@ export class Simulation {
     this.events = [];
     this.nextEventId = 1;
     this.sentEvent = 0;
-    this.noteAt = {};
     this.section = null;         // a cross-section line: [x0, y0, x1, y1] in cells
     this.layer = null;
     this.history = { inflow: [], sinuosity: [], every: HOUR, next: 0 };
-    this.lastSin = null;
     this.toSeaRate = 0;          // m³ a day of sand reaching the open sea, smoothed
     this.sandRate = 0;           // m³ a day moving past the middle of the valley, smoothed
     this.lastToSea = 0;
@@ -175,7 +172,7 @@ export class Simulation {
       z[j] = Math.min(z[j], bed);
     });
     this.reshaped();
-    this.note('dig', path[path.length >> 1], `A channel ${Math.round(path.length * CELL_M)} m long, dug by hand`, true);
+    this.event('dig', path[path.length >> 1]);
     return path.length;
   }
 
@@ -197,7 +194,7 @@ export class Simulation {
       }
     }
     this.reshaped();
-    this.note('block', i, 'A block of rock dropped in', true);
+    this.event('block', i);
   }
 
   // Parks a storm: rain over the valley for a day and a half, and the flood
@@ -205,7 +202,7 @@ export class Simulation {
   storm(i) {
     const x = i % this.W, y = (i / this.W) | 0;
     this.weather.park(x, y, this.years);
-    this.note('storm', i, 'A storm settles over the valley: the river will rise', true);
+    this.event('storm', i);
   }
 
   // Sets the line a cross-section is drawn along.
@@ -216,12 +213,11 @@ export class Simulation {
     this.section = [a[0], a[1], b[0], b[1]];
   }
 
-  // --- notes -----------------------------------------------------------------------
+  // --- events ----------------------------------------------------------------------
 
-  note(kind, i, label, byHand = false) {
-    if (!byHand && this.years - (this.noteAt[kind] ?? -Infinity) < NOTE_GAP) return;
-    this.noteAt[kind] = this.years;
-    const ev = { id: this.nextEventId++, kind, years: this.years, x: (i % this.W) + 0.5, y: ((i / this.W) | 0) + 0.5, r: 8, label, byHand };
+  // What the page flashes on the map: a tool used, a storm parked.
+  event(kind, i) {
+    const ev = { id: this.nextEventId++, kind, years: this.years, x: (i % this.W) + 0.5, y: ((i / this.W) | 0) + 0.5, r: 8 };
     this.events.push(ev);
     if (this.events.length > 40) this.events.shift();
   }
@@ -295,16 +291,13 @@ export class Simulation {
       hst.every *= 2;
     }
     hst.next = this.years + hst.every;
-    // A sudden straightening is a bend cut off.
-    if (this.lastSin !== null && this.lastSin > 1.2 && this.lastSin - m.sinuosity > 0.06) this.note('cutoff', this.N / 2, 'The river cuts through the neck of a bend');
-    this.lastSin = m.sinuosity;
   }
 
   stats(m) {
-    const { W, H, N, shoreY } = this;
+    const { W, N, shoreY } = this;
     const f = this.flow;
     const { z, h, cover, sy, z0 } = f;
-    let plants = 0, land = 0, delta = 0, deepest = 0, over = 0;
+    let plants = 0, land = 0, delta = 0, deepest = 0;
     for (let i = 0; i < N; i++) {
       const y = (i / W) | 0;
       if (y < shoreY) { land++; plants += cover[i]; if (h[i] > deepest) deepest = h[i]; }
@@ -316,11 +309,6 @@ export class Simulation {
     for (let x = 0; x < W; x++) sand += Math.abs(sy[mid + x]);
     sand *= CELL_M * 86400;
     this.sandRate += (sand - this.sandRate) * 0.3;
-    // Water out of its banks: wet cells well away from the line.
-    for (let y = 0; y < shoreY; y += 2) {
-      for (let x = 0; x < W; x++) if (h[y * W + x] > 0.05 && Math.abs(x - m.line[y]) > 12) over++;
-    }
-    if (over > 400) this.note('flood', (shoreY >> 1) * W + (W >> 1), 'The river breaks its banks and spreads over the floodplain');
     return {
       inflow: f.inflow,
       width: m.width,
@@ -481,8 +469,8 @@ export class Simulation {
       epoch: this.epoch,
       section: this.section ? this.section.slice() : null,
       history: { ...this.history, inflow: this.history.inflow.slice(), sinuosity: this.history.sinuosity.slice() },
-      lastSin: this.lastSin, toSeaRate: this.toSeaRate, sandRate: this.sandRate, lastToSea: this.lastToSea,
-      noteAt: { ...this.noteAt }, nextEventId: this.nextEventId,
+      toSeaRate: this.toSeaRate, sandRate: this.sandRate, lastToSea: this.lastToSea,
+      nextEventId: this.nextEventId,
       weather: this.weather.saveState(),
       flow: {
         z: f.z.slice(), h: f.h.slice(), qx: f.qx.slice(), qy: f.qy.slice(), cover: f.cover.slice(), rock: f.rock.slice(),
@@ -505,8 +493,7 @@ export class Simulation {
     sim.epoch = s.epoch;
     sim.section = s.section;
     sim.history = { ...s.history, inflow: s.history.inflow.slice(), sinuosity: s.history.sinuosity.slice() };
-    sim.lastSin = s.lastSin; sim.toSeaRate = s.toSeaRate; sim.sandRate = s.sandRate; sim.lastToSea = s.lastToSea;
-    sim.noteAt = { ...s.noteAt };
+    sim.toSeaRate = s.toSeaRate; sim.sandRate = s.sandRate; sim.lastToSea = s.lastToSea;
     sim.nextEventId = s.nextEventId;
     sim.sentEvent = s.nextEventId - 1;
     sim.weather.restoreState(s.weather);

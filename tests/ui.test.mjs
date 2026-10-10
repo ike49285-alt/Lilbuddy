@@ -84,7 +84,7 @@ await page.touchscreen.tap(c.x, c.y);
 await page.waitForTimeout(800);
 const rate = await page.evaluate(() => window.Headwaters.state().targetRate * 365.25 * 24);
 check(Math.abs(rate - 6) < 0.01, 'Storm slows the clock to watch the flood', `${rate.toFixed(1)} hr/s`);
-check((await page.evaluate(() => window.Headwaters.events())).some((e) => /storm/.test(e.label)), 'with a note');
+check((await page.evaluate(() => window.Headwaters.events())).some((e) => e.kind === 'storm'), 'and it flashes on the map');
 await page.evaluate(() => window.Headwaters.arm(null));
 // Layers.
 let keyGap = 0;
