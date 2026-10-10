@@ -15,11 +15,13 @@ const ROCK = [126, 122, 116];
 // Water: shallow and clear shows the bed through it, deep is blue; a heavy
 // load of sand turns it the colour of the sand.
 const SHALLOW = [96, 162, 176], DEEP = [26, 78, 124], SILTY = [150, 122, 82];
+const MUDDY = [128, 104, 78];          // ground with mud on top
 
 // Colour ramps for the map's layers, low to high: [position 0–1, r, g, b].
 export const LAYERS = {
   depth: { stops: [[0, 214, 206, 186], [0.02, 170, 220, 230], [0.35, 70, 150, 210], [1, 14, 40, 110]], ticks: ['0', '1', '2', '3 m'] },
   speed: { stops: [[0, 40, 46, 56], [0.3, 60, 120, 170], [0.6, 120, 210, 170], [1, 250, 240, 120]], ticks: ['0', '0.8', '1.7', '2.5 m/s'] },
+  mud: { stops: [[0, 214, 206, 186], [0.3, 196, 196, 170], [0.6, 168, 130, 80], [1, 96, 58, 28]], ticks: ['0.001', '0.01', '0.1', '1', '10 g/L'] },
   drag: { stops: [[0, 50, 54, 62], [0.2, 90, 110, 140], [0.4, 230, 200, 110], [1, 200, 40, 30]], ticks: ['still', 'moves', '×3', '×5'] },
   change: { stops: [[0, 160, 40, 30], [0.35, 230, 150, 110], [0.5, 236, 234, 226], [0.65, 120, 170, 220], [1, 30, 70, 160]], ticks: ['cutting', '', 'steady', '', 'filling'] },
   cutfill: { stops: [[0, 150, 30, 30], [0.4, 236, 170, 130], [0.5, 238, 236, 230], [0.6, 140, 180, 220], [1, 24, 60, 150]], ticks: ['−3 m', '', '0', '', '+3 m'] },
@@ -158,7 +160,7 @@ export class MapRenderer {
   // Paints the cell image for a frame: one pixel per cell. With flat set
   // (for the 3D view, which lights the ground itself) there's no hillshade.
   paint(f) {
-    const { W, H, z, h, cover, rock, mud, seaLevel } = f;
+    const { W, H, z, h, cover, rock, mud, soil, seaLevel } = f;
     if (!this.image || this.image.width !== W || this.image.height !== H) {
       this.terrain.width = W;
       this.terrain.height = H;
@@ -190,6 +192,11 @@ export class MapRenderer {
         r = SAND_WET[0] + (SAND_DRY[0] - SAND_WET[0]) * above;
         g = SAND_WET[1] + (SAND_DRY[1] - SAND_WET[1]) * above;
         b = SAND_WET[2] + (SAND_DRY[2] - SAND_WET[2]) * above;
+        // Mud browns and darkens it.
+        if (soil) {
+          const mu = Math.max(0, (soil[i] / 255 - 0.12) / 0.6) * 0.8;
+          if (mu > 0) { const t = mu > 1 ? 1 : mu; r += (MUDDY[0] - r) * t; g += (MUDDY[1] - g) * t; b += (MUDDY[2] - b) * t; }
+        }
         const c = cover[i] / 255;
         if (c > 0.02) {
           // Thicker cover is shrubbier and darker.

@@ -18,6 +18,17 @@
 // can stand slumps. Those two together make the outside of a bend retreat
 // while a bar grows on the inside: a river that meanders.
 //
+// Mud: fine silt and clay ride in the water rather than along the bed. The
+// pump's water brings some, and the flow picks more up wherever it drags
+// hard at a muddy bed; it settles out wherever the water is slow, and
+// fastest among plants. So a flood over the banks leaves mud beside the
+// channel (levees) and over the floodplain, and the river's plume clears
+// as it spreads into the sea. Mud binds the ground: muddy banks stand
+// steeper and wear back more slowly, which tightens the bends.
+//
+// The ground keeps track of what it's made of: an active top layer, mixed
+// by whatever moves, over the ground below it (Hirano's active layer).
+//
 // Time: the water has to be worked out in steps of under a second. The bed
 // changes far more slowly, so each step's bed change can be multiplied by a
 // factor (the morphological factor of river models): one second of water
@@ -46,6 +57,10 @@ export const SHIELDS_C = 0.047;   // the threshold Shields stress, bare
 const MPM = 8 * Math.sqrt(((RHO_S - RHO) / RHO) * G * D50 ** 3);
 const TRANSPORT = 0.5;            // scales the transport rate (calibration)
 const POROSITY = 0.4;
+const LA = 0.3;                   // metres: the top layer of the ground that the river mixes
+const MUD_TE = 0.2;               // Pa: the drag that starts lifting mud from the bed
+const MUD_E = 4e-8;               // m/s of mud lifted per unit of drag past that, from a bed of pure mud
+const MUD_PLANT = 2;              // full plant cover traps mud this many times faster
 // Tunable: how hard the banks are, how much plants hold them, how far a
 // step may move the bed. (An object so tests can try other values.)
 export const TUNE = {
@@ -58,6 +73,7 @@ export const TUNE = {
   held: 0.1,                      // share of busy cells allowed to hit that limit before the bed slows
   spiral: 11,                     // how far a bend's spiral flow turns the sand inward (Engelund)
   bedSlope: 1.2,                  // how much the sand rolls downhill as it goes
+  mudWs: 1e-4,                    // m/s mud settles through still water (fine silt and clay)
 };
 const SLOPE_WET = 0.35;           // the steepest slope sand stands at under water
 const SLOPE_DRY = 0.8;            // and out of it (damp sand stands steep)
@@ -102,6 +118,18 @@ export class Flow {
     this.fy = new Float32Array(W * (H + 1));
     this.avail = new Float32Array(N);
     this.clip = new Float32Array(N);
+    this.fm = table.mud ? Float32Array.from(table.mud) : new Float32Array(N);  // mud share of the top layer
+    this.sm = Float32Array.from(this.fm);     // and of the ground below it
+    this.M = new Float32Array(N);             // mud in the water, metres of it (as solid) per unit area
+    this.C = new Float32Array(N);             // its concentration, by volume (scratch)
+    this.dzM = new Float32Array(N);           // the mud in this step's bed change
+    this.mudIn = 0;                           // the pump water's mud, by volume
+    this.mudFed = 0;                          // mud in all, m³ (water time): pumped in,
+    this.mudOut = 0;                          // out to sea,
+    this.mudDown = 0;                         // and settled less lifted
+    this.mudLaid = 0;                         // mud laid down in the ground in all, m³ (bed time)
+    this.mudSea = 0;                          // mud out to sea in all, m³ (bed time)
+    this.mudMark = 0;                         // mudOut when the bed last moved
     this.mNow = 1;                            // the bed-time factor in use, adapting
     this.lo = new Int32Array(H);              // each row's worked-on stretch, cells
     this.hi = new Int32Array(H);
@@ -221,8 +249,16 @@ export class Flow {
     const rr = this.rainRate * dt;
     const soak = INFILTRATE * dt;
     let deepest = 0, fastest = 0;
-    const { ux, uy, wetLo, wetHi } = this;
+    const { ux, uy, wetLo, wetHi, M, C } = this;
     const sea = this.sea, spongeY = H - SPONGE;
+    // The mud's concentration before the water moves; the pump's water
+    // brings its own.
+    for (let y = 0; y < H; y++) {
+      const row = y * W;
+      for (let x = lo[y]; x <= hi[y]; x++) { const i = row + x; C[i] = h[i] > 1e-4 ? M[i] / h[i] : 0; }
+    }
+    const cin = this.mudIn;
+    let fed = 0, out = 0;
     for (let y = 0; y < H; y++) {
       const row = y * W, frow = y * W1;
       const a = lo[y], b = hi[y];
@@ -236,16 +272,35 @@ export class Flow {
         let d = h[i] + k * (qL - qR + qT - qB) + rr;
         d -= d < soak ? d : soak;
         if (d < 0) d = 0;
+        // The mud goes with the water, at the concentration of the cell it
+        // comes from. (No face takes more than a quarter of a cell's water,
+        // so no cell gives more mud than it has.)
+        const ci = C[i];
+        let m = M[i];
+        if (qL !== 0) m += k * qL * (qL > 0 ? C[i - 1] : ci);
+        if (qR !== 0) m -= k * qR * (qR > 0 ? ci : C[i + 1]);
+        if (qT !== 0) {
+          const ct = qT > 0 ? (y > 0 ? C[i - W] : cin) : ci;
+          m += k * qT * ct;
+          if (y === 0) fed += k * qT * ct * dx * dx;
+        }
+        if (qB !== 0) m -= k * qB * (qB > 0 ? ci : C[i + W]);
+        if (m < 0) m = 0;
         if (y >= spongeY) {
-          // The open sea: the level relaxes to the sea's, and the currents die away.
+          // The open sea: the level relaxes to the sea's, the currents die
+          // away, and it takes the mud away.
           const w = (y - spongeY + 1) / SPONGE;
           const level = sea > z[i] ? sea - z[i] : 0;
           d += (level - d) * w * 0.5;
           const damp = 1 - 0.5 * w;
           if (x > a) qx[frow + x] *= damp;
           qy[i] *= damp;
+          const gone = m * w * 0.5;
+          m -= gone;
+          out += gone * dx * dx;
         }
         h[i] = d;
+        M[i] = m;
         if (d > WET) {
           if (x < wa) wa = x;
           wb = x;
@@ -269,15 +324,19 @@ export class Flow {
       }
       wetLo[y] = wa; wetHi[y] = wb;
     }
-    // The sea along the bottom edge holds its level.
+    // The sea along the bottom edge holds its level, and is clear.
     let wa = W, wb = -1;
     for (let x = 0; x < W; x++) {
       const i = (H - 1) * W + x;
       h[i] = sea > z[i] ? sea - z[i] : 0;
+      out += M[i] * dx * dx;
+      M[i] = 0;
       if (h[i] > WET) { if (x < wa) wa = x; wb = x; }
     }
     if (wa < wetLo[H - 1]) wetLo[H - 1] = wa;
     if (wb > wetHi[H - 1]) wetHi[H - 1] = wb;
+    this.mudFed += fed;
+    this.mudOut += out;
     this.spread();
     const c = Math.sqrt(G * deepest) + fastest;
     this.dt = Math.min(MAX_DT, c > 0 ? (CFL * dx) / c : MAX_DT);
@@ -289,7 +348,7 @@ export class Flow {
   // `morph` (less if the bed would change too fast). Returns the bed-time,
   // seconds.
   bed(dt, morph) {
-    const { W, H, z, h, ux, uy, sx, sy, theta, cover, rock, dx, fx, fy, dz, avail, lo, hi } = this;
+    const { W, H, z, h, ux, uy, sx, sy, theta, cover, rock, dx, fx, fy, dz, avail, lo, hi, fm, dzM } = this;
     const W1 = W + 1;
     const shieldsK = 1 / (((RHO_S - RHO) / RHO) * G * D50);
     // The bed is worked on down to the open sea, which swallows what reaches it.
@@ -308,10 +367,13 @@ export class Flow {
         const n = N_BARE + N_PLANT * cover[i];
         const th = (n * n * U2 * shieldsK) / cbrt(d);   // τ/((ρs−ρ)gD), τ = ρ g n² U² / h^⅓
         theta[i] = th;
-        const thc = SHIELDS_C * (1 + 2 * cover[i]);
+        // Plants hold the sand, and so does mud once there's enough of it
+        // to bind it; and only the top layer's sand moves.
+        const f = fm[i];
+        const thc = SHIELDS_C * (1 + 2 * cover[i]) * (f > 0.3 ? 1 + 3 * (f - 0.3) / 0.7 : 1);
         if (th <= thc) continue;
         const ex = th - thc;
-        const qs = TRANSPORT * MPM * ex * Math.sqrt(ex);
+        const qs = (1 - f) * TRANSPORT * MPM * ex * Math.sqrt(ex);
         const U = Math.sqrt(U2);
         const ex2 = u / U, ey2 = v / U;
         // Spiral flow turns the sand toward the inside of the bend.
@@ -427,9 +489,13 @@ export class Flow {
       for (let x = lo[y]; x <= hi[y]; x++) {
         const i = row + x;
         dz[i] = k * (fx[frow + x] - fx[frow + x + 1] + fy[i] - fy[i + W]);
+        dzM[i] = 0;
       }
     }
-    for (let i = HB * W; i < this.N; i++) dz[i] = 0;
+    for (let i = HB * W; i < this.N; i++) { dz[i] = 0; dzM[i] = 0; }
+    // Mud settles out of the water and is lifted from the bed. In the
+    // water's time; the bed's change is sped up like the sand's.
+    this.mudExchange(dt, mdt, HB, dzMax);
     // A channel scouring at the foot of a dry bank takes some of the bank.
     for (let y = 0; y < HB; y++) {
       for (let x = lo[y]; x <= hi[y]; x++) {
@@ -444,17 +510,20 @@ export class Flow {
         const n = (l ? 1 : 0) + (r ? 1 : 0) + (u ? 1 : 0) + (d ? 1 : 0);
         if (!n) continue;
         const each = (TUNE.bank * e) / n;
-        let moved = 0;
+        let moved = 0, mud = 0;
         for (let q = 0; q < 4; q++) {
           const j = q === 0 ? (l ? i - 1 : -1) : q === 1 ? (r ? i + 1 : -1) : q === 2 ? (u ? i - W : -1) : (d ? i + W : -1);
           if (j < 0) continue;
-          const want = each * (1 - TUNE.rootHold * cover[j]);
+          const want = (each * (1 - TUNE.rootHold * cover[j])) / (1 + 2 * fm[j]);
           const room = z[j] + dz[j] - rock[j];
           const t = want < room ? want : room > 0 ? room : 0;
           dz[j] -= t;
+          dzM[j] -= t * fm[j];
           moved += t;
+          mud += t * fm[j];
         }
         dz[i] += moved;
+        dzM[i] += mud;
       }
     }
     // And the flow wears at its banks directly, hardest where it drags
@@ -471,7 +540,7 @@ export class Flow {
           for (let q = 0; q < 4; q++) {
             const j = q === 0 ? i - 1 : q === 1 ? i + 1 : q === 2 ? i - W : i + W;
             if (h[j] > WET) continue;
-            const ex = th - SHIELDS_C * TUNE.bankCrit * (1 + 3 * cover[j]);
+            const ex = th - SHIELDS_C * TUNE.bankCrit * (1 + 3 * cover[j]) * (1 + 4 * fm[j]);
             if (ex <= 0) continue;
             const top = z[j] + dz[j];
             const room = top - (zi > rock[j] ? zi : rock[j]);
@@ -481,6 +550,8 @@ export class Flow {
             if (m > dzMax) m = dzMax;
             dz[j] -= m;
             dz[i] += m;
+            dzM[j] -= m * fm[j];
+            dzM[i] += m * fm[j];
           }
         }
       }
@@ -488,17 +559,93 @@ export class Flow {
     const years = mdt / SEC_PER_YR;
     const keep = Math.exp(-years / 0.05);
     const rate = years > 0 ? (1 - keep) / years : 0;
-    const dzRate = this.dzRate;
+    const { dzRate, sm } = this;
     for (let y = 0; y < H; y++) {
       for (let x = lo[y]; x <= hi[y]; x++) {
         const i = y * W + x;
-        z[i] += dz[i];
-        dzRate[i] = dzRate[i] * keep + rate * dz[i];
+        const d = dz[i], dm = dzM[i];
+        if (d !== 0 || dm !== 0) {
+          // The top layer's make-up (as mix(), inline: this runs for every busy cell).
+          const f = fm[i];
+          let nf;
+          if (d >= 0) {
+            nf = (f * LA + dm) / (LA + d);
+            let below = z[i] - rock[i] - LA;
+            if (below < 0) below = 0;
+            if (below + d > 0) sm[i] = (sm[i] * below + (nf < 0 ? 0 : nf > 1 ? 1 : nf) * d) / (below + d);
+          } else {
+            nf = -d >= LA ? sm[i] : (f * LA + dm - sm[i] * d) / LA;
+          }
+          fm[i] = nf < 0 ? 0 : nf > 1 ? 1 : nf;
+        }
+        z[i] += d;
+        dzRate[i] = dzRate[i] * keep + rate * d;
       }
     }
     if (this.slumpAll || this.steps % SLUMP_ALL_EVERY === 0) { this.slump(true); this.slumpAll = false; } else this.slump(false);
     this.plants(years, mdt);
     return mdt;
+  }
+
+  // Mud settling out of the water and lifted from the bed, over dt seconds
+  // of the water's time (mdt of the bed's).
+  mudExchange(dt, mdt, HB, dzMax) {
+    const { W, z, h, M, fm, rock, cover, theta, dz, dzM, lo, hi, dx } = this;
+    const morph = mdt / dt;
+    const tauK = (RHO_S - RHO) * G * D50;     // Pa per unit of Shields stress
+    const bulk = 1 / (1 - POROSITY);           // metres of ground per metre of mud laid down
+    const ws = TUNE.mudWs;
+    let down = 0, laid = 0;
+    for (let y = 0; y < HB; y++) {
+      for (let x = lo[y]; x <= hi[y]; x++) {
+        const i = y * W + x;
+        const d = h[i], m = M[i], f = fm[i];
+        // It settles through the water, faster among plants; what's left
+        // when the water's gone stays where it is.
+        let dep = 0, ero = 0;
+        if (m > 0) dep = d > WET ? ws * (m / d) * dt * (1 + MUD_PLANT * cover[i]) : m;
+        if (dep > m) dep = m;
+        // It's lifted where the flow drags at a muddy bed (Partheniades).
+        if (f > 0 && d > WET) { const ex = (theta[i] * tauK) / MUD_TE - 1; if (ex > 0) ero = MUD_E * f * ex * dt; }
+        if (dep === 0 && ero === 0) continue;
+        let bed = (dep - ero) * morph * bulk;
+        // No faster than the bed may change, and no more lifted than the top layer holds.
+        if (bed > dzMax || bed < -dzMax) { const s = dzMax / (bed < 0 ? -bed : bed); dep *= s; ero *= s; bed *= s; }
+        if (bed < 0) {
+          let room = f * Math.min(LA, z[i] + dz[i] - rock[i]);
+          if (room < 0) room = 0;
+          if (-bed > room) { ero = dep + room / (morph * bulk); bed = -room; }
+        }
+        M[i] = m - dep + ero;
+        down += (dep - ero) * dx * dx;
+        dz[i] += bed;
+        dzM[i] += bed;
+        laid += bed * (1 - POROSITY) * dx * dx;
+      }
+    }
+    this.mudDown += down;
+    this.mudLaid += laid;
+    this.mudSea += (this.mudOut - this.mudMark) * morph;
+    this.mudMark = this.mudOut;
+  }
+
+  // The top layer's make-up after the ground at i rises or falls by dz, of
+  // which dzM is mud. What's laid down mixes into the top layer, which
+  // passes the bottom of itself to the ground below; what's taken away
+  // takes the top layer's mix and lets up some of the ground below.
+  mix(i, dz, dzM) {
+    const { fm, sm, z, rock } = this;
+    const f = fm[i];
+    let nf;
+    if (dz >= 0) {
+      nf = (f * LA + dzM) / (LA + dz);
+      const below = Math.max(0, z[i] - rock[i] - LA);
+      if (below + dz > 0) sm[i] = (sm[i] * below + (nf < 0 ? 0 : nf > 1 ? 1 : nf) * dz) / (below + dz);
+    } else {
+      const a = -dz;
+      nf = a >= LA ? sm[i] : (f * LA + dzM + sm[i] * a) / LA;
+    }
+    fm[i] = nf < 0 ? 0 : nf > 1 ? 1 : nf;
   }
 
   // Any slope steeper than sand can stand slumps toward what it can: by the
@@ -521,11 +668,16 @@ export class Flow {
     if (a <= SLOPE_WET * dx) return;
     const hi = d > 0 ? i : j, lo = d > 0 ? j : i;
     const wet = h[hi] > WET || h[lo] > WET;
-    const crit = (wet ? SLOPE_WET : SLOPE_DRY) * (1 + cover[hi]) * dx;
+    // Mud lets a bank stand steeper; roots too.
+    const fh = this.fm[hi];
+    const crit = (wet ? SLOPE_WET * (1 + fh) : SLOPE_DRY * (1 + 0.5 * fh)) * (1 + cover[hi]) * dx;
     if (a <= crit) return;
     let m = ((a - crit) / 2) * SLUMP;
     const room = z[hi] - rock[hi];
     if (m > room) m = room > 0 ? room : 0;
+    if (m <= 0) return;
+    this.mix(hi, -m, -m * fh);
+    this.mix(lo, m, m * fh);
     z[hi] -= m;
     z[lo] += m;
   }

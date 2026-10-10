@@ -22,6 +22,7 @@
           <button type="button" id="mode-depth" data-mode="depth" aria-pressed="false" aria-label="Water depth" title="Water depth"><i class="sw"></i>Depth</button>
           <button type="button" id="mode-speed" data-mode="speed" aria-pressed="false" aria-label="Current" title="Current"><i class="sw"></i>Current</button>
           <button type="button" id="mode-drag" data-mode="drag" aria-pressed="false" aria-label="Drag on the bed" title="Drag on the bed"><i class="sw"></i>Drag</button>
+          <button type="button" id="mode-mud" data-mode="mud" aria-pressed="false" aria-label="Mud in the water" title="Mud in the water"><i class="sw"></i>Mud</button>
           <button type="button" id="mode-change" data-mode="change" aria-pressed="false" aria-label="Cutting and filling now" title="Cutting and filling now"><i class="sw"></i>Change</button>
           <button type="button" id="mode-cutfill" data-mode="cutfill" aria-pressed="false" aria-label="Cut and fill since the start" title="Cut and fill since the start"><i class="sw"></i>Cut/fill</button>
         </div>
@@ -96,6 +97,8 @@
         <div><dt>Sand to the sea</dt><dd id="s-sea">—</dd></div>
         <div><dt>Delta built</dt><dd id="s-delta">—</dd></div>
         <div><dt>Plant cover</dt><dd id="s-plants">—</dd></div>
+        <div><dt>Mud to the sea</dt><dd id="s-mudsea">—</dd></div>
+        <div><dt>Mud laid down</dt><dd id="s-mudlaid">—</dd></div>
       </dl>
 
       <div class="sparks">
@@ -138,7 +141,8 @@
         <label class="wet-row" for="tilt"><span>Tilt</span><input type="range" id="tilt" min="0.5" max="6" step="0.1" value="2"><output id="tilt-out" for="tilt">2.0 m/km</output></label>
         <label class="wet-row" for="sea"><span>Sea level</span><input type="range" id="sea" min="-2" max="2" step="0.1" value="0"><output id="sea-out" for="sea">±0 m</output></label>
         <label class="wet-row" for="supply"><span>Sand in</span><input type="range" id="supply" min="0" max="200" step="5" value="60"><output id="supply-out" for="supply">60%</output></label>
-        <p class="note">The pump's flow before the seasons and floods, the valley's fall, the sea's level, and the sand fed in with the water as a share of what it can carry.</p>
+        <label class="wet-row" for="mud"><span>Mud in</span><input type="range" id="mud" min="0" max="20" step="1" value="2"><output id="mud-out" for="mud">0.2 g/L</output></label>
+        <p class="note">The pump's flow before the seasons and floods, the valley's fall, the sea's level, the sand fed in with the water as a share of what it can carry, and the mud it brings.</p>
       </div>
 
     </section>

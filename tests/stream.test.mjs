@@ -26,9 +26,10 @@ const sum = (a) => { let s = 0; for (const v of a) s += v; return s; };
 {
   const s = new Simulation('sand-1');
   const f = s.flow;
-  const z0 = sum(f.z), fed0 = f.fedIn, out0 = f.toSea;
+  const z0 = sum(f.z), fed0 = f.fedIn, out0 = f.toSea, mud0 = f.mudLaid;
   for (let k = 0; k < 8000; k++) s.step(500);
-  const dv = (sum(f.z) - z0) * f.dx * f.dx * (1 - 0.4);
+  // The ground's growth, less the mud laid down in it.
+  const dv = (sum(f.z) - z0) * f.dx * f.dx * (1 - 0.4) - (f.mudLaid - mud0);
   const net = (f.fedIn - fed0) - (f.toSea - out0);
   check(Math.abs(dv - net) < 0.02 * Math.max(10, Math.abs(net)) + 1, 'sand is neither made nor lost', `bed gained ${dv.toFixed(1)} m³ of sand; in less out ${net.toFixed(1)} m³`);
   check(s.years > 0 && f.morph >= 1, 'the bed runs faster than the water when asked', `${(s.years * 365.25).toFixed(1)} days in 8000 steps, bed ×${f.morph.toFixed(0)}`);
@@ -87,6 +88,46 @@ const sum = (a) => { let s = 0; for (const v of a) s += v; return s; };
   const fr = s.frame(0.001);
   check(fr.section && fr.section.bed.length === 96 && Math.abs(fr.section.length - 115 * 4) < 1, 'Section gives a cross-section along the line', `${fr.section.length.toFixed(0)} m`);
   check(['dig', 'block', 'storm'].every((k) => fr.events.some((e) => e.kind === k)) && fr.events.every((e) => !('label' in e)), 'each tool sends an event for the map, and nothing sends a note');
+}
+
+// Mud: it rides in the water and settles where the water slows; none is
+// made or lost, in the water or the ground.
+{
+  const s = new Simulation('mud-1');
+  const f = s.flow, N = f.N, dA = f.dx * f.dx;
+  const bedMud = () => { let t = 0; for (let i = 0; i < N; i++) { const S = Math.max(0, f.z[i] - f.rock[i]); t += (f.fm[i] * Math.min(0.3, S) + f.sm[i] * Math.max(0, S - 0.3)) * 0.6 * dA; } return t; };
+  const b0 = bedMud();
+  for (let k = 0; k < 4000; k++) s.step(2000);
+  let inWater = 0, neg = 0, outOfRange = 0;
+  for (let i = 0; i < N; i++) { inWater += f.M[i] * dA; if (f.M[i] < 0) neg++; if (!(f.fm[i] >= 0 && f.fm[i] <= 1) || !(f.sm[i] >= 0 && f.sm[i] <= 1)) outOfRange++; }
+  const gap = f.mudFed - f.mudOut - f.mudDown - inWater;
+  check(f.mudFed > 0 && Math.abs(gap) < 1e-6 * f.mudFed, 'the water’s mud is neither made nor lost', `in ${f.mudFed.toFixed(2)} m³, in the water ${inWater.toFixed(2)}, settled ${f.mudDown.toFixed(2)}, to sea ${f.mudOut.toFixed(3)}`);
+  const b1 = bedMud();
+  check(Math.abs(b1 - b0 - f.mudLaid) < 1e-3 * Math.abs(f.mudLaid) + 0.1, 'and the ground holds all the mud laid down in it', `${(b1 - b0).toFixed(1)} m³ more mud in the ground, ${f.mudLaid.toFixed(1)} m³ laid`);
+  check(neg === 0 && outOfRange === 0, 'mud in the water is never negative and the ground’s share stays between 0 and 1');
+  const fr = s.frame(0.001);
+  check(fr.mud.some((v) => v > 0) && fr.soil.length === N && s.inspect(100 * s.W + 64).mudGround >= 0, 'frames carry the mud in the water and in the ground');
+  const r = Simulation.fromState(structuredClone(s.saveState()));
+  check(r.stateHash() === s.stateHash(), 'a restored world keeps its mud');
+}
+// Over half a year, floods leave the most mud beside the channel: levees.
+{
+  const s = new Simulation('prof-1');
+  const f = s.flow, W = s.W;
+  while (s.years < 0.5) s.step(20000);
+  const m = s.measure();
+  const avg = { channel: [0, 0], beside: [0, 0], far: [0, 0] };
+  for (let y = 10; y < s.shoreY - 4; y++) {
+    const line = m.line[y];
+    if (line < 0) continue;
+    for (let x = 0; x < W; x++) {
+      const i = y * W + x, dist = Math.abs(x - line);
+      const k = f.h[i] > 0.1 && dist < 6 ? 'channel' : f.h[i] <= 0.02 && dist >= 4 && dist < 12 ? 'beside' : f.h[i] <= 0.02 && dist >= 25 && dist < 40 ? 'far' : null;
+      if (k) { avg[k][0] += f.fm[i]; avg[k][1]++; }
+    }
+  }
+  const pc = (k) => (100 * avg[k][0]) / avg[k][1];
+  check(pc('beside') > pc('far') + 3 && pc('beside') > pc('channel') + 3, 'floods leave mud beside the channel, more than far off or in it', `mud on top: beside ${pc('beside').toFixed(0)}%, far ${pc('far').toFixed(0)}%, channel ${pc('channel').toFixed(0)}%`);
 }
 
 // The pump moves along the top edge, and the river comes in where it is.

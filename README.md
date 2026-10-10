@@ -52,6 +52,15 @@ comes in than goes out and falls where less does, and no sand is made or
 lost along the way. The pump feeds in sand with its water, as a share of
 what that water can carry.
 
+**Mud** rides in the water rather than along the bed. The pump's water
+brings some, more in a flood, and the flow lifts more wherever it drags hard
+at a muddy bed. It settles out wherever the water is slow, fastest among
+plants, so a flood over the banks leaves mud beside the channel and over the
+floodplain, and the river's plume clears as it spreads into the sea. The
+ground keeps track of how muddy its top layer is. Muddy banks stand steeper
+and wear back more slowly, and the terraces, old floodplain, are muddier
+than the plain's sand.
+
 **Banks** wear back where the flow drags hardest beside them, which is the
 outside of a bend. A channel scouring at the foot of a bank brings some of
 the bank down with it, and any slope steeper than wet or dry sand can stand
@@ -86,6 +95,7 @@ layers, with their key under the map:
 - the current;
 - the drag on the bed, as a multiple of what moves sand;
 - where the bed is cutting or filling now;
+- mud in the water;
 - how much it has been cut or filled since the start.
 
 Pinch, double-tap or use + and − to zoom in, and drag to move around when
@@ -119,10 +129,13 @@ zoom it.
 - **Sand in:** sand fed in with the water, as a share of what it can carry.
   Less than it can carry and the river cuts down; more and it builds up and
   spreads out.
+- **Mud in:** grams of mud in each litre of the pump's water (floods bring
+  more).
 
 **Readings.** The River tab gives the flow, the channel's width, its
 sinuosity (the length of its line over the valley's), the sand moving, the
-sand reaching the sea and the delta built, with sparklines over time. The
+sand reaching the sea, the delta built, the mud reaching the sea and the
+mud laid down, with sparklines over time. The
 Profile tab draws the river's long profile, from the inlet to the sea:
 - the bed;
 - the water over it;

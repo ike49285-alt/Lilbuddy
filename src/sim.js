@@ -2,7 +2,7 @@
 // clock, and what the page can do to it.
 
 import { makeRng, hashArrays } from './rng.js';
-import { makeTable, CELL_M, TILT } from './table.js';
+import { makeTable, CELL_M, TILT, PLAIN_MUD } from './table.js';
 import { Flow, WET, SHIELDS_C, SEC_PER_YR, SPONGE } from './flow.js';
 import { Weather } from './weather.js';
 
@@ -24,7 +24,9 @@ export const SETTINGS = {
   tilt: [TILT, 0.0005, 0.006],// the valley's fall, metres per metre
   sea: [0, -2, 2],            // metres higher or lower sea
   supply: [0.6, 0, 2],        // sand fed in, as a share of what the inflow can carry
+  mud: [0.2, 0, 2],           // grams of mud in each litre of the pump's water
 };
+const MUD_DENSITY = 2650;     // grams a litre of solid mud
 
 export class Simulation {
   constructor(seed) {
@@ -46,6 +48,8 @@ export class Simulation {
     this.section = null;         // a cross-section line: [x0, y0, x1, y1] in cells
     this.layer = null;
     this.history = { inflow: [], sinuosity: [], every: HOUR, next: 0 };
+    this.mudSeaRate = 0;         // m³ a day of mud reaching the open sea, smoothed
+    this.lastMudSea = 0;
     this.toSeaRate = 0;          // m³ a day of sand reaching the open sea, smoothed
     this.sandRate = 0;           // m³ a day moving past the middle of the valley, smoothed
     this.lastToSea = 0;
@@ -69,6 +73,9 @@ export class Simulation {
       const toSea = this.flow.toSea - this.lastToSea;
       this.lastToSea = this.flow.toSea;
       this.toSeaRate += ((toSea / (yrs * 365.25)) - this.toSeaRate) * k;
+      const mudSea = this.flow.mudSea - this.lastMudSea;
+      this.lastMudSea = this.flow.mudSea;
+      this.mudSeaRate += ((mudSea / (yrs * 365.25)) - this.mudSeaRate) * k;
       if (this.years >= this.history.next) this.sample();
     }
     return yrs;
@@ -85,6 +92,8 @@ export class Simulation {
     const season = 0.65 + 1.6 * Math.exp(-((wrap(0.3) / 0.06) ** 2)) + 0.45 * Math.exp(-((wrap(0.85) / 0.07) ** 2));
     const storm = Math.min(4, 1 + 0.6 * Math.max(0, this.weather.upstream - 1));
     f.inflow = this.settings.flow * season * storm;
+    // Floods come down muddier.
+    f.mudIn = (this.settings.mud / MUD_DENSITY) * Math.min(3, season * storm);
     f.rainRate = MEAN_RAIN * this.weather.intensity;
     f.growth = yf > 0.25 && yf < 0.8 ? 1.6 : 0.15;
     f.sea = this.settings.sea;
@@ -129,7 +138,8 @@ export class Simulation {
   // Lowering stops at the rock. Fresh sand, or ground dug into, is bare.
   sculpt(i, size, dir, strength = 'strong') {
     const { W, H } = this;
-    const { z, rock, cover } = this.flow;
+    const flow = this.flow;
+    const { z, rock, cover } = flow;
     if (!(i >= 0 && i < this.N)) return false;
     const r = BRUSH_R[size] || BRUSH_R.big;
     const peak = (BRUSH_RATE[strength] || BRUSH_RATE.strong) * BRUSH_NUDGE;
@@ -140,7 +150,11 @@ export class Simulation {
         if (d2 > R * R) continue;
         const j = y * W + x;
         const dz = dir * peak * Math.exp(-d2 / (r * r));
-        z[j] = dir > 0 ? z[j] + dz : Math.max(rock[j], z[j] + dz);
+        // Sand piled up is the plain's own mix; what's scooped away takes the top layer's.
+        const nz = dir > 0 ? z[j] + dz : Math.max(rock[j], z[j] + dz);
+        const moved = nz - z[j];
+        flow.mix(j, moved, moved * (moved > 0 ? PLAIN_MUD : flow.fm[j]));
+        z[j] = nz;
         cover[j] *= 1 - Math.min(1, Math.abs(dz) / 0.2);
       }
     }
@@ -169,7 +183,7 @@ export class Simulation {
       }
       const bed = Math.max(rock[j], Math.min(z[j] - DIG_DEPTH, low - 0.6, top + ((bottom - top) * k) / (path.length - 1), prev - 0.002));
       prev = bed;
-      z[j] = Math.min(z[j], bed);
+      if (bed < z[j]) { this.flow.mix(j, bed - z[j], (bed - z[j]) * this.flow.fm[j]); z[j] = bed; }
     });
     this.reshaped();
     this.event('dig', path[path.length >> 1]);
@@ -191,6 +205,8 @@ export class Simulation {
         z[j] = top + BLOCK_H;
         rock[j] = z[j];
         cover[j] = 0;
+        this.flow.fm[j] = 0;
+        this.flow.sm[j] = 0;
       }
     }
     this.reshaped();
@@ -326,6 +342,8 @@ export class Simulation {
       plants: land ? plants / land : 0,
       sand: this.sandRate,
       toSea: this.toSeaRate,
+      mudToSea: this.mudSeaRate,
+      mudLaid: f.mudLaid,
       delta: delta * CELL_M * CELL_M,
       fedIn: f.fedIn,
       morph: f.morph,
@@ -375,6 +393,7 @@ export class Simulation {
     const { h, ux, uy, theta, dzRate, z, z0, cover } = this.flow;
     const out = new Uint8Array(N);
     const L = this.layer;
+    const mud = L === 'mud' ? this.mudBytes() : null;
     for (let i = 0; i < N; i++) {
       let v = 0;
       if (L === 'depth') v = h[i] > WET ? 0.05 + 0.95 * Math.min(1, h[i] / 3) : 0;
@@ -382,6 +401,7 @@ export class Simulation {
       else if (L === 'drag') v = h[i] > WET ? Math.min(1, theta[i] / (SHIELDS_C * (1 + 2 * cover[i])) / 5) : 0;
       else if (L === 'change') { const r = dzRate[i]; v = 0.5 + 0.5 * Math.sign(r) * Math.min(1, Math.log10(1 + Math.abs(r) / 0.01) / 3); }
       else if (L === 'cutfill') v = 0.5 + 0.5 * Math.max(-1, Math.min(1, (z[i] - z0[i]) / 3));
+      else if (L === 'mud') v = mud ? mud[i] / 255 : 0;
       out[i] = Math.round(v * 255);
     }
     return out;
@@ -401,6 +421,7 @@ export class Simulation {
       rock: this.rockBytes(),
       cover: bytes(f.cover, 255),
       mud: this.mudBytes(),
+      soil: bytes(f.fm, 255),
       layer: this.layer ? this.layerBytes() : null,
       seaLevel: this.settings.sea,
       inlet: [this.flow.inletX, this.flow.inletHalf],
@@ -428,17 +449,16 @@ export class Simulation {
     return out;
   }
 
-  // How much sand the water carries, one byte per cell, for tinting it.
+  // How much mud the water carries, one byte per cell, for tinting it: from
+  // a thousandth of a gram to ten grams a litre, on a log scale.
   mudBytes() {
     const { N } = this;
-    const { h, sx, sy, ux, uy } = this.flow;
+    const { h, M } = this.flow;
     const out = new Uint8Array(N);
     for (let i = 0; i < N; i++) {
-      if (h[i] <= WET) continue;
-      const q = Math.hypot(sx[i], sy[i]), w = Math.hypot(ux[i], uy[i]) * h[i];
-      if (q <= 0 || w <= 1e-4) continue;
-      const c = q / w;                          // sand per water, by volume
-      out[i] = Math.max(0, Math.min(255, Math.round(((Math.log10(c) + 5) / 3) * 255)));
+      if (h[i] <= WET || M[i] <= 0) continue;
+      const gl = (M[i] / h[i]) * MUD_DENSITY;
+      out[i] = Math.max(0, Math.min(255, Math.round(((Math.log10(gl) + 3) / 4) * 255)));
     }
     return out;
   }
@@ -459,6 +479,8 @@ export class Simulation {
       change: f.z[i] - f.z0[i],
       rate: f.dzRate[i],
       cover: f.cover[i],
+      mudWater: wet ? (f.M[i] / f.h[i]) * MUD_DENSITY : 0,  // grams a litre
+      mudGround: f.fm[i],
       rockBelow: f.z[i] - f.rock[i],
       block: f.rock[i] >= f.z[i] - 0.01,
     };
@@ -478,12 +500,15 @@ export class Simulation {
       epoch: this.epoch,
       section: this.section ? this.section.slice() : null,
       history: { ...this.history, inflow: this.history.inflow.slice(), sinuosity: this.history.sinuosity.slice() },
+      mudSeaRate: this.mudSeaRate, lastMudSea: this.lastMudSea,
       toSeaRate: this.toSeaRate, sandRate: this.sandRate, lastToSea: this.lastToSea,
       nextEventId: this.nextEventId,
       weather: this.weather.saveState(),
       flow: {
         z: f.z.slice(), h: f.h.slice(), qx: f.qx.slice(), qy: f.qy.slice(), cover: f.cover.slice(), rock: f.rock.slice(),
         z0: f.z0.slice(), dzRate: f.dzRate.slice(), ux: f.ux.slice(), uy: f.uy.slice(),
+        fm: f.fm.slice(), sm: f.sm.slice(), M: f.M.slice(),
+        mud: { fed: f.mudFed, out: f.mudOut, down: f.mudDown, laid: f.mudLaid, sea: f.mudSea, mark: f.mudMark },
         inletX: f.inletX, dt: f.dt, mNow: f.mNow, fedIn: f.fedIn, toSea: f.toSea, steps: f.steps, plantYears: f.plantYears, waterTime: f.waterTime,
       },
     };
@@ -495,6 +520,9 @@ export class Simulation {
     const f = sim.flow;
     const F = s.flow;
     for (const k of ['z', 'h', 'qx', 'qy', 'cover', 'rock', 'z0', 'dzRate', 'ux', 'uy']) f[k].set(F[k]);
+    // A save from before the ground knew its mud keeps the table's, with clear water.
+    if (F.fm) { f.fm.set(F.fm); f.sm.set(F.sm); f.M.set(F.M); }
+    if (F.mud) { f.mudFed = F.mud.fed; f.mudOut = F.mud.out; f.mudDown = F.mud.down; f.mudLaid = F.mud.laid; f.mudSea = F.mud.sea; f.mudMark = F.mud.mark; }
     if (F.inletX != null) f.inletX = F.inletX;
     f.dt = F.dt; f.mNow = F.mNow; f.fedIn = F.fedIn; f.toSea = F.toSea; f.steps = F.steps; f.plantYears = F.plantYears; f.waterTime = F.waterTime;
     sim.years = s.years;
@@ -503,6 +531,7 @@ export class Simulation {
     sim.epoch = s.epoch;
     sim.section = s.section;
     sim.history = { ...s.history, inflow: s.history.inflow.slice(), sinuosity: s.history.sinuosity.slice() };
+    if (s.mudSeaRate != null) { sim.mudSeaRate = s.mudSeaRate; sim.lastMudSea = s.lastMudSea; }
     sim.toSeaRate = s.toSeaRate; sim.sandRate = s.sandRate; sim.lastToSea = s.lastToSea;
     sim.nextEventId = s.nextEventId;
     sim.sentEvent = s.nextEventId - 1;
@@ -515,7 +544,7 @@ export class Simulation {
 
   stateHash() {
     const f = this.flow;
-    return hashArrays([f.z, f.h, f.qx, f.qy, f.cover]);
+    return hashArrays([f.z, f.h, f.qx, f.qy, f.cover, f.fm, f.sm, f.M]);
   }
 }
 
@@ -559,7 +588,7 @@ export function lineCells(W, H, pts) {
 }
 
 export function transferList(f) {
-  const list = [f.z.buffer, f.h.buffer, f.rock.buffer, f.cover.buffer, f.mud.buffer,
+  const list = [f.z.buffer, f.h.buffer, f.rock.buffer, f.cover.buffer, f.mud.buffer, f.soil.buffer,
     f.profile.bed.buffer, f.profile.water.buffer, f.profile.start.buffer];
   if (f.layer) list.push(f.layer.buffer);
   if (f.section) list.push(f.section.bed.buffer, f.section.water.buffer, f.section.start.buffer);

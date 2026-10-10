@@ -34,7 +34,7 @@ check(z1 > z0 + 0.2 && scroll1 === scroll0, 'a Raise stroke piles up sand and th
 const overlaps = await page.evaluate(() => {
   const m = document.getElementById('map').getBoundingClientRect();
   const hit = [];
-  const els = ['zoom-in', 'zoom-out', 'zoom-reset', 'view-3d', 'mode-landscape', 'mode-depth', 'mode-speed', 'mode-drag', 'mode-change', 'mode-cutfill', 'scale-bar', 'phase']
+  const els = ['zoom-in', 'zoom-out', 'zoom-reset', 'view-3d', 'mode-landscape', 'mode-depth', 'mode-speed', 'mode-drag', 'mode-mud', 'mode-change', 'mode-cutfill', 'scale-bar', 'phase']
     .map((id) => document.getElementById(id)).concat([...document.querySelectorAll('.tool-rail .tool')]);
   for (const el of els) {
     if (!el || el.hidden) continue;
@@ -90,7 +90,7 @@ await page.tap('.tool-rail [data-kind="storm"]');  // tapping the picked tool ag
 check(await page.evaluate(() => !document.querySelector('.tool-rail [aria-pressed="true"]') && document.getElementById('tool-options').hidden), 'tapping a picked tool again puts it down');
 // Layers.
 let keyGap = 0;
-for (const m of ['depth', 'speed', 'drag', 'change', 'cutfill']) {
+for (const m of ['depth', 'speed', 'drag', 'mud', 'change', 'cutfill']) {
   await page.tap(`#mode-${m}`);
   await page.waitForTimeout(400);
   const ok = await page.evaluate((mm) => !!window.Headwaters.frame().layer && !document.getElementById('layer-key').hidden
@@ -98,7 +98,7 @@ for (const m of ['depth', 'speed', 'drag', 'change', 'cutfill']) {
   if (!ok) check(false, `the ${m} layer shows`);
   keyGap = Math.max(keyGap, await page.evaluate(() => document.getElementById('layer-key').getBoundingClientRect().top - document.getElementById('map').getBoundingClientRect().bottom));
 }
-check(true, 'each of the five layers shows from its own button, with its key');
+check(true, 'each of the six layers shows from its own button, with its key');
 check(keyGap < 30, 'and the key sits just under the map', `${keyGap.toFixed(0)} px below it`);
 await page.tap('#mode-landscape');
 // 3D.

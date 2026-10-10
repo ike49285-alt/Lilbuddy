@@ -341,6 +341,8 @@ function drawSlow(f) {
   $('s-sea').textContent = st.toSea >= 0.5 ? `${n0.format(st.toSea)} m³/day` : 'none yet';
   $('s-delta').textContent = fmtVolume(st.delta);
   $('s-plants').textContent = `${n0.format(st.plants * 100)}%`;
+  $('s-mudsea').textContent = st.mudToSea >= 0.5 ? `${n0.format(st.mudToSea)} m³/day` : 'none yet';
+  $('s-mudlaid').textContent = st.mudLaid > 0 ? fmtVolume(st.mudLaid) : 'none yet';
 
   if (!tokens) readTokens();
   const { water, soft, grid } = tokens;
@@ -443,7 +445,7 @@ function showTab(name) {
 }
 for (const t of TABS) $(`tab-${t}`).addEventListener('click', () => showTab(t));
 
-const LAYER_NAMES = { depth: 'Water depth', speed: 'Current', drag: 'Drag on the bed (times what moves sand)', change: 'Cutting and filling now', cutfill: 'Cut and fill since the start' };
+const LAYER_NAMES = { depth: 'Water depth', speed: 'Current', drag: 'Drag on the bed (times what moves sand)', mud: 'Mud in the water', change: 'Cutting and filling now', cutfill: 'Cut and fill since the start' };
 const ramp = (L) => `linear-gradient(to right, ${L.stops.map((s) => `rgb(${s[1]}, ${s[2]}, ${s[3]}) ${s[0] * 100}%`).join(', ')})`;
 // The land and each layer have a button down the left of the map, each
 // with a strip of its colours.
@@ -871,6 +873,7 @@ const SLIDERS = {
   tilt: ['tilt', 1000, (v) => `${n1.format(v)} m/km`],
   sea: ['sea', 1, (v) => signed(v, 'm')],
   supply: ['supply', 100, (v) => `${Math.round(v)}%`],
+  mud: ['mud', 10, (v) => `${n1.format(v / 10)} g/L`],
 };
 for (const [id, [key, scale, label]] of Object.entries(SLIDERS)) {
   $(id).addEventListener('input', () => { $(`${id}-out`).textContent = label(Number($(id).value)); });
@@ -918,13 +921,15 @@ function renderInspect(info) {
       : info.water === 'shallows' ? `Shallows, ${n0.format(info.depth * 100)} cm deep`
         : info.block ? 'Block of rock' : `Land, ${n1.format(info.elevation)} m above the sea`;
   $('inspect-title').textContent = title;
+  const ground = info.mudGround > 0.6 ? 'Mud' : info.mudGround > 0.25 ? 'Muddy sand' : 'Sand';
   $('inspect-ground').textContent = info.block ? 'Rock the river can’t wear away.'
-    : `Sand and gravel, ${n1.format(info.rockBelow)} m deep over bedrock.`;
+    : `${ground} (${n0.format(info.mudGround * 100)}% mud on top), ${n1.format(info.rockBelow)} m deep over bedrock.`;
   const facts = $('inspect-facts');
   facts.innerHTML = '';
   const fact = (k, v) => { const d = el('div'); d.append(el('dt', '', k), el('dd', '', v)); facts.append(d); };
   if (info.depth > 0) fact('Current', `${n1.format(info.speed)} m/s`);
   if (info.sand > 0.01) fact('Sand moving', `${n1.format(info.sand)} m³/day per m`);
+  if (info.mudWater > 0.005) fact('Mud in the water', `${info.mudWater >= 0.1 ? n1.format(info.mudWater) : n2.format(info.mudWater)} g/L`);
   const ch = info.change;
   fact(ch >= 0 ? 'Built up' : 'Cut down', `${n1.format(Math.abs(ch))} m since the start`);
   const r = info.rate;

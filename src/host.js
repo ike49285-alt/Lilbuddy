@@ -175,7 +175,7 @@ export function createHost(post) {
       case 'section': sim.setSection(msg.points); changed(); break;
       case 'setting': sim.set(msg.key, msg.value); changed(); break;
       case 'mode':
-        sim.layer = ['depth', 'speed', 'drag', 'change', 'cutfill'].includes(msg.mode) ? msg.mode : null;
+        sim.layer = ['depth', 'speed', 'drag', 'mud', 'change', 'cutfill'].includes(msg.mode) ? msg.mode : null;
         changed();
         break;
       case 'inspect':
