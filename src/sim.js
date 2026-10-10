@@ -30,8 +30,10 @@ export const SETTINGS = {
   supply: [0.6, 0, 2],        // sand fed in, as a share of what the inflow can carry
   mud: [0.2, 0, 2],           // grams of mud in each litre of the pump's water
   rock: [6, 1, 60],           // metres of loose ground over the bedrock under the plain
+  lift: [0, 0, 30],           // metres the land is raised above the sea (the sea floor stays)
 };
 const MUD_DENSITY = 2650;     // grams a litre of solid mud
+const LIFT_RAMP = 8;          // rows over which raised land drops to the sea floor
 // Grain sizes for the bed layer, mm (natural logs).
 const LN_MUD = Math.log(0.01), LN_SAND = Math.log(0.7), LN_GRAVEL = Math.log(8);
 
@@ -49,6 +51,7 @@ export class Simulation {
     this.settings = Object.fromEntries(Object.entries(SETTINGS).map(([k, r]) => [k, r[0]]));
     this.tilt = TILT;
     this.rockDepth = SETTINGS.rock[0];   // the bedrock depth the ground was last set to
+    this.lift = 0;                       // and how far the land's been raised
     this.epoch = 0;              // bumped whenever the ground is reshaped by hand
     this.events = [];
     this.nextEventId = 1;
@@ -121,19 +124,40 @@ export class Simulation {
 
   // Tilting the table tilts everything on it: the ground, the rock under it
   // and the starting surface it's measured against.
+  // Moves the whole ground of each row up or down by rowDz(y): the bed, the
+  // rock under it, the bed at the start (so cut and fill stay as they were)
+  // and the ground the things to protect remember.
+  shiftGround(rowDz) {
+    const { W, H } = this;
+    const { z, rock, z0 } = this.flow;
+    const by = new Float64Array(H);
+    for (let y = 0; y < H; y++) by[y] = rowDz(y);
+    for (let y = 0; y < H; y++) {
+      const dz = by[y];
+      if (dz === 0) continue;
+      for (let x = 0; x < W; x++) { const i = y * W + x; z[i] += dz; rock[i] += dz; z0[i] += dz; }
+    }
+    for (const t of this.things) t.watch.forEach((j, k) => { t.base[k] += by[(j / W) | 0]; });
+    this.thalwegZ0 = this.thalweg(z0, null);
+    this.reshaped();
+  }
+
   applySettings() {
+    const { shoreY } = this;
     const want = this.settings.tilt;
     if (Math.abs(want - this.tilt) > 1e-9) {
-      const { W, H, shoreY } = this;
-      const { z, rock, z0 } = this.flow;
       const d = want - this.tilt;
-      for (let y = 0; y < H; y++) {
-        const dz = d * (shoreY - y) * CELL_M;
-        for (let x = 0; x < W; x++) { const i = y * W + x; z[i] += dz; rock[i] += dz; z0[i] += dz; }
-      }
+      this.shiftGround((y) => d * (shoreY - y) * CELL_M);
       this.tilt = want;
-      this.thalwegZ0 = this.thalweg(z0, null);
-      this.reshaped();
+    }
+    // The land's height above the sea: the land rises, and drops to the sea
+    // floor (which stays) down a steep slope over the last rows of the coast.
+    // Raised, the river meets the sea down that step, and cuts back into it.
+    const lift = this.settings.lift;
+    if (Math.abs(lift - this.lift) > 1e-9) {
+      const d = lift - this.lift;
+      this.shiftGround((y) => d * Math.max(0, Math.min(1, (shoreY + LIFT_RAMP / 2 - y) / LIFT_RAMP)));
+      this.lift = lift;
     }
     // The bedrock: all of it moves together, except rock put down by hand,
     // and it never stands above the ground (where the river has cut deeper
@@ -626,6 +650,7 @@ export class Simulation {
       settings: { ...this.settings },
       tilt: this.tilt,
       rockDepth: this.rockDepth,
+      lift: this.lift,
       epoch: this.epoch,
       section: this.section ? this.section.slice() : null,
       history: { ...this.history, inflow: this.history.inflow.slice(), sinuosity: this.history.sinuosity.slice() },
@@ -666,6 +691,8 @@ export class Simulation {
     sim.tilt = s.tilt;
     sim.rockDepth = s.rockDepth != null ? s.rockDepth : SETTINGS.rock[0];
     if (s.settings.rock == null) sim.settings.rock = sim.rockDepth;
+    sim.lift = s.lift || 0;
+    if (s.settings.lift == null) sim.settings.lift = sim.lift;
     sim.epoch = s.epoch;
     sim.section = s.section;
     sim.history = { ...s.history, inflow: s.history.inflow.slice(), sinuosity: s.history.sinuosity.slice() };

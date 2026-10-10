@@ -143,6 +143,10 @@ zoom it.
 - **Sand in:** sand fed in with the water, as a share of what it can carry.
   Less than it can carry and the river cuts down; more and it builds up and
   spreads out.
+- **Land height:** raises the land above the sea, up to 30 m; the sea
+  floor stays, and the land drops to it down a steep slope at the coast.
+  The river then meets the sea down that step and cuts back into it, a
+  gorge working its way up the valley as deep as the bedrock lets it.
 - **Bedrock:** how deep the rock lies under the plain, from 1 to 60 m
   (6 m to start). The river can't cut below it; set it deep and the river
   can cut down into its valley and the terraces as far as it likes.

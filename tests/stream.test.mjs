@@ -201,6 +201,24 @@ const sum = (a) => { let s = 0; for (const v of a) s += v; return s; };
   check(r.settings.rock === 50 && r.rockDepth === 50 && r.flow.rock[plain] === f.rock[plain] && r.flow.placed[blockAt] === 1, 'and comes back through a save');
 }
 
+// Land height: the land rises above the sea, the sea floor stays, and
+// what the things to protect remember rises with it.
+{
+  const s = new Simulation('lift-1');
+  const f = s.flow, W = s.W;
+  const land = 100 * W + 64, sea = (s.H - 10) * W + 64;
+  const z0 = f.z[land], r0 = f.rock[land], s0 = f.z[sea];
+  const house = s.place('house', 60 * W + 10);
+  s.set('lift', 20);
+  check(Math.abs(f.z[land] - z0 - 20) < 1e-3 && Math.abs(f.rock[land] - r0 - 20) < 1e-3 && f.z[sea] === s0, 'Land height raises the land and its rock, not the sea floor', `+${(f.z[land] - z0).toFixed(1)} m`);
+  check(s.frame(0).things[0].state === 'fine' && Math.abs(house.base[0] - f.z[house.watch[0]]) < 1e-3, 'and the houses go up with it');
+  for (let k = 0; k < 2000; k++) s.step(2000);
+  let bad = 0; for (let i = 0; i < f.N; i++) if (!Number.isFinite(f.z[i]) || !Number.isFinite(f.h[i]) || f.h[i] < 0) bad++;
+  check(bad === 0, 'and the river runs on over the step to the sea');
+  const r = Simulation.fromState(structuredClone(s.saveState()));
+  check(r.lift === 20 && r.settings.lift === 20 && r.stateHash() === s.stateHash(), 'and it comes back through a save');
+}
+
 // The pump moves along the top edge, and the river comes in where it is.
 {
   const s = new Simulation('pump-1');
