@@ -267,39 +267,69 @@ body {
 /* Disaster effects sit over the map and let taps through. */
 .map canvas.fx { position: absolute; inset: 0; pointer-events: none; cursor: default; }
 
-/* The tools: a strip under the map, so the open tray never covers it —
-   disasters, shaping tools, and the rain. */
-.toolbar { display: grid; gap: 6px; }
-.tools-toggle, .tools button {
-  min-height: 40px;
-  padding: 0 10px;
+/* The tools, stacked in the right rail under zoom and 3D: pressed is
+   picked. */
+.tool-rail {
+  display: flex;
+  flex-direction: column;
+  width: 44px;
+  margin-top: 4px;
+  border-radius: 6px;
+  overflow: hidden;
+  box-shadow: 0 0 0 1px var(--line);
+}
+.tool-rail .tool {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  min-height: 42px;
+  padding: 0;
   border: 0;
+  border-top: 1px solid var(--line);
   background: var(--panel);
   color: var(--ink);
-  font: 600 13px/1 var(--font-display);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  font: 600 10px/1 var(--font-body);
   cursor: pointer;
 }
-.tools-toggle { width: 100%; border: 1px solid var(--line); border-radius: 6px; }
-.tools-toggle[aria-expanded="true"], .tools button[aria-pressed="true"] { background: var(--ink); color: var(--panel); }
-.tools .tool[aria-pressed="true"] { background: #b8461f; color: #fff; }
-.tools { display: grid; gap: 6px; }
-.tool-row, .size-row {
+.tool-rail .tool:first-child { border-top: 0; }
+.tool-rail .tool[aria-pressed="true"] { background: #b8461f; color: #fff; }
+.tool-rail .tool:focus-visible { outline: 2px solid var(--water); outline-offset: -2px; }
+/* North matters only when the 3D view turns. */
+.map-frame:not(.in3d) .north { display: none; }
+
+/* What the picked tool does, and its brush settings, under the map. */
+.tool-options { display: grid; gap: 6px; }
+.tool-options[hidden] { display: none; }
+.tool-hint { margin: 0; color: var(--muted); font: 400 13px/1.3 var(--font-body); }
+.size-row {
   display: grid;
+  grid-template-columns: repeat(3, 1fr);
   border: 1px solid var(--line);
   border-radius: 6px;
   overflow: hidden;
   gap: 1px;
   background: var(--line);
 }
-.tool-row { grid-template-columns: 1fr 1.25fr 1.15fr 1.05fr; }
-.size-row { grid-template-columns: 1fr 1fr 1.7fr; }
-.tool-row.shape-row { grid-template-columns: repeat(5, 1fr); }
-.tray-head { margin: 4px 0 0; color: var(--muted); font: 600 11px/1 var(--font-display); letter-spacing: 0.08em; text-transform: uppercase; }
-.tools .shape-row .tool[aria-pressed="true"] { background: #2b6c9e; }
-.size-row.brush-row { grid-template-columns: 1fr 1fr; }
-.size-row button[hidden] { display: none; }
+.size-row[hidden] { display: none; }
+.size-row button {
+  min-height: 36px;
+  padding: 0 3px;
+  border: 0;
+  background: var(--panel);
+  color: var(--ink);
+  font: 600 12px/1 var(--font-display);
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.size-row button[aria-pressed="true"] { background: var(--ink); color: var(--panel); }
+.size-row button:focus-visible { outline: 2px solid var(--water); outline-offset: -2px; }
+
+/* The table's settings, in their own tab. */
+.table-pane { display: grid; gap: 8px; }
+.table-pane[hidden] { display: none; }
 .wet-row {
   display: grid;
   grid-template-columns: 7em 1fr 4em;
@@ -318,9 +348,6 @@ body {
 .wet-row input { width: 100%; min-width: 0; margin: 0; accent-color: #2b6c9e; }
 .wet-row span { white-space: nowrap; }
 .wet-row output { text-align: right; font-variant-numeric: tabular-nums; }
-.tools[hidden], .size-row[hidden] { display: none; }
-.tools button { min-height: 40px; padding: 0 3px; font-size: 12px; letter-spacing: 0.03em; }
-.tools-toggle:focus-visible, .tools button:focus-visible { outline: 2px solid var(--water); outline-offset: -2px; }
 
 
 /* Zoom buttons, stacked in the right rail under the north arrow, and 3D. */
@@ -394,7 +421,7 @@ body {
 
 .tabs {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: repeat(3, 1fr);
   border: 1px solid var(--line);
   border-radius: 6px;
   overflow: hidden;
@@ -537,6 +564,4 @@ body {
 .legend .lg-bed { border-color: #8a6a44; }
 .legend .lg-water { border-color: #5aa3d0; }
 .legend .lg-start { border-top-style: dashed; border-color: var(--muted); }
-.tool-row.shape-row { grid-template-columns: repeat(4, 1fr); }
-.tool-row.shape-row:nth-of-type(2) { grid-template-columns: repeat(2, 1fr); }
 .tb-status #phase { text-transform: none; }

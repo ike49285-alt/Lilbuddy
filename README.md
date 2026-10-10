@@ -78,7 +78,7 @@ raining. Nothing is drawn over the map, so the river is always in view.
 ## Using it
 
 **Map.** The controls sit in rails either side of the map: zoom, reset,
-3D and north on the right; on the left, the scale and a button for each
+3D and the tools on the right (north too, in 3D); on the left, the scale and a button for each
 thing the map can show, each with a strip of its colours. Land shows the
 land, with contours every half metre on dry ground; the other five are
 layers, with their key under the map:
@@ -93,7 +93,8 @@ zoomed. Tap a spot to see the depth, current, sand moving, how far the bed
 has moved and the plant cover there. The 3D button stands the valley up,
 heights exaggerated four times.
 
-**Tools.**
+**Tools,** down the right of the map. Tap one to pick it and again to put
+it down; what it does, and a brush's size and strength, show under the map.
 - **Raise** and **Lower:** brushes that pile up or scoop away sand for as
   long as you hold a finger on the map. Small, Big or Huge; Gentle, Strong or
   Bulldozer (half a metre, three or ten metres a second at the centre).
@@ -109,7 +110,7 @@ heights exaggerated four times.
 With a tool picked, one finger works the map and two fingers still move and
 zoom it.
 
-**The table's sliders.**
+**The table's sliders,** in the Table tab.
 - **Pump:** the river's flow before the seasons.
 - **Tilt:** the valley's fall, in metres per kilometre.
 - **Sea level.**

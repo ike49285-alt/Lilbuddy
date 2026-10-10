@@ -42,6 +42,27 @@
           </button>
         </div>
         <button type="button" id="view-3d" class="view-3d" aria-pressed="false" aria-label="Show the valley in 3D" title="3D view" hidden>3D</button>
+        <div class="tool-rail" role="group" aria-label="Tools">
+          <button type="button" class="tool" data-kind="raise" aria-pressed="false" aria-label="Raise: pile up sand" title="Raise: pile up sand"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><path d="M3 16h14M10 13V4M6.5 7.5 10 4l3.5 3.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Raise</span></button>
+          <button type="button" class="tool" data-kind="lower" aria-pressed="false" aria-label="Lower: scoop sand away" title="Lower: scoop sand away"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><path d="M3 4h14M10 7v9M6.5 12.5 10 16l3.5-3.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Lower</span></button>
+          <button type="button" class="tool" data-kind="dig" aria-pressed="false" aria-label="Dig a channel" title="Dig a channel"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><path d="M3 13c3-1 4 3 7 2s4-4 7-3M3 8c3-1 4 3 7 2s4-4 7-3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Dig</span></button>
+          <button type="button" class="tool" data-kind="block" aria-pressed="false" aria-label="Drop a block of rock" title="Drop a block of rock"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><path d="M4 15l2-8 5-3 5 4-1 7z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Block</span></button>
+          <button type="button" class="tool" data-kind="storm" aria-pressed="false" aria-label="Park a storm" title="Park a storm"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><path d="M6 12a3.2 3.2 0 0 1 .4-6.4 4.2 4.2 0 0 1 8 1.4A2.6 2.6 0 0 1 14 12M10.5 10 8.5 14h3l-2 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Storm</span></button>
+          <button type="button" class="tool" data-kind="section" aria-pressed="false" aria-label="Draw a cross-section" title="Draw a cross-section"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><path d="M3 17 17 3M3 13v6M1 17h4M17 1v6M15 3h4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Section</span></button>
+        </div>
+      </div>
+    </div>
+    <div class="tool-options" id="tool-options" hidden>
+      <p class="tool-hint" id="tools-hint" aria-live="polite"></p>
+      <div class="size-row brush-row" id="brush-row" role="group" aria-label="Brush size" hidden>
+        <button type="button" data-brush="small" aria-pressed="false">Small</button>
+        <button type="button" data-brush="big" aria-pressed="true">Big</button>
+        <button type="button" data-brush="huge" aria-pressed="false">Huge</button>
+      </div>
+      <div class="size-row strength-row" id="strength-row" role="group" aria-label="Brush strength" hidden>
+        <button type="button" data-strength="gentle" aria-pressed="false">Gentle</button>
+        <button type="button" data-strength="strong" aria-pressed="true">Strong</button>
+        <button type="button" data-strength="bulldozer" aria-pressed="false">Bulldozer</button>
       </div>
     </div>
     <div class="key layer-key" id="layer-key" hidden>
@@ -57,43 +78,11 @@
       <p id="inspect-ground" class="ground-line"></p>
       <dl id="inspect-facts" class="facts"></dl>
     </div>
-    <div class="toolbar">
-      <button type="button" id="tools-toggle" class="tools-toggle" aria-expanded="false" aria-controls="tools">Tools</button>
-      <div class="tools" id="tools" hidden>
-        <div class="tool-row shape-row" role="group" aria-label="Shape the land">
-          <button type="button" class="tool" data-kind="raise" aria-pressed="false">Raise</button>
-          <button type="button" class="tool" data-kind="lower" aria-pressed="false">Lower</button>
-          <button type="button" class="tool" data-kind="dig" aria-pressed="false">Dig</button>
-          <button type="button" class="tool" data-kind="block" aria-pressed="false">Block</button>
-        </div>
-        <div class="tool-row shape-row" role="group" aria-label="Weather and measuring">
-          <button type="button" class="tool" data-kind="storm" aria-pressed="false">Storm</button>
-          <button type="button" class="tool" data-kind="section" aria-pressed="false">Section</button>
-        </div>
-        <div class="size-row brush-row" id="brush-row" role="group" aria-label="Brush size" hidden>
-          <button type="button" data-brush="small" aria-pressed="false">Small</button>
-          <button type="button" data-brush="big" aria-pressed="true">Big</button>
-          <button type="button" data-brush="huge" aria-pressed="false">Huge</button>
-        </div>
-        <div class="size-row strength-row" id="strength-row" role="group" aria-label="Brush strength" hidden>
-          <button type="button" data-strength="gentle" aria-pressed="false">Gentle</button>
-          <button type="button" data-strength="strong" aria-pressed="true">Strong</button>
-          <button type="button" data-strength="bulldozer" aria-pressed="false">Bulldozer</button>
-        </div>
-        <p class="tray-head">The table</p>
-        <label class="wet-row" for="flow"><span>Pump</span><input type="range" id="flow" min="2" max="80" step="1" value="15"><output id="flow-out" for="flow">15 m³/s</output></label>
-        <label class="wet-row" for="tilt"><span>Tilt</span><input type="range" id="tilt" min="0.5" max="6" step="0.1" value="2"><output id="tilt-out" for="tilt">2.0 m/km</output></label>
-        <label class="wet-row" for="sea"><span>Sea level</span><input type="range" id="sea" min="-2" max="2" step="0.1" value="0"><output id="sea-out" for="sea">±0 m</output></label>
-        <label class="wet-row" for="supply"><span>Sand in</span><input type="range" id="supply" min="0" max="200" step="5" value="60"><output id="supply-out" for="supply">60%</output></label>
-        <p class="visually-hidden" id="tools-hint" aria-live="polite">Pick a tool, then use it on the map.</p>
-      </div>
-    </div>
-    </div>
-
     <section class="panel" aria-label="Readings">
       <div class="tabs" role="tablist" aria-label="Readings">
         <button type="button" role="tab" id="tab-river" aria-controls="pane-river" aria-selected="true">River</button>
         <button type="button" role="tab" id="tab-profile" aria-controls="pane-profile" aria-selected="false">Profile</button>
+        <button type="button" role="tab" id="tab-table" aria-controls="pane-table" aria-selected="false">Table</button>
       </div>
 
       <div class="pane" id="pane-river" role="tabpanel" aria-labelledby="tab-river">
@@ -139,8 +128,16 @@
         <figure class="chart">
           <figcaption><span>Cross-section</span><span id="section-len" class="val"></span></figcaption>
           <canvas id="section" aria-label="A cross-section along the line drawn with the Section tool" hidden></canvas>
-          <p id="section-hint" class="note">Pick Section in the tools and draw a line across the river to see its cross-section here.</p>
+          <p id="section-hint" class="note">Pick Section beside the map and draw a line across the river to see its cross-section here.</p>
         </figure>
+      </div>
+
+      <div class="pane table-pane" id="pane-table" role="tabpanel" aria-labelledby="tab-table" hidden>
+        <label class="wet-row" for="flow"><span>Pump</span><input type="range" id="flow" min="2" max="80" step="1" value="15"><output id="flow-out" for="flow">15 m³/s</output></label>
+        <label class="wet-row" for="tilt"><span>Tilt</span><input type="range" id="tilt" min="0.5" max="6" step="0.1" value="2"><output id="tilt-out" for="tilt">2.0 m/km</output></label>
+        <label class="wet-row" for="sea"><span>Sea level</span><input type="range" id="sea" min="-2" max="2" step="0.1" value="0"><output id="sea-out" for="sea">±0 m</output></label>
+        <label class="wet-row" for="supply"><span>Sand in</span><input type="range" id="supply" min="0" max="200" step="5" value="60"><output id="supply-out" for="supply">60%</output></label>
+        <p class="note">The pump's flow before the seasons and floods, the valley's fall, the sea's level, and the sand fed in with the water as a share of what it can carry.</p>
       </div>
 
     </section>

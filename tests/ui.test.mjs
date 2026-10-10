@@ -16,7 +16,7 @@ const st = await page.evaluate(() => window.Headwaters.state());
 check(st && st.years > 0, 'the river runs', `${(st.years * 365.25 * 24).toFixed(1)} hours in`);
 check(await page.evaluate(() => document.getElementById('time').textContent.startsWith('day')), 'the clock shows the day');
 // A brush stroke by touch: the ground rises and the page doesn't scroll.
-await page.evaluate(() => window.Headwaters.arm('raise'));
+await page.tap('.tool-rail [data-kind="raise"]');
 const box = await page.locator('#map-canvas').boundingBox();
 const cdp = await ctx.newCDPSession(page);
 const at = (fx, fy) => ({ x: box.x + box.width * fx, y: box.y + box.height * fy });
@@ -34,11 +34,12 @@ check(z1 > z0 + 0.2 && scroll1 === scroll0, 'a Raise stroke piles up sand and th
 const overlaps = await page.evaluate(() => {
   const m = document.getElementById('map').getBoundingClientRect();
   const hit = [];
-  for (const id of ['zoom-in', 'zoom-out', 'zoom-reset', 'view-3d', 'mode-landscape', 'mode-depth', 'mode-speed', 'mode-drag', 'mode-change', 'mode-cutfill', 'scale-bar', 'phase']) {
-    const el = document.getElementById(id);
+  const els = ['zoom-in', 'zoom-out', 'zoom-reset', 'view-3d', 'mode-landscape', 'mode-depth', 'mode-speed', 'mode-drag', 'mode-change', 'mode-cutfill', 'scale-bar', 'phase']
+    .map((id) => document.getElementById(id)).concat([...document.querySelectorAll('.tool-rail .tool')]);
+  for (const el of els) {
     if (!el || el.hidden) continue;
     const r = el.getBoundingClientRect();
-    if (r.width && r.left < m.right && r.right > m.left && r.top < m.bottom && r.bottom > m.top) hit.push(id);
+    if (r.width && r.left < m.right && r.right > m.left && r.top < m.bottom && r.bottom > m.top) hit.push(el.id || el.dataset.kind);
   }
   return hit;
 });
@@ -55,7 +56,7 @@ await page.waitForTimeout(600);
 const z3 = await page.evaluate(() => { const f = window.Headwaters.frame(); return f.z[60 * f.W + 25]; });
 check(z3 - z2 > 3 && /held/.test(heldNote), 'a held Strong brush raises metres while the river waits', `+${(z3 - z2).toFixed(1)} m; "${heldNote}"`);
 // Section by drawing a line across the river.
-await page.evaluate(() => window.Headwaters.arm('section'));
+await page.tap('.tool-rail [data-kind="section"]');
 const a = at(20 / 128, 120 / 256), b = at(108 / 128, 120 / 256);
 await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: a.x, y: a.y }] });
 for (let k = 1; k <= 10; k++) await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: a.x + (b.x - a.x) * k / 10, y: a.y }] });
@@ -73,19 +74,20 @@ const inked = await page.evaluate(() => {
 check(inked > 0.1, 'the long profile is drawn', `${(inked * 100).toFixed(0)}% of the chart`);
 await page.screenshot({ path: 'ui-profile.png', fullPage: false });
 // Block and Storm by tap.
-await page.evaluate(() => window.Headwaters.arm('block'));
+await page.tap('.tool-rail [data-kind="block"]');
 const c = at(64.5 / 128, 60.5 / 256);
 await page.touchscreen.tap(c.x, c.y);
 await page.waitForTimeout(600);
 const blk = await page.evaluate(() => { const f = window.Headwaters.frame(); return f.rock[60 * f.W + 64]; });
 check(blk === 1, 'Block drops a block of rock where tapped');
-await page.evaluate(() => window.Headwaters.arm('storm'));
+await page.tap('.tool-rail [data-kind="storm"]');
 await page.touchscreen.tap(c.x, c.y);
 await page.waitForTimeout(800);
 const rate = await page.evaluate(() => window.Headwaters.state().targetRate * 365.25 * 24);
 check(Math.abs(rate - 6) < 0.01, 'Storm slows the clock to watch the flood', `${rate.toFixed(1)} hr/s`);
 check((await page.evaluate(() => window.Headwaters.events())).some((e) => e.kind === 'storm'), 'and it flashes on the map');
-await page.evaluate(() => window.Headwaters.arm(null));
+await page.tap('.tool-rail [data-kind="storm"]');  // tapping the picked tool again puts it down
+check(await page.evaluate(() => !document.querySelector('.tool-rail [aria-pressed="true"]') && document.getElementById('tool-options').hidden), 'tapping a picked tool again puts it down');
 // Layers.
 let keyGap = 0;
 for (const m of ['depth', 'speed', 'drag', 'change', 'cutfill']) {

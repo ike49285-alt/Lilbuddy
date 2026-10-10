@@ -433,14 +433,15 @@ function el(tag, cls, text) {
 let inspectAt = -1;
 let inspectTimer = null;
 
+const TABS = ['river', 'profile', 'table'];
 function showTab(name) {
-  for (const t of ['river', 'profile']) {
+  for (const t of TABS) {
     $(`tab-${t}`).setAttribute('aria-selected', t === name ? 'true' : 'false');
     $(`pane-${t}`).hidden = t !== name;
   }
   if (last) drawSlow(last);
 }
-for (const t of ['river', 'profile']) $(`tab-${t}`).addEventListener('click', () => showTab(t));
+for (const t of TABS) $(`tab-${t}`).addEventListener('click', () => showTab(t));
 
 const LAYER_NAMES = { depth: 'Water depth', speed: 'Current', drag: 'Drag on the bed (times what moves sand)', change: 'Cutting and filling now', cutfill: 'Cut and fill since the start' };
 const ramp = (L) => `linear-gradient(to right, ${L.stops.map((s) => `rgb(${s[1]}, ${s[2]}, ${s[3]}) ${s[0] * 100}%`).join(', ')})`;
@@ -777,7 +778,8 @@ let shaping = null;
 
 function setArmed(kind) {
   armed = kind;
-  for (const b of document.querySelectorAll('.tools .tool')) b.setAttribute('aria-pressed', b.dataset.kind === kind ? 'true' : 'false');
+  for (const b of document.querySelectorAll('.tool-rail .tool')) b.setAttribute('aria-pressed', b.dataset.kind === kind ? 'true' : 'false');
+  $('tool-options').hidden = !kind;
   $('brush-row').hidden = !(kind === 'raise' || kind === 'lower');
   $('strength-row').hidden = !(kind === 'raise' || kind === 'lower');
   const names = {
@@ -785,9 +787,7 @@ function setArmed(kind) {
     dig: 'Draw a line on the map to dig a channel.', block: 'Tap the map to drop a block of rock there.',
     storm: 'Tap the map to park a storm over the valley.', section: 'Draw a line across the river to see its cross-section.',
   };
-  $('tools-hint').textContent = kind ? names[kind] : 'Pick a tool, then use it on the map.';
-  const label = { raise: 'Brush: Raise', lower: 'Brush: Lower', dig: 'Draw: Dig', block: 'Tap map: Block', storm: 'Tap map: Storm', section: 'Draw: Section' };
-  $('tools-toggle').textContent = kind ? label[kind] : 'Tools';
+  $('tools-hint').textContent = kind ? `${names[kind]} Two fingers still move the map.` : '';
   canvas.classList.toggle('armed', !!kind);
   glCanvas.classList.toggle('armed', !!kind);
   canvas.classList.toggle('shaping', SHAPERS.has(kind));
@@ -888,14 +888,7 @@ for (const b of document.querySelectorAll('#brush-row button')) {
   });
 }
 
-function setTray(open) {
-  $('tools-toggle').setAttribute('aria-expanded', open ? 'true' : 'false');
-  $('tools').hidden = !open;
-  if (!open) setArmed(null);
-}
-
-$('tools-toggle').addEventListener('click', () => setTray($('tools').hidden));
-for (const b of document.querySelectorAll('.tools .tool')) {
+for (const b of document.querySelectorAll('.tool-rail .tool')) {
   b.addEventListener('click', () => setArmed(armed === b.dataset.kind ? null : b.dataset.kind));
 }
 
@@ -953,7 +946,7 @@ window.Headwaters = {
   set3d: (on) => set3d(on),
   cam: (c) => { if (c) Object.assign(view3d.cam, c); viewChanged(); return view3d && view3d.cam ? { ...view3d.cam } : null; },
   pick3d: (px, py) => view3d.pick(px, py),
-  arm: (kind) => { setTray(true); setArmed(kind); },
+  arm: (kind) => setArmed(kind),
   tab: (t) => showTab(t),
   mode: (m) => setMode(m),
   frame: () => last,
