@@ -1,5 +1,5 @@
 // render.js — draws a frame: sand and grass with hillshade, the water by
-// its depth and the sand it carries, clouds and night, the map's colour
+// its depth and the sand it carries, the map's colour
 // layers, and the effects of the hand tools; and the river's long profile
 // and cross-sections as charts.
 
@@ -35,34 +35,6 @@ for (const [k, L] of Object.entries(LAYERS)) {
     for (let c = 0; c < 3; c++) lut[v * 3 + c] = a[c + 1] + (b[c + 1] - a[c + 1]) * u;
   }
   LAYER_LUT[k] = lut;
-}
-
-// Where the sun is, for a time in years: how much daylight there is (1 by
-// day, 0 at night), how high it stands, how warm the light is at dawn and
-// dusk, and which way shadows fall (in cells). Only below an hour per tick
-// is there a time of day to show; otherwise it's always day.
-export function sunlight(years, yearFrac, tickYears) {
-  if (!(tickYears < 1 / 365.25 / 24)) return { day: 1, warm: 0, shadowX: 1.2, shadowY: 1.6, height: 0.7 };
-  const hour = ((years * 365.25) % 1) * 24;
-  const length = 12 + 3.5 * Math.cos(2 * Math.PI * (yearFrac - 0.47));
-  const rise = 12 - length / 2, set = 12 + length / 2;
-  let s;
-  if (hour >= rise && hour <= set) s = Math.sin((Math.PI * (hour - rise)) / length);
-  else s = -Math.sin((Math.PI * ((hour - set + 24) % 24)) / (24 - length));
-  const day = Math.max(0, Math.min(1, (s + 0.12) / 0.3));
-  const warm = Math.max(0, 1 - Math.abs(s) / 0.22);
-  const along = (hour - 12) / (length / 2);
-  return { day, warm, height: s, shadowX: -2.5 * Math.max(-1, Math.min(1, along)), shadowY: 1.4 + 1.5 * (1 - Math.max(0, s)) };
-}
-
-// The colour the night lays over everything (a multiply, 0–1 per channel):
-// moonlit blue, light enough to see by, glowing warm at dawn and dusk.
-const NIGHT = [118, 132, 182];
-export function nightTint(sun) {
-  if (sun.day >= 1) return [1, 1, 1];
-  const c = NIGHT.map((v) => v + (255 - v) * sun.day);
-  const wm = sun.warm * 0.75;
-  return [(c[0] + (255 - c[0]) * wm * 0.4) / 255, (c[1] + (196 - c[1]) * wm) / 255, (c[2] + (150 - c[2]) * wm) / 255];
 }
 
 // The grass's colour at a time of year.
@@ -273,17 +245,6 @@ export class MapRenderer {
       ctx.fillRect(ipx - (ihalf + 1) * s, ipy, (2 * ihalf + 2) * s, Math.max(3 * dpr, 0.8 * s));
     }
     if (f.section) this.drawSectionLine(ctx, f.section.line, s, dpr);
-    if (this.mode === 'landscape') {
-      const sun = sunlight(f.years, f.climate.yearFrac || 0, f.tickYears);
-      if (f.cloud) this.drawClouds(f, ctx, w, h, sun);
-      if (sun.day < 1) {
-        const c = nightTint(sun);
-        ctx.globalCompositeOperation = 'multiply';
-        ctx.fillStyle = `rgb(${c[0] * 255 | 0}, ${c[1] * 255 | 0}, ${c[2] * 255 | 0})`;
-        ctx.fillRect(0, 0, w, h);
-        ctx.globalCompositeOperation = 'source-over';
-      }
-    }
   }
 
   drawSectionLine(ctx, line, s, dpr) {
@@ -303,44 +264,6 @@ export class MapRenderer {
       ctx.fillText(lab, p[0] + 6 * dpr, p[1] - 6 * dpr);
       ctx.fillStyle = 'rgba(255,255,255,0.95)';
     }
-  }
-
-  // Clouds, soft and upscaled, with their shadow cast away from the sun.
-  drawClouds(f, ctx, w, h, sun) {
-    const cv = this.cloudLayer(f), sv = this.shadowCv;
-    const k = f.cloudW / f.W;
-    const vw = this.W / this.zoom, vh = this.H / this.zoom;
-    const cell = w / vw;
-    ctx.imageSmoothingEnabled = true;
-    ctx.drawImage(sv, this.x0 * k, this.y0 * k, vw * k, vh * k, sun.shadowX * cell * 3, sun.shadowY * cell * 3, w, h);
-    ctx.drawImage(cv, this.x0 * k, this.y0 * k, vw * k, vh * k, 0, 0, w, h);
-  }
-
-  cloudLayer(f) {
-    const CW = f.cloudW, CH = f.cloudH;
-    if (!this.cloudCv) {
-      this.cloudCv = document.createElement('canvas');
-      this.shadowCv = document.createElement('canvas');
-    }
-    const cv = this.cloudCv, sv = this.shadowCv;
-    if (cv.width !== CW || cv.height !== CH) { cv.width = sv.width = CW; cv.height = sv.height = CH; this.cloudOf = null; }
-    if (this.cloudOf !== f.cloud) {
-      this.cloudOf = f.cloud;
-      const cimg = cv.getContext('2d').createImageData(CW, CH), simg = sv.getContext('2d').createImageData(CW, CH);
-      const cd = cimg.data, sd = simg.data;
-      for (let c = 0; c < CW * CH; c++) {
-        const d = f.cloud[c] / 255;
-        const a = Math.min(0.6, d * 0.7);
-        if (a <= 0) continue;
-        const grey = 250 - 110 * Math.max(0, Math.min(1, (d - 0.5) / 0.5));
-        const o = c * 4;
-        cd[o] = grey; cd[o + 1] = grey; cd[o + 2] = grey + 4; cd[o + 3] = a * 255;
-        sd[o] = 20; sd[o + 1] = 26; sd[o + 2] = 34; sd[o + 3] = a * 0.35 * 255;
-      }
-      cv.getContext('2d').putImageData(cimg, 0, 0);
-      sv.getContext('2d').putImageData(simg, 0, 0);
-    }
-    return cv;
   }
 
   // --- effects ----------------------------------------------------------------

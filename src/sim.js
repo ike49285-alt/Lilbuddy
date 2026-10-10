@@ -10,7 +10,6 @@ export { SEC_PER_YR };
 
 const DAY = 1 / 365.25;
 const HOUR = DAY / 24;
-export const WEATHER_RATE = DAY;           // sim-years per second at or below which the weather shows
 const HISTORY_LEN = 240;
 const MEAN_RAIN = 1 / SEC_PER_YR;          // a metre a year, in metres a second
 const BRUSH_R = { small: 2, big: 5, huge: 10 };              // cells
@@ -37,7 +36,7 @@ export class Simulation {
     this.W = table.W; this.H = table.H; this.N = table.N;
     this.shoreY = table.shoreY;
     this.flow = new Flow(table);
-    this.weather = new Weather(this.rng, this.W, this.H);
+    this.weather = new Weather(this.rng);
     this.years = 0;
     this.settings = Object.fromEntries(Object.entries(SETTINGS).map(([k, r]) => [k, r[0]]));
     this.tilt = TILT;
@@ -396,8 +395,6 @@ export class Simulation {
   frame(tickYears = 0) {
     const f = this.flow;
     const m = this.measure();
-    const showWeather = tickYears <= WEATHER_RATE / 10 + 1e-12;
-    if (showWeather) this.weather.clouds(this.years);
     const yf = this.years % 1;
     return {
       W: this.W, H: this.H, cell: CELL_M, shoreY: this.shoreY,
@@ -408,8 +405,6 @@ export class Simulation {
       cover: bytes(f.cover, 255),
       mud: this.mudBytes(),
       layer: this.layer ? this.layerBytes() : null,
-      cloud: showWeather ? bytes(this.weather.cloud, 255) : null,
-      cloudW: this.weather.CW, cloudH: this.weather.CH,
       seaLevel: this.settings.sea,
       inlet: [INLET_X, INLET_HALF],
       terrainEpoch: this.epoch,
@@ -570,7 +565,6 @@ export function transferList(f) {
   const list = [f.z.buffer, f.h.buffer, f.rock.buffer, f.cover.buffer, f.mud.buffer,
     f.profile.bed.buffer, f.profile.water.buffer, f.profile.start.buffer];
   if (f.layer) list.push(f.layer.buffer);
-  if (f.cloud) list.push(f.cloud.buffer);
   if (f.section) list.push(f.section.bed.buffer, f.section.water.buffer, f.section.start.buffer);
   return list;
 }

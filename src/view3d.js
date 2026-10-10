@@ -6,8 +6,6 @@
 // colours from the flat map's cell image, so every map mode works; where
 // there's water, the surface drawn is the water's.
 
-import { sunlight, nightTint } from './render.js';
-
 const EXAG = 4;
 const UNIT = EXAG / 4;                 // metres of height to cells (4 m), exaggerated
 const FOV = (45 * Math.PI) / 180;
@@ -19,7 +17,7 @@ attribute vec2 aPos;
 attribute vec4 aHN;     // height, then the normal's x and z
 attribute float aWet;
 uniform mat4 uMVP;
-uniform mediump vec2 uSize;   // shared with the fragment shader, so the same precision
+uniform vec2 uSize;
 varying vec2 vUV;
 varying vec3 vN;
 varying vec3 vP;
@@ -36,14 +34,8 @@ const TERRAIN_FS = `
 precision mediump float;
 uniform sampler2D uColor;
 uniform sampler2D uRiver;
-uniform sampler2D uCloud;
-uniform float uClouds;
-uniform float uCloudY;
-uniform vec2 uSize;
 uniform vec3 uSun;
-uniform vec3 uTint;
 uniform vec3 uEye;
-uniform float uDay;
 varying vec2 vUV;
 varying vec3 vN;
 varying vec3 vP;
@@ -54,58 +46,12 @@ void main() {
   c = mix(c, r.rgb, r.a);
   vec3 n = normalize(vN);
   float shade = clamp(dot(n, uSun) / max(uSun.y, 0.25), 0.45, 1.35);
-  if (uClouds > 0.5) {
-    // The cloud between here and the sun.
-    vec2 at = vP.xz + uSun.xz * (max(0.0, uCloudY - vP.y) / max(uSun.y, 0.12));
-    shade *= 1.0 - 0.4 * texture2D(uCloud, at / uSize).a;
-  }
   vec3 col = c * shade;
   if (vWet > 0.5) {
     vec3 h = normalize(uSun + normalize(uEye - vP));
-    col += vec3(0.32) * pow(max(dot(n, h), 0.0), 80.0) * uDay;
+    col += vec3(0.32) * pow(max(dot(n, h), 0.0), 80.0);
   }
-  gl_FragColor = vec4(col * uTint, 1.0);
-}`;
-
-const CLOUD_VS = `
-attribute vec2 aPos;
-uniform mat4 uMVP;
-uniform vec2 uSize;
-uniform float uY;
-varying vec2 vUV;
-void main() {
-  vUV = aPos / uSize;
-  gl_Position = uMVP * vec4(aPos.x, uY, aPos.y, 1.0);
-}`;
-
-const CLOUD_FS = `
-precision mediump float;
-uniform sampler2D uCloud;
-uniform vec3 uTint;
-varying vec2 vUV;
-void main() {
-  vec4 c = texture2D(uCloud, vUV);
-  gl_FragColor = vec4(c.rgb * uTint, c.a * 0.9);
-}`;
-
-const SPECK_VS = `
-attribute vec4 aP;      // x, height, z, kind
-uniform mat4 uMVP;
-uniform float uPx;
-varying float vKind;
-void main() {
-  vKind = aP.w;
-  gl_Position = uMVP * vec4(aP.xyz, 1.0);
-  gl_PointSize = uPx * clamp(160.0 / gl_Position.w, 1.4, 2.8);
-}`;
-
-const SPECK_FS = `
-precision mediump float;
-uniform vec3 uTint;
-varying float vKind;
-void main() {
-  vec3 c = vKind < 0.5 ? vec3(0.93, 0.95, 0.97) : vKind < 1.5 ? vec3(0.19, 0.13, 0.09) : vec3(0.77, 0.29, 0.14);
-  gl_FragColor = vec4(c * uTint, vKind < 0.5 ? 0.6 : 0.92);
+  gl_FragColor = vec4(col, 1.0);
 }`;
 
 // Whether this browser can draw the 3D view at all.
@@ -134,7 +80,7 @@ export class View3D {
     this.lost = false;
     this.cam = null;
     canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); this.lost = true; });
-    canvas.addEventListener('webglcontextrestored', () => { this.lost = false; this.init(); this.frameOf = null; this.painted = null; this.cloudOf = null; this.riverDirty = true; });
+    canvas.addEventListener('webglcontextrestored', () => { this.lost = false; this.init(); this.frameOf = null; this.painted = null; });
     this.init();
   }
 
@@ -144,17 +90,12 @@ export class View3D {
     if (!gl) throw new Error('no WebGL');
     this.gl = gl;
     this.terrainProg = program(gl, TERRAIN_VS, TERRAIN_FS);
-    this.cloudProg = program(gl, CLOUD_VS, CLOUD_FS);
-    this.speckProg = program(gl, SPECK_VS, SPECK_FS);
     this.tColor = texture(gl);
     this.tRiver = texture(gl);
-    this.tCloud = texture(gl);
     this.bPos = gl.createBuffer();
     this.bHN = gl.createBuffer();
     this.bWet = gl.createBuffer();
     this.bIdx = gl.createBuffer();
-    this.bQuad = gl.createBuffer();
-    this.bSpeck = gl.createBuffer();
     this.meshW = 0;
   }
 
@@ -180,8 +121,6 @@ export class View3D {
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.bIdx);
     gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, idx, gl.STATIC_DRAW);
     this.nIdx = idx.length;
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.bQuad);
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([0, 0, W, 0, 0, H, W, H]), gl.STATIC_DRAW);
     this.hn = new Float32Array(W * H * 4);
     this.wet = new Float32Array(W * H);
     this.heights = new Float32Array(W * H);
@@ -383,26 +322,13 @@ export class View3D {
       gl.bindTexture(gl.TEXTURE_2D, this.tColor);
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, this.renderer.terrain);
     }
-    const landscape = this.renderer.mode === 'landscape';
-    const cloudCv = landscape && f.cloud ? this.renderer.cloudLayer(f) : null;
-    if (cloudCv && (fresh || this.cloudOf !== f.cloud)) {
-      this.cloudOf = f.cloud;
-      gl.bindTexture(gl.TEXTURE_2D, this.tCloud);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, cloudCv);
-    }
-
-    const sun = landscape ? sunlight(f.years, f.climate.yearFrac || 0, f.tickYears) : { day: 1, warm: 0, shadowX: 1.2, shadowY: 1.6, height: 0.7 };
-    const tint = landscape ? nightTint(sun) : [1, 1, 1];
-    // The sun stands opposite the way shadows fall, higher at noon.
-    const sx = -sun.shadowX, sz = -sun.shadowY;
-    const hl = Math.hypot(sx, sz) || 1;
-    const elev = Math.max(0.12, Math.min(1.2, Math.asin(Math.max(0.12, Math.min(1, sun.height)))));
+    // An afternoon sun from the north-west, always.
+    const sx = -1.2, sz = -1.6, hl = Math.hypot(sx, sz), elev = Math.asin(0.7);
     const L = [(sx / hl) * Math.cos(elev), Math.sin(elev), (sz / hl) * Math.cos(elev)];
 
-    const cloudY = this.top + 40;
     const mvp = this.matrices();
     gl.viewport(0, 0, w, h);
-    const sky = [0.62 * tint[0], 0.74 * tint[1], 0.84 * tint[2]];
+    const sky = [0.62, 0.74, 0.84];
     gl.clearColor(sky[0], sky[1], sky[2], 1);
     this.skyRgb = sky.map((v) => Math.round(v * 255));
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
@@ -418,14 +344,9 @@ export class View3D {
     gl.uniformMatrix4fv(p.u.uMVP, false, mvp);
     gl.uniform2f(p.u.uSize, f.W, f.H);
     gl.uniform3fv(p.u.uSun, L);
-    gl.uniform3fv(p.u.uTint, tint);
     gl.uniform3fv(p.u.uEye, this.eye);
-    gl.uniform1f(p.u.uDay, sun.day);
-    gl.uniform1f(p.u.uClouds, cloudCv ? 1 : 0);
-    gl.uniform1f(p.u.uCloudY, cloudY);
     bindTex(gl, 0, this.tColor, p.u.uColor);
     bindTex(gl, 1, this.tRiver, p.u.uRiver);
-    bindTex(gl, 2, this.tCloud, p.u.uCloud);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.bIdx);
     gl.drawElements(gl.TRIANGLES, this.nIdx, gl.UNSIGNED_SHORT, 0);
     disable(gl, p);
@@ -434,21 +355,6 @@ export class View3D {
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 
 
-    // Clouds, floating well above the peaks.
-    if (cloudCv) {
-      p = this.cloudProg;
-      gl.useProgram(p.prog);
-      gl.depthMask(false);
-      attrib(gl, p, 'aPos', this.bQuad, 2);
-      gl.uniformMatrix4fv(p.u.uMVP, false, mvp);
-      gl.uniform2f(p.u.uSize, f.W, f.H);
-      gl.uniform1f(p.u.uY, cloudY);
-      gl.uniform3fv(p.u.uTint, tint);
-      bindTex(gl, 0, this.tCloud, p.u.uCloud);
-      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-      disable(gl, p);
-      gl.depthMask(true);
-    }
   }
 }
 

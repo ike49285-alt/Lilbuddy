@@ -27,7 +27,7 @@ then open http://localhost:8000/.
 
 - `src/table.js` — the starting landscape: a bare sand floodplain, terraces, and a wide shallow sea for the delta
 - `src/flow.js` — the water, the sand, the banks and the plants
-- `src/weather.js` — clouds, rain, and the floods that come down from upstream
+- `src/weather.js` — rain, and the floods that come down from upstream
 - `src/sim.js` — one world: the clock, the seasons, the tools, measuring, saving
 - `src/save.js` — the continue slot in IndexedDB
 - `src/host.js`, `src/worker.js` — runs the sim off the main thread
@@ -70,9 +70,10 @@ shows it as "bed ×N". The clock runs on the bed's time. The factor backs
 off by itself when the bed would change faster than the water could follow.
 
 **Seasons and weather.** The river runs low in winter and high in the spring
-melt, with a smaller rise in the autumn rains. At a day a second or slower,
-weather systems drift over: clouds cover the map, it rains, and the rain on
-the catchment upstream comes down the river as a flood some hours later.
+melt, with a smaller rise in the autumn rains. Weather systems drift over:
+while one passes it rains, and the rain on the catchment upstream comes
+down the river as a flood some hours later. The time bar says when it's
+raining. Nothing is drawn over the map, so the river is always in view.
 
 ## Using it
 
