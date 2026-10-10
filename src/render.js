@@ -4,7 +4,7 @@
 // and cross-sections as charts.
 
 const MAX_ZOOM = 8;
-const EFFECT_MS = { storm: 5000, block: 1800, dig: 1600 };
+const EFFECT_MS = { storm: 5000, block: 1800, dig: 1600, pump: 1800 };
 
 // Ground: sand and gravel by how high above the water table it stands
 // (darker and damper low down), grass and shrubs over it, grey rock.

@@ -767,6 +767,7 @@ function dropAt(wx, wy) {
     worker.postMessage({ type: 'storm', i });
   }
   else if (armed === 'block') worker.postMessage({ type: 'block', i });
+  else if (armed === 'pump') worker.postMessage({ type: 'pump', x: wx });
 }
 
 const SHAPERS = new Set(['raise', 'lower', 'dig', 'section']);
@@ -785,7 +786,7 @@ function setArmed(kind) {
   const names = {
     raise: 'Hold a finger on the map to pile sand there.', lower: 'Hold a finger on the map to scoop sand away.',
     dig: 'Draw a line on the map to dig a channel.', block: 'Tap the map to drop a block of rock there.',
-    storm: 'Tap the map to park a storm over the valley.', section: 'Draw a line across the river to see its cross-section.',
+    storm: 'Tap the map to park a storm over the valley.', pump: 'Tap the map to move the pump along the top edge, above where you tap.', section: 'Draw a line across the river to see its cross-section.',
   };
   $('tools-hint').textContent = kind ? `${names[kind]} Two fingers still move the map.` : '';
   canvas.classList.toggle('armed', !!kind);

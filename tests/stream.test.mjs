@@ -89,6 +89,24 @@ const sum = (a) => { let s = 0; for (const v of a) s += v; return s; };
   check(['dig', 'block', 'storm'].every((k) => fr.events.some((e) => e.kind === k)) && fr.events.every((e) => !('label' in e)), 'each tool sends an event for the map, and nothing sends a note');
 }
 
+// The pump moves along the top edge, and the river comes in where it is.
+{
+  const s = new Simulation('pump-1');
+  const f = s.flow, W = s.W;
+  for (let k = 0; k < 500; k++) s.step(1);
+  s.movePump(30);
+  // Water flowing down out of the top rows, either side of x.
+  const flowAt = (x) => { let q = 0; for (let xx = x - 12; xx <= x + 12; xx++) q += f.qy[3 * W + xx]; return q * f.dx; };
+  for (let k = 0; k < 4000; k++) s.step(1);
+  const fr = s.frame(0.001);
+  check(f.inletX === 30 && fr.inlet[0] === 30 && flowAt(30) > 0.6 * f.inflow && Math.abs(flowAt(64)) < 0.1 * f.inflow, 'Pump moves the river’s inlet', `${flowAt(30).toFixed(1)} m³/s down from the new inlet, ${flowAt(64).toFixed(1)} from the old`);
+  check(fr.events.some((e) => e.kind === 'pump'), 'and flashes where it went');
+  const r = Simulation.fromState(structuredClone(s.saveState()));
+  check(r.flow.inletX === 30, 'and stays put through a save');
+  s.movePump(-50);
+  check(f.inletX === f.inletHalf + 1, 'and stays on the table', `x ${f.inletX}`);
+}
+
 // Settings.
 {
   const s = new Simulation('settings-1');

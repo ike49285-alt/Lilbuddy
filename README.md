@@ -103,6 +103,8 @@ it down; what it does, and a brush's size and strength, show under the map.
   Lower stops at the bedrock.
 - **Dig:** cuts a channel along a line you draw.
 - **Block:** drops a block of rock the river can't wear away.
+- **Pump:** moves the pump along the top edge, above where you tap, like
+  moving the hose on a stream table.
 - **Storm:** parks a storm over the valley for a day and a half, and slows
   the clock so you can watch the flood come down.
 - **Section:** draws a line for a cross-section.

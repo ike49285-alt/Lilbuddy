@@ -171,6 +171,7 @@ export function createHost(post) {
       case 'dig': sim.dig(msg.points || []); changed(); break;
       case 'block': sim.block(msg.i); changed(); break;
       case 'storm': sim.storm(msg.i); changed(); break;
+      case 'pump': sim.movePump(msg.x); changed(); break;
       case 'section': sim.setSection(msg.points); changed(); break;
       case 'setting': sim.set(msg.key, msg.value); changed(); break;
       case 'mode':

@@ -2,7 +2,7 @@
 // clock, and what the page can do to it.
 
 import { makeRng, hashArrays } from './rng.js';
-import { makeTable, CELL_M, TILT, INLET_X, INLET_HALF } from './table.js';
+import { makeTable, CELL_M, TILT } from './table.js';
 import { Flow, WET, SHIELDS_C, SEC_PER_YR, SPONGE } from './flow.js';
 import { Weather } from './weather.js';
 
@@ -195,6 +195,15 @@ export class Simulation {
     }
     this.reshaped();
     this.event('block', i);
+  }
+
+  // Moves the pump along the top edge: the river comes in over x.
+  movePump(x) {
+    const f = this.flow;
+    const half = f.inletHalf;
+    f.inletX = Math.max(half + 1, Math.min(this.W - half - 2, Math.round(x)));
+    f.ranges();
+    this.event('pump', f.inletX);
   }
 
   // Parks a storm: rain over the valley for a day and a half, and the flood
@@ -394,7 +403,7 @@ export class Simulation {
       mud: this.mudBytes(),
       layer: this.layer ? this.layerBytes() : null,
       seaLevel: this.settings.sea,
-      inlet: [INLET_X, INLET_HALF],
+      inlet: [this.flow.inletX, this.flow.inletHalf],
       terrainEpoch: this.epoch,
       climate: {
         label: seasonName(yf),
@@ -475,7 +484,7 @@ export class Simulation {
       flow: {
         z: f.z.slice(), h: f.h.slice(), qx: f.qx.slice(), qy: f.qy.slice(), cover: f.cover.slice(), rock: f.rock.slice(),
         z0: f.z0.slice(), dzRate: f.dzRate.slice(), ux: f.ux.slice(), uy: f.uy.slice(),
-        dt: f.dt, mNow: f.mNow, fedIn: f.fedIn, toSea: f.toSea, steps: f.steps, plantYears: f.plantYears, waterTime: f.waterTime,
+        inletX: f.inletX, dt: f.dt, mNow: f.mNow, fedIn: f.fedIn, toSea: f.toSea, steps: f.steps, plantYears: f.plantYears, waterTime: f.waterTime,
       },
     };
   }
@@ -486,6 +495,7 @@ export class Simulation {
     const f = sim.flow;
     const F = s.flow;
     for (const k of ['z', 'h', 'qx', 'qy', 'cover', 'rock', 'z0', 'dzRate', 'ux', 'uy']) f[k].set(F[k]);
+    if (F.inletX != null) f.inletX = F.inletX;
     f.dt = F.dt; f.mNow = F.mNow; f.fedIn = F.fedIn; f.toSea = F.toSea; f.steps = F.steps; f.plantYears = F.plantYears; f.waterTime = F.waterTime;
     sim.years = s.years;
     Object.assign(sim.settings, s.settings);
