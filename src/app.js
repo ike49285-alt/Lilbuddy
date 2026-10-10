@@ -901,6 +901,7 @@ const SLIDERS = {
   sea: ['sea', 1, (v) => signed(v, 'm')],
   supply: ['supply', 100, (v) => `${Math.round(v)}%`],
   mud: ['mud', 10, (v) => `${n1.format(v / 10)} g/L`],
+  rock: ['rock', 1, (v) => `${v} m down`],
 };
 for (const [id, [key, scale, label]] of Object.entries(SLIDERS)) {
   $(id).addEventListener('input', () => { $(`${id}-out`).textContent = label(Number($(id).value)); });

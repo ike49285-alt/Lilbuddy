@@ -29,6 +29,7 @@ export const SETTINGS = {
   sea: [0, -2, 2],            // metres higher or lower sea
   supply: [0.6, 0, 2],        // sand fed in, as a share of what the inflow can carry
   mud: [0.2, 0, 2],           // grams of mud in each litre of the pump's water
+  rock: [6, 1, 60],           // metres of loose ground over the bedrock under the plain
 };
 const MUD_DENSITY = 2650;     // grams a litre of solid mud
 // Grain sizes for the bed layer, mm (natural logs).
@@ -47,6 +48,7 @@ export class Simulation {
     this.years = 0;
     this.settings = Object.fromEntries(Object.entries(SETTINGS).map(([k, r]) => [k, r[0]]));
     this.tilt = TILT;
+    this.rockDepth = SETTINGS.rock[0];   // the bedrock depth the ground was last set to
     this.epoch = 0;              // bumped whenever the ground is reshaped by hand
     this.events = [];
     this.nextEventId = 1;
@@ -133,6 +135,21 @@ export class Simulation {
       this.thalwegZ0 = this.thalweg(z0, null);
       this.reshaped();
     }
+    // The bedrock: all of it moves together, except rock put down by hand,
+    // and it never stands above the ground (where the river has cut deeper
+    // than it now lies, the rock is the bed).
+    const depth = this.settings.rock;
+    if (Math.abs(depth - this.rockDepth) > 1e-9) {
+      const { z, rock, placed } = this.flow;
+      const d = depth - this.rockDepth;
+      for (let i = 0; i < this.N; i++) {
+        if (placed[i]) continue;
+        const r = rock[i] - d;
+        rock[i] = r < z[i] ? r : z[i];
+      }
+      this.rockDepth = depth;
+      this.reshaped();
+    }
     this.climate();
   }
 
@@ -213,6 +230,7 @@ export class Simulation {
         z[j] = top + BLOCK_H;
         rock[j] = z[j];
         cover[j] = 0;
+        this.flow.placed[j] = 1;
         this.flow.fm[j] = 0;
         this.flow.sm[j] = 0;
         this.flow.fg[j] = 0;
@@ -249,6 +267,7 @@ export class Simulation {
         const j = cells[k];
         piers.push(j);
         f.rock[j] = f.z[j];
+        f.placed[j] = 1;
         f.fm[j] = 0;
         f.fg[j] = 0;
       }
@@ -606,6 +625,7 @@ export class Simulation {
       years: this.years,
       settings: { ...this.settings },
       tilt: this.tilt,
+      rockDepth: this.rockDepth,
       epoch: this.epoch,
       section: this.section ? this.section.slice() : null,
       history: { ...this.history, inflow: this.history.inflow.slice(), sinuosity: this.history.sinuosity.slice() },
@@ -618,6 +638,7 @@ export class Simulation {
       flow: {
         z: f.z.slice(), h: f.h.slice(), qx: f.qx.slice(), qy: f.qy.slice(), cover: f.cover.slice(), rock: f.rock.slice(),
         z0: f.z0.slice(), dzRate: f.dzRate.slice(), ux: f.ux.slice(), uy: f.uy.slice(),
+        placed: f.placed.slice(),
         fm: f.fm.slice(), sm: f.sm.slice(), M: f.M.slice(), fg: f.fg.slice(), sg: f.sg.slice(),
         gravel: { in: f.gravelIn, out: f.gravelOut },
         mud: { fed: f.mudFed, out: f.mudOut, down: f.mudDown, laid: f.mudLaid, sea: f.mudSea, mark: f.mudMark },
@@ -633,6 +654,8 @@ export class Simulation {
     const F = s.flow;
     for (const k of ['z', 'h', 'qx', 'qy', 'cover', 'rock', 'z0', 'dzRate', 'ux', 'uy']) f[k].set(F[k]);
     // A save from before the ground knew its mud keeps the table's, with clear water.
+    // Rock put down by hand; an older save's is wherever rock stands at the ground.
+    if (F.placed) f.placed.set(F.placed); else for (let i = 0; i < f.N; i++) f.placed[i] = f.rock[i] >= f.z[i] - 0.01 ? 1 : 0;
     if (F.fm) { f.fm.set(F.fm); f.sm.set(F.sm); f.M.set(F.M); }
     if (F.fg) { f.fg.set(F.fg); f.sg.set(F.sg); f.gravelIn = F.gravel.in; f.gravelOut = F.gravel.out; }
     if (F.mud) { f.mudFed = F.mud.fed; f.mudOut = F.mud.out; f.mudDown = F.mud.down; f.mudLaid = F.mud.laid; f.mudSea = F.mud.sea; f.mudMark = F.mud.mark; }
@@ -641,6 +664,8 @@ export class Simulation {
     sim.years = s.years;
     Object.assign(sim.settings, s.settings);
     sim.tilt = s.tilt;
+    sim.rockDepth = s.rockDepth != null ? s.rockDepth : SETTINGS.rock[0];
+    if (s.settings.rock == null) sim.settings.rock = sim.rockDepth;
     sim.epoch = s.epoch;
     sim.section = s.section;
     sim.history = { ...s.history, inflow: s.history.inflow.slice(), sinuosity: s.history.sinuosity.slice() };

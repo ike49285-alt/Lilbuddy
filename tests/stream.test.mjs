@@ -181,6 +181,26 @@ const sum = (a) => { let s = 0; for (const v of a) s += v; return s; };
   check(r.things.length === 12 && r.stateHash() === s.stateHash() && r.frame(0).things.map((t) => t.state).join() === fr.things.map((t) => t.state).join(), 'and they come back through a save');
 }
 
+// The bedrock slider: all the rock moves but what's put down by hand, and
+// it never stands above the ground.
+{
+  const s = new Simulation('rock-1');
+  const f = s.flow, W = s.W;
+  const plain = 100 * W + 64, blockAt = 60 * W + 30;
+  s.block(blockAt);
+  const blockRock = f.rock[blockAt];
+  for (let k = 0; k < 500; k++) s.step(500);
+  s.set('rock', 50);
+  check(Math.abs(f.z0[plain] - f.rock[plain] - 50) < 0.01 && f.rock[blockAt] === blockRock, 'Bedrock sets how deep the rock lies, and leaves placed rock alone', `${(f.z0[plain] - f.rock[plain]).toFixed(1)} m under the plain's start`);
+  s.set('rock', 1);
+  let above = 0;
+  for (let i = 0; i < f.N; i++) if (f.rock[i] > f.z[i] + 1e-6) above++;
+  check(above === 0 && f.rock[blockAt] === blockRock, 'and the rock never stands above the ground');
+  s.set('rock', 50);
+  const r = Simulation.fromState(structuredClone(s.saveState()));
+  check(r.settings.rock === 50 && r.rockDepth === 50 && r.flow.rock[plain] === f.rock[plain] && r.flow.placed[blockAt] === 1, 'and comes back through a save');
+}
+
 // The pump moves along the top edge, and the river comes in where it is.
 {
   const s = new Simulation('pump-1');

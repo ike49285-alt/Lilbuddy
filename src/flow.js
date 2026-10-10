@@ -131,6 +131,7 @@ export class Flow {
     this.z = table.z;
     this.rock = table.rock;
     this.cover = table.cover;
+    this.placed = new Uint8Array(N);          // rock put down by hand (blocks, piers): stays when the bedrock moves
     this.z0 = Float32Array.from(table.z);   // the bed at the start, for cut and fill
     this.h = new Float32Array(N);
     this.qx = new Float32Array((W + 1) * H);  // face left of cell (x, y): index y·(W+1) + x

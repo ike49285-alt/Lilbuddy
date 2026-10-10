@@ -67,8 +67,8 @@ than the plain's sand.
 **Banks** wear back where the flow drags hardest beside them, which is the
 outside of a bend. A channel scouring at the foot of a bank brings some of
 the bank down with it, and any slope steeper than wet or dry sand can stand
-slumps. Bedrock lies a few metres down, close under the terraces, and
-nothing wears below it.
+slumps. Bedrock lies 6 m down under the plain to start (the Table tab's Bedrock
+slider moves it), close under the terraces, and nothing wears below it.
 
 **Plants** green bare ground over a year or two in the growing season. They
 drown under standing water, and a flood that drags hard enough tears them
@@ -143,6 +143,9 @@ zoom it.
 - **Sand in:** sand fed in with the water, as a share of what it can carry.
   Less than it can carry and the river cuts down; more and it builds up and
   spreads out.
+- **Bedrock:** how deep the rock lies under the plain, from 1 to 60 m
+  (6 m to start). The river can't cut below it; set it deep and the river
+  can cut down into its valley and the terraces as far as it likes.
 - **Mud in:** grams of mud in each litre of the pump's water (floods bring
   more).
 
