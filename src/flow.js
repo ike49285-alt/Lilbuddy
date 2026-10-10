@@ -59,7 +59,6 @@ const TRANSPORT = 0.5;            // scales the transport rate (calibration)
 const POROSITY = 0.4;
 const LA = 0.3;                   // metres: the top layer of the ground that the river mixes
 const MUD_TE = 0.2;               // Pa: the drag that starts lifting mud from the bed
-const MUD_E = 4e-8;               // m/s of mud lifted per unit of drag past that, from a bed of pure mud
 const MUD_PLANT = 2;              // full plant cover traps mud this many times faster
 // Tunable: how hard the banks are, how much plants hold them, how far a
 // step may move the bed. (An object so tests can try other values.)
@@ -73,7 +72,8 @@ export const TUNE = {
   held: 0.1,                      // share of busy cells allowed to hit that limit before the bed slows
   spiral: 11,                     // how far a bend's spiral flow turns the sand inward (Engelund)
   bedSlope: 1.2,                  // how much the sand rolls downhill as it goes
-  mudWs: 1e-4,                    // m/s mud settles through still water (fine silt and clay)
+  mudWs: 7e-5,                    // m/s mud settles through still water (fine silt and clay)
+  mudE: 1e-7,                     // m/s of mud lifted per unit of drag past its threshold, from a bed of pure mud
 };
 const SLOPE_WET = 0.35;           // the steepest slope sand stands at under water
 const SLOPE_DRY = 0.8;            // and out of it (damp sand stands steep)
@@ -594,7 +594,7 @@ export class Flow {
     const morph = mdt / dt;
     const tauK = (RHO_S - RHO) * G * D50;     // Pa per unit of Shields stress
     const bulk = 1 / (1 - POROSITY);           // metres of ground per metre of mud laid down
-    const ws = TUNE.mudWs;
+    const ws = TUNE.mudWs, mudE = TUNE.mudE;
     let down = 0, laid = 0;
     for (let y = 0; y < HB; y++) {
       for (let x = lo[y]; x <= hi[y]; x++) {
@@ -606,7 +606,7 @@ export class Flow {
         if (m > 0) dep = d > WET ? ws * (m / d) * dt * (1 + MUD_PLANT * cover[i]) : m;
         if (dep > m) dep = m;
         // It's lifted where the flow drags at a muddy bed (Partheniades).
-        if (f > 0 && d > WET) { const ex = (theta[i] * tauK) / MUD_TE - 1; if (ex > 0) ero = MUD_E * f * ex * dt; }
+        if (f > 0 && d > WET) { const ex = (theta[i] * tauK) / MUD_TE - 1; if (ex > 0) ero = mudE * f * ex * dt; }
         if (dep === 0 && ero === 0) continue;
         let bed = (dep - ero) * morph * bulk;
         // No faster than the bed may change, and no more lifted than the top layer holds.
