@@ -2,7 +2,7 @@
 // clock, and what the page can do to it.
 
 import { makeRng, hashArrays } from './rng.js';
-import { makeTable, CELL_M, TILT, PLAIN_MUD } from './table.js';
+import { makeTable, CELL_M, TILT, PLAIN_MUD, PLAIN_GRAVEL } from './table.js';
 import { Flow, WET, SHIELDS_C, SEC_PER_YR, SPONGE } from './flow.js';
 import { Weather } from './weather.js';
 
@@ -31,6 +31,8 @@ export const SETTINGS = {
   mud: [0.2, 0, 2],           // grams of mud in each litre of the pump's water
 };
 const MUD_DENSITY = 2650;     // grams a litre of solid mud
+// Grain sizes for the bed layer, mm (natural logs).
+const LN_MUD = Math.log(0.01), LN_SAND = Math.log(0.7), LN_GRAVEL = Math.log(8);
 
 export class Simulation {
   constructor(seed) {
@@ -159,7 +161,7 @@ export class Simulation {
         // Sand piled up is the plain's own mix; what's scooped away takes the top layer's.
         const nz = dir > 0 ? z[j] + dz : Math.max(rock[j], z[j] + dz);
         const moved = nz - z[j];
-        flow.mix(j, moved, moved * (moved > 0 ? PLAIN_MUD : flow.fm[j]));
+        flow.mix(j, moved, moved * (moved > 0 ? PLAIN_MUD : flow.fm[j]), moved * (moved > 0 ? PLAIN_GRAVEL : flow.fg[j]));
         z[j] = nz;
         cover[j] *= 1 - Math.min(1, Math.abs(dz) / 0.2);
       }
@@ -189,7 +191,7 @@ export class Simulation {
       }
       const bed = Math.max(rock[j], Math.min(z[j] - DIG_DEPTH, low - 0.6, top + ((bottom - top) * k) / (path.length - 1), prev - 0.002));
       prev = bed;
-      if (bed < z[j]) { this.flow.mix(j, bed - z[j], (bed - z[j]) * this.flow.fm[j]); z[j] = bed; }
+      if (bed < z[j]) { const d = bed - z[j]; this.flow.mix(j, d, d * this.flow.fm[j], d * this.flow.fg[j]); z[j] = bed; }
     });
     this.reshaped();
     this.event('dig', path[path.length >> 1]);
@@ -213,6 +215,8 @@ export class Simulation {
         cover[j] = 0;
         this.flow.fm[j] = 0;
         this.flow.sm[j] = 0;
+        this.flow.fg[j] = 0;
+        this.flow.sg[j] = 0;
       }
     }
     this.reshaped();
@@ -246,6 +250,7 @@ export class Simulation {
         piers.push(j);
         f.rock[j] = f.z[j];
         f.fm[j] = 0;
+        f.fg[j] = 0;
       }
     } else return null;
     // The ground around a pier, for its scour.
@@ -484,7 +489,7 @@ export class Simulation {
   // One byte per cell for the map's colour layer.
   layerBytes() {
     const { N } = this;
-    const { h, ux, uy, theta, dzRate, z, z0, cover } = this.flow;
+    const { h, ux, uy, theta, dzRate, z, z0, cover, fm, fg } = this.flow;
     const out = new Uint8Array(N);
     const L = this.layer;
     const mud = L === 'mud' ? this.mudBytes() : null;
@@ -496,6 +501,11 @@ export class Simulation {
       else if (L === 'change') { const r = dzRate[i]; v = 0.5 + 0.5 * Math.sign(r) * Math.min(1, Math.log10(1 + Math.abs(r) / 0.01) / 3); }
       else if (L === 'cutfill') v = 0.5 + 0.5 * Math.max(-1, Math.min(1, (z[i] - z0[i]) / 3));
       else if (L === 'mud') v = mud ? mud[i] / 255 : 0;
+      else if (L === 'bed') {
+        // The surface's grain size, on a log scale from mud to gravel.
+        const g = fg[i], m = fm[i];
+        v = (g * LN_GRAVEL + (1 - g - m) * LN_SAND + m * LN_MUD - LN_MUD) / (LN_GRAVEL - LN_MUD);
+      }
       out[i] = Math.round(v * 255);
     }
     return out;
@@ -517,6 +527,7 @@ export class Simulation {
       cover: bytes(f.cover, 255),
       mud: this.mudBytes(),
       soil: bytes(f.fm, 255),
+      gravel: bytes(f.fg, 255),
       layer: this.layer ? this.layerBytes() : null,
       seaLevel: this.settings.sea,
       inlet: [this.flow.inletX, this.flow.inletHalf],
@@ -577,6 +588,7 @@ export class Simulation {
       cover: f.cover[i],
       mudWater: wet ? (f.M[i] / f.h[i]) * MUD_DENSITY : 0,  // grams a litre
       mudGround: f.fm[i],
+      gravelGround: f.fg[i],
       rockBelow: f.z[i] - f.rock[i],
       block: f.rock[i] >= f.z[i] - 0.01,
       thing: (() => { const t = this.things.find((o) => o.cells.includes(i)); return t ? { kind: t.kind, state: t.state, flooded: t.flooded, eroded: t.eroded, buried: t.buried } : null; })(),
@@ -606,7 +618,8 @@ export class Simulation {
       flow: {
         z: f.z.slice(), h: f.h.slice(), qx: f.qx.slice(), qy: f.qy.slice(), cover: f.cover.slice(), rock: f.rock.slice(),
         z0: f.z0.slice(), dzRate: f.dzRate.slice(), ux: f.ux.slice(), uy: f.uy.slice(),
-        fm: f.fm.slice(), sm: f.sm.slice(), M: f.M.slice(),
+        fm: f.fm.slice(), sm: f.sm.slice(), M: f.M.slice(), fg: f.fg.slice(), sg: f.sg.slice(),
+        gravel: { in: f.gravelIn, out: f.gravelOut },
         mud: { fed: f.mudFed, out: f.mudOut, down: f.mudDown, laid: f.mudLaid, sea: f.mudSea, mark: f.mudMark },
         inletX: f.inletX, dt: f.dt, mNow: f.mNow, fedIn: f.fedIn, toSea: f.toSea, steps: f.steps, plantYears: f.plantYears, waterTime: f.waterTime,
       },
@@ -621,6 +634,7 @@ export class Simulation {
     for (const k of ['z', 'h', 'qx', 'qy', 'cover', 'rock', 'z0', 'dzRate', 'ux', 'uy']) f[k].set(F[k]);
     // A save from before the ground knew its mud keeps the table's, with clear water.
     if (F.fm) { f.fm.set(F.fm); f.sm.set(F.sm); f.M.set(F.M); }
+    if (F.fg) { f.fg.set(F.fg); f.sg.set(F.sg); f.gravelIn = F.gravel.in; f.gravelOut = F.gravel.out; }
     if (F.mud) { f.mudFed = F.mud.fed; f.mudOut = F.mud.out; f.mudDown = F.mud.down; f.mudLaid = F.mud.laid; f.mudSea = F.mud.sea; f.mudMark = F.mud.mark; }
     if (F.inletX != null) f.inletX = F.inletX;
     f.dt = F.dt; f.mNow = F.mNow; f.fedIn = F.fedIn; f.toSea = F.toSea; f.steps = F.steps; f.plantYears = F.plantYears; f.waterTime = F.waterTime;
@@ -644,7 +658,7 @@ export class Simulation {
 
   stateHash() {
     const f = this.flow;
-    return hashArrays([f.z, f.h, f.qx, f.qy, f.cover, f.fm, f.sm, f.M]);
+    return hashArrays([f.z, f.h, f.qx, f.qy, f.cover, f.fm, f.sm, f.M, f.fg, f.sg]);
   }
 }
 
@@ -688,7 +702,7 @@ export function lineCells(W, H, pts) {
 }
 
 export function transferList(f) {
-  const list = [f.z.buffer, f.h.buffer, f.rock.buffer, f.cover.buffer, f.mud.buffer, f.soil.buffer,
+  const list = [f.z.buffer, f.h.buffer, f.rock.buffer, f.cover.buffer, f.mud.buffer, f.soil.buffer, f.gravel.buffer,
     f.profile.bed.buffer, f.profile.water.buffer, f.profile.start.buffer];
   if (f.layer) list.push(f.layer.buffer);
   if (f.section) list.push(f.section.bed.buffer, f.section.water.buffer, f.section.start.buffer);

@@ -44,13 +44,16 @@ friction on the bed, which is rougher where plants grow. So the water
 spreads, ponds, overtops its banks and splits round bars. It's worked out
 in steps of a fraction of a second.
 
-**Sand** (coarse, 1 mm) moves where the water drags at the bed harder than
-a threshold (the Shields stress), at the Meyer-Peter Müller rate. It goes
-the way the water goes, turned toward the inside of a bend by the bend's
-spiral flow and pulled a little downhill. The bed rises where more sand
-comes in than goes out and falls where less does, and no sand is made or
-lost along the way. The pump feeds in sand with its water, as a share of
-what that water can carry.
+**Sand and gravel** (0.7 mm and 8 mm) move along the bed where the water
+drags at it hard enough, by Wilcock and Crowe's formula for a mix of the two.
+Gravel needs more drag than sand but moves more easily among plenty of sand,
+so where the flow strips the sand away it leaves a coarser bed behind that's
+harder to move: the channel armours. They go the way the water goes, turned
+toward the inside of a bend by the bend's spiral flow and pulled a little
+downhill. The bed rises where more comes in than goes out and falls where
+less does, and none is made or lost along the way. The pump feeds them in
+with its water, as a share of what that water can carry. The plain starts
+about 30% gravel, 60% sand and 10% mud.
 
 **Mud** rides in the water rather than along the bed. The pump's water
 brings some, more in a flood, and the flow lifts more wherever it drags hard
@@ -89,13 +92,14 @@ raining. Nothing is drawn over the map, so the river is always in view.
 **Map.** The controls sit in rails either side of the map: zoom, reset,
 3D and the tools on the right (north too, in 3D); on the left, the scale and a button for each
 thing the map can show, each with a strip of its colours. Land shows the
-land, with contours every half metre on dry ground; the other six are
+land, with contours every half metre on dry ground; the other seven are
 layers, with their key under the map:
 - water depth;
 - the current;
 - the drag on the bed, as a multiple of what moves sand;
 - where the bed is cutting or filling now;
 - mud in the water;
+- the bed's surface, from mud through sand to gravel;
 - how much it has been cut or filled since the start.
 
 Pinch, double-tap or use + and − to zoom in, and drag to move around when

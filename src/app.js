@@ -463,7 +463,7 @@ function showTab(name) {
 }
 for (const t of TABS) $(`tab-${t}`).addEventListener('click', () => showTab(t));
 
-const LAYER_NAMES = { depth: 'Water depth', speed: 'Current', drag: 'Drag on the bed (times what moves sand)', mud: 'Mud in the water', change: 'Cutting and filling now', cutfill: 'Cut and fill since the start' };
+const LAYER_NAMES = { depth: 'Water depth', speed: 'Current', drag: 'Drag on the bed (times what moves sand)', mud: 'Mud in the water', bed: 'The bed’s surface', change: 'Cutting and filling now', cutfill: 'Cut and fill since the start' };
 const ramp = (L) => `linear-gradient(to right, ${L.stops.map((s) => `rgb(${s[1]}, ${s[2]}, ${s[3]}) ${s[0] * 100}%`).join(', ')})`;
 // The land and each layer have a button down the left of the map, each
 // with a strip of its colours.
@@ -954,9 +954,10 @@ function renderInspect(info) {
       : info.water === 'shallows' ? `Shallows, ${n0.format(info.depth * 100)} cm deep`
         : info.block ? 'Block of rock' : `Land, ${n1.format(info.elevation)} m above the sea`;
   $('inspect-title').textContent = title;
-  const ground = info.mudGround > 0.6 ? 'Mud' : info.mudGround > 0.25 ? 'Muddy sand' : 'Sand';
+  const g = info.gravelGround, m = info.mudGround, s = 1 - g - m;
+  const ground = m > 0.6 ? 'Mud' : g > 0.6 ? 'Gravel' : m > 0.25 ? 'Muddy sand' : g > 0.35 ? 'Gravelly sand' : 'Sand';
   $('inspect-ground').textContent = info.block ? 'Rock the river can’t wear away.'
-    : `${ground} (${n0.format(info.mudGround * 100)}% mud on top), ${n1.format(info.rockBelow)} m deep over bedrock.`;
+    : `${ground}: ${n0.format(g * 100)}% gravel, ${n0.format(s * 100)}% sand, ${n0.format(m * 100)}% mud on top; ${n1.format(info.rockBelow)} m deep over bedrock.`;
   const facts = $('inspect-facts');
   facts.innerHTML = '';
   const fact = (k, v) => { const d = el('div'); d.append(el('dt', '', k), el('dd', '', v)); facts.append(d); };

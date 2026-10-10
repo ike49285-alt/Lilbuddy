@@ -9,9 +9,11 @@
 // flows in and out. So the water spreads, ponds, overtops its banks, swings
 // round bends and splits round bars.
 //
-// Sand: the drag of the water on the bed (Shields stress) moves sand at a
-// rate that rises steeply once it passes a threshold (Meyer-Peter Müller).
-// It goes the way the water goes, turned toward the inside of a bend by the
+// Sand and gravel: the drag of the water on the bed moves them at rates
+// that rise steeply with it (Wilcock and Crowe's formula for a mix of sand
+// and gravel): gravel needs more drag than sand, but moves more easily
+// among plenty of sand, and where the flow strips the sand away the bed
+// left behind is coarser and harder to move (it armours). They go the way the water goes, turned toward the inside of a bend by the
 // spiral flow there and pulled a little downhill by gravity; the bed rises
 // where more comes in than goes out (Exner). A river cutting at the foot of
 // its bank takes some of the bank with it, and any slope steeper than sand
@@ -51,11 +53,11 @@ const MARGIN = 3;                 // dry cells worked on beside the water
 export const SPONGE = 6;          // rows along the bottom edge where the open sea soaks up waves and sand
 const BED_EVERY = 2;              // hydraulic steps between moves of the bed
 const INFILTRATE = 2e-6;          // metres a second soaking into the ground
-const D50 = 0.001;                // grain size, metres (coarse sand)
+const D50 = 0.001;                // grain size for the drag index (theta), metres
+const D_SAND = 0.0007, D_GRAVEL = 0.008;   // the sand's and the gravel's grain sizes, metres
 const RHO = 1000, RHO_S = 2650;
+const SG = ((RHO_S - RHO) / RHO) * G;      // (s − 1) g
 export const SHIELDS_C = 0.047;   // the threshold Shields stress, bare
-const MPM = 8 * Math.sqrt(((RHO_S - RHO) / RHO) * G * D50 ** 3);
-const TRANSPORT = 0.5;            // scales the transport rate (calibration)
 const POROSITY = 0.4;
 const LA = 0.3;                   // metres: the top layer of the ground that the river mixes
 const MUD_TE = 0.2;               // Pa: the drag that starts lifting mud from the bed
@@ -73,6 +75,7 @@ export const TUNE = {
   spiral: 11,                     // how far a bend's spiral flow turns the sand inward (Engelund)
   bedSlope: 1.2,                  // how much the sand rolls downhill as it goes
   mudWs: 7e-5,                    // m/s mud settles through still water (fine silt and clay)
+  transport: 3,                   // scales the sand and gravel's transport (calibrated to the river before gravel)
   mudE: 1e-7,                     // m/s of mud lifted per unit of drag past its threshold, from a bed of pure mud
 };
 const SLOPE_WET = 0.35;           // the steepest slope sand stands at under water
@@ -83,6 +86,31 @@ const PLANT_DROWN_YR = 0.4;       // years under water to drown them
 const PLANT_UPROOT = 1.6;         // times the threshold stress that tears them out
 const PLANT_EVERY = 16;           // steps between the plants' slow updates
 const SLUMP_ALL_EVERY = 64;       // steps between slumps over the whole valley
+
+// Wilcock and Crowe (2003): the drag at which sand and gravel start to move
+// in earnest, in pascals, by the sand's share of the surface's sand and
+// gravel. More sand makes both move more easily; gravel hides less among
+// coarser grains.
+const WC_N = 256;
+const WC_SAND = new Float64Array(WC_N + 1), WC_GRAVEL = new Float64Array(WC_N + 1);
+for (let k = 0; k <= WC_N; k++) {
+  const fs = k / WC_N;
+  const dsm = Math.exp(fs * Math.log(D_SAND) + (1 - fs) * Math.log(D_GRAVEL));
+  const trm = (0.021 + 0.015 * Math.exp(-20 * fs)) * (RHO_S - RHO) * G * dsm;
+  const b = (d) => 0.67 / (1 + Math.exp(1.5 - d / dsm));
+  WC_SAND[k] = trm * (D_SAND / dsm) ** b(D_SAND);
+  WC_GRAVEL[k] = trm * (D_GRAVEL / dsm) ** b(D_GRAVEL);
+}
+// Their transport function, of the drag over that reference. Below the
+// reference it's a trickle, left out.
+const WC_MIN = 1;
+function wcW(phi) {
+  if (phi < WC_MIN) return 0;
+  const r = Math.sqrt(phi);
+  if (phi < 1.35) { const p2 = phi * phi; return 0.002 * p2 * p2 * p2 * phi * r; }
+  const t = 1 - 0.894 / r;
+  return 14 * t * t * t * t * Math.sqrt(t);
+}
 
 // Cube roots by table: Math.cbrt is slow and is needed for every wet face.
 const CB_STEP = 1024, CB_N = 4 * CB_STEP;
@@ -118,11 +146,18 @@ export class Flow {
     this.fy = new Float32Array(W * (H + 1));
     this.avail = new Float32Array(N);
     this.clip = new Float32Array(N);
-    this.fm = table.mud ? Float32Array.from(table.mud) : new Float32Array(N);  // mud share of the top layer
-    this.sm = Float32Array.from(this.fm);     // and of the ground below it
+    // (Doubles: the ground below is metres thick, and its make-up changes by tiny amounts.)
+    this.fm = table.mud ? Float64Array.from(table.mud) : new Float64Array(N);  // mud share of the top layer
+    this.sm = Float64Array.from(this.fm);     // and of the ground below it
     this.M = new Float32Array(N);             // mud in the water, metres of it (as solid) per unit area
     this.C = new Float32Array(N);             // its concentration, by volume (scratch)
     this.dzM = new Float32Array(N);           // the mud in this step's bed change
+    this.fg = table.gravel ? Float64Array.from(table.gravel) : new Float64Array(N);  // gravel share of the top layer
+    this.sg = Float64Array.from(this.fg);     // and of the ground below it
+    this.dzG = new Float32Array(N);           // the gravel in this step's bed change
+    this.gs = new Float32Array(N);            // gravel's share of what each cell's flow carries along the bed
+    this.gravelIn = 0;                        // gravel pumped in and out to sea, m³ in all (bed time)
+    this.gravelOut = 0;
     this.mudIn = 0;                           // the pump water's mud, by volume
     this.mudFed = 0;                          // mud in all, m³ (water time): pumped in,
     this.mudOut = 0;                          // out to sea,
@@ -348,9 +383,11 @@ export class Flow {
   // `morph` (less if the bed would change too fast). Returns the bed-time,
   // seconds.
   bed(dt, morph) {
-    const { W, H, z, h, ux, uy, sx, sy, theta, cover, rock, dx, fx, fy, dz, avail, lo, hi, fm, dzM } = this;
+    const { W, H, z, h, ux, uy, sx, sy, theta, cover, rock, dx, fx, fy, dz, avail, lo, hi, fm, dzM, fg, dzG, gs } = this;
     const W1 = W + 1;
     const shieldsK = 1 / (((RHO_S - RHO) / RHO) * G * D50);
+    const tauK = (RHO_S - RHO) * G * D50;      // Pa per unit of theta
+    const qK = TUNE.transport / SG;
     // The bed is worked on down to the open sea, which swallows what reaches it.
     const HB = H - SPONGE;
     // Transport at cell centres.
@@ -359,7 +396,7 @@ export class Flow {
       for (let x = a; x <= b; x++) {
         const i = y * W + x;
         const d = h[i];
-        sx[i] = 0; sy[i] = 0; theta[i] = 0;
+        sx[i] = 0; sy[i] = 0; theta[i] = 0; gs[i] = 0;
         if (d <= WET * 2) continue;
         const u = ux[i], v = uy[i];
         const U2 = u * u + v * v;
@@ -367,13 +404,24 @@ export class Flow {
         const n = N_BARE + N_PLANT * cover[i];
         const th = (n * n * U2 * shieldsK) / cbrt(d);   // τ/((ρs−ρ)gD), τ = ρ g n² U² / h^⅓
         theta[i] = th;
-        // Plants hold the sand, and so does mud once there's enough of it
-        // to bind it; and only the top layer's sand moves.
-        const f = fm[i];
-        const thc = SHIELDS_C * (1 + 2 * cover[i]) * (f > 0.3 ? 1 + 3 * (f - 0.3) / 0.7 : 1);
-        if (th <= thc) continue;
-        const ex = th - thc;
-        const qs = (1 - f) * TRANSPORT * MPM * ex * Math.sqrt(ex);
+        // The top layer's sand and gravel move, each by its own share of
+        // the surface (Wilcock and Crowe). Plants hold them, and so does mud
+        // once there's enough of it to bind them.
+        const f = fm[i], coarse = 1 - f;
+        if (coarse <= 0) continue;
+        const Fg = fg[i] / coarse, Fs = 1 - Fg;
+        const hold = (1 + 2 * cover[i]) * (f > 0.3 ? 1 + 3 * (f - 0.3) / 0.7 : 1);
+        const tau = th * tauK;
+        const kf = (Fs < 0 ? 0 : Fs > 1 ? 1 : Fs) * WC_N, k0 = kf | 0, k1 = k0 < WC_N ? k0 + 1 : k0, w = kf - k0;
+        const rs = (WC_SAND[k0] + (WC_SAND[k1] - WC_SAND[k0]) * w) * hold;
+        if (tau < rs * WC_MIN) continue;      // the sand, more mobile, barely stirs: neither moves
+        const rg = (WC_GRAVEL[k0] + (WC_GRAVEL[k1] - WC_GRAVEL[k0]) * w) * hold;
+        const us3 = (tau / RHO) * Math.sqrt(tau / RHO);
+        const qsand = wcW(tau / rs) * Fs * coarse * us3 * qK;
+        const qgrav = wcW(tau / rg) * Fg * coarse * us3 * qK;
+        const qs = qsand + qgrav;
+        if (qs <= 0) continue;
+        gs[i] = qgrav / qs;
         const U = Math.sqrt(U2);
         const ex2 = u / U, ey2 = v / U;
         // Spiral flow turns the sand toward the inside of the bend.
@@ -389,7 +437,7 @@ export class Flow {
         const rx = ex2 * c - ey2 * s, ry = ex2 * s + ey2 * c;
         // And gravity pulls it a little downhill.
         const gx = (z[xp] - z[xm]) * ddx, gy = (z[yp] - z[ym]) * ddy;
-        const bs = TUNE.bedSlope / Math.sqrt(th);
+        const bs = TUNE.bedSlope / Math.sqrt(th > SHIELDS_C ? th : SHIELDS_C);
         sx[i] = qs * (rx - bs * gx);
         sy[i] = qs * (ry - bs * gy);
       }
@@ -479,20 +527,34 @@ export class Flow {
     for (let x = 0; x < W; x++) fy[x] *= clip[x];
     for (let x = lo[HB - 1]; x <= hi[HB - 1]; x++) { const i = (HB - 1) * W + x; fy[HB * W + x] *= clip[i] * avail[i]; }
     // Exner: the bed rises where more comes in than goes out.
+    // The gravel through each face is its share of what the upwind cell
+    // sends.
     const k = per * mdt;
-    let fed = 0, lost = 0;
-    for (let x = 0; x < W; x++) { fed += fy[x]; lost += fy[HB * W + x]; }
+    let fed = 0, lost = 0, gIn = 0, gOut = 0;
+    for (let x = 0; x < W; x++) {
+      fed += fy[x]; gIn += fy[x] * gs[x];
+      const o = fy[HB * W + x];
+      lost += o; gOut += o * gs[(HB - 1) * W + x];
+    }
     this.fedIn += fed * dx * mdt;
     this.toSea += lost * dx * mdt;
+    this.gravelIn += gIn * dx * mdt;
+    this.gravelOut += gOut * dx * mdt;
     for (let y = 0; y < HB; y++) {
       const row = y * W, frow = y * W1;
       for (let x = lo[y]; x <= hi[y]; x++) {
         const i = row + x;
-        dz[i] = k * (fx[frow + x] - fx[frow + x + 1] + fy[i] - fy[i + W]);
+        const fl = fx[frow + x], fr = fx[frow + x + 1], ft = fy[i], fb = fy[i + W];
+        dz[i] = k * (fl - fr + ft - fb);
+        const gl = fl * (fl > 0 ? gs[i - 1] : gs[i]);
+        const gr = fr * (fr > 0 ? gs[i] : gs[i + 1]);
+        const gt = ft * (ft > 0 && y > 0 ? gs[i - W] : gs[i]);
+        const gb = fb * (fb > 0 ? gs[i] : gs[i + W]);
+        dzG[i] = k * (gl - gr + gt - gb);
         dzM[i] = 0;
       }
     }
-    for (let i = HB * W; i < this.N; i++) { dz[i] = 0; dzM[i] = 0; }
+    for (let i = HB * W; i < this.N; i++) { dz[i] = 0; dzM[i] = 0; dzG[i] = 0; }
     // Mud settles out of the water and is lifted from the bed. In the
     // water's time; the bed's change is sped up like the sand's.
     this.mudExchange(dt, mdt, HB, dzMax);
@@ -510,7 +572,7 @@ export class Flow {
         const n = (l ? 1 : 0) + (r ? 1 : 0) + (u ? 1 : 0) + (d ? 1 : 0);
         if (!n) continue;
         const each = (TUNE.bank * e) / n;
-        let moved = 0, mud = 0;
+        let moved = 0, mud = 0, grav = 0;
         for (let q = 0; q < 4; q++) {
           const j = q === 0 ? (l ? i - 1 : -1) : q === 1 ? (r ? i + 1 : -1) : q === 2 ? (u ? i - W : -1) : (d ? i + W : -1);
           if (j < 0) continue;
@@ -519,11 +581,14 @@ export class Flow {
           const t = want < room ? want : room > 0 ? room : 0;
           dz[j] -= t;
           dzM[j] -= t * fm[j];
+          dzG[j] -= t * fg[j];
           moved += t;
           mud += t * fm[j];
+          grav += t * fg[j];
         }
         dz[i] += moved;
         dzM[i] += mud;
+        dzG[i] += grav;
       }
     }
     // And the flow wears at its banks directly, hardest where it drags
@@ -552,6 +617,8 @@ export class Flow {
             dz[i] += m;
             dzM[j] -= m * fm[j];
             dzM[i] += m * fm[j];
+            dzG[j] -= m * fg[j];
+            dzG[i] += m * fg[j];
           }
         }
       }
@@ -559,24 +626,33 @@ export class Flow {
     const years = mdt / SEC_PER_YR;
     const keep = Math.exp(-years / 0.05);
     const rate = years > 0 ? (1 - keep) / years : 0;
-    const { dzRate, sm } = this;
+    const { dzRate, sm, sg } = this;
     for (let y = 0; y < H; y++) {
       for (let x = lo[y]; x <= hi[y]; x++) {
         const i = y * W + x;
-        const d = dz[i], dm = dzM[i];
-        if (d !== 0 || dm !== 0) {
+        const d = dz[i], dm = dzM[i], dgr = dzG[i];
+        if (d !== 0 || dm !== 0 || dgr !== 0) {
           // The top layer's make-up (as mix(), inline: this runs for every busy cell).
-          const f = fm[i];
-          let nf;
+          const f = fm[i], g = fg[i];
+          let nf, ng;
           if (d >= 0) {
             nf = (f * LA + dm) / (LA + d);
+            ng = (g * LA + dgr) / (LA + d);
             let below = z[i] - rock[i] - LA;
             if (below < 0) below = 0;
-            if (below + d > 0) sm[i] = (sm[i] * below + (nf < 0 ? 0 : nf > 1 ? 1 : nf) * d) / (below + d);
+            if (below + d > 0) {
+              sm[i] = (sm[i] * below + (nf < 0 ? 0 : nf > 1 ? 1 : nf) * d) / (below + d);
+              sg[i] = (sg[i] * below + (ng < 0 ? 0 : ng > 1 ? 1 : ng) * d) / (below + d);
+            }
+          } else if (-d >= LA) {
+            nf = sm[i]; ng = sg[i];
           } else {
-            nf = -d >= LA ? sm[i] : (f * LA + dm - sm[i] * d) / LA;
+            nf = (f * LA + dm - sm[i] * d) / LA;
+            ng = (g * LA + dgr - sg[i] * d) / LA;
           }
-          fm[i] = nf < 0 ? 0 : nf > 1 ? 1 : nf;
+          nf = nf < 0 ? 0 : nf > 1 ? 1 : nf;
+          ng = ng < 0 ? 0 : ng > 1 - nf ? 1 - nf : ng;
+          fm[i] = nf; fg[i] = ng;
         }
         z[i] += d;
         dzRate[i] = dzRate[i] * keep + rate * d;
@@ -633,19 +709,27 @@ export class Flow {
   // which dzM is mud. What's laid down mixes into the top layer, which
   // passes the bottom of itself to the ground below; what's taken away
   // takes the top layer's mix and lets up some of the ground below.
-  mix(i, dz, dzM) {
-    const { fm, sm, z, rock } = this;
-    const f = fm[i];
-    let nf;
+  mix(i, dz, dzM, dzG = 0) {
+    const { fm, sm, fg, sg, z, rock } = this;
+    const f = fm[i], g = fg[i];
+    let nf, ng;
     if (dz >= 0) {
       nf = (f * LA + dzM) / (LA + dz);
+      ng = (g * LA + dzG) / (LA + dz);
       const below = Math.max(0, z[i] - rock[i] - LA);
-      if (below + dz > 0) sm[i] = (sm[i] * below + (nf < 0 ? 0 : nf > 1 ? 1 : nf) * dz) / (below + dz);
+      if (below + dz > 0) {
+        sm[i] = (sm[i] * below + (nf < 0 ? 0 : nf > 1 ? 1 : nf) * dz) / (below + dz);
+        sg[i] = (sg[i] * below + (ng < 0 ? 0 : ng > 1 ? 1 : ng) * dz) / (below + dz);
+      }
+    } else if (-dz >= LA) {
+      nf = sm[i]; ng = sg[i];
     } else {
-      const a = -dz;
-      nf = a >= LA ? sm[i] : (f * LA + dzM + sm[i] * a) / LA;
+      nf = (f * LA + dzM - sm[i] * dz) / LA;
+      ng = (g * LA + dzG - sg[i] * dz) / LA;
     }
-    fm[i] = nf < 0 ? 0 : nf > 1 ? 1 : nf;
+    nf = nf < 0 ? 0 : nf > 1 ? 1 : nf;
+    ng = ng < 0 ? 0 : ng > 1 - nf ? 1 - nf : ng;
+    fm[i] = nf; fg[i] = ng;
   }
 
   // Any slope steeper than sand can stand slumps toward what it can: by the
@@ -669,15 +753,15 @@ export class Flow {
     const hi = d > 0 ? i : j, lo = d > 0 ? j : i;
     const wet = h[hi] > WET || h[lo] > WET;
     // Mud lets a bank stand steeper; roots too.
-    const fh = this.fm[hi];
+    const fh = this.fm[hi], gh = this.fg[hi];
     const crit = (wet ? SLOPE_WET * (1 + fh) : SLOPE_DRY * (1 + 0.5 * fh)) * (1 + cover[hi]) * dx;
     if (a <= crit) return;
     let m = ((a - crit) / 2) * SLUMP;
     const room = z[hi] - rock[hi];
     if (m > room) m = room > 0 ? room : 0;
     if (m <= 0) return;
-    this.mix(hi, -m, -m * fh);
-    this.mix(lo, m, m * fh);
+    this.mix(hi, -m, -m * fh, -m * gh);
+    this.mix(lo, m, m * fh, m * gh);
     z[hi] -= m;
     z[lo] += m;
   }

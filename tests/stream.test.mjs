@@ -110,7 +110,25 @@ const sum = (a) => { let s = 0; for (const v of a) s += v; return s; };
   const r = Simulation.fromState(structuredClone(s.saveState()));
   check(r.stateHash() === s.stateHash(), 'a restored world keeps its mud');
 }
+// Gravel: none made or lost, the shares stay sensible, and where the flow
+// strips the sand away the channel's bed is left coarser (it armours).
+{
+  const s = new Simulation('gravel-1');
+  const f = s.flow, N = f.N, dA = f.dx * f.dx;
+  const inGround = () => { let t = 0; for (let i = 0; i < N; i++) { const S = Math.max(0, f.z[i] - f.rock[i]); t += (f.fg[i] * Math.min(0.3, S) + f.sg[i] * Math.max(0, S - 0.3)) * 0.6 * dA; } return t; };
+  const g0 = inGround(), in0 = f.gravelIn, out0 = f.gravelOut;
+  for (let k = 0; k < 4000; k++) s.step(2000);
+  const net = (f.gravelIn - in0) - (f.gravelOut - out0), got = inGround() - g0;
+  check(f.gravelIn > in0 && Math.abs(got - net) < 0.05 * Math.abs(net) + 0.05, 'gravel is neither made nor lost', `${got.toFixed(2)} m³ more in the ground, ${net.toFixed(2)} m³ in less out`);
+  let bad = 0;
+  for (let i = 0; i < N; i++) if (!(f.fg[i] >= 0 && f.fg[i] + f.fm[i] <= 1 + 1e-9 && f.sg[i] >= 0 && f.sg[i] <= 1)) bad++;
+  check(bad === 0, 'the ground’s shares of gravel, sand and mud stay between 0 and 1');
+  const r = Simulation.fromState(structuredClone(s.saveState()));
+  check(r.stateHash() === s.stateHash(), 'a restored world keeps its gravel');
+}
+
 // Over half a year, floods leave the most mud beside the channel: levees.
+// And the channel's bed is coarser than the plain's.
 {
   const s = new Simulation('prof-1');
   const f = s.flow, W = s.W;
@@ -128,6 +146,16 @@ const sum = (a) => { let s = 0; for (const v of a) s += v; return s; };
   }
   const pc = (k) => (100 * avg[k][0]) / avg[k][1];
   check(pc('beside') > pc('far') + 3 && pc('beside') > pc('channel') + 3, 'floods leave mud beside the channel, more than far off or in it', `mud on top: beside ${pc('beside').toFixed(0)}%, far ${pc('far').toFixed(0)}%, channel ${pc('channel').toFixed(0)}%`);
+  let gch = 0, nch = 0, gfar = 0, nfar = 0;
+  for (let y = 10; y < s.shoreY - 4; y++) {
+    const line = m.line[y];
+    if (line < 0) continue;
+    for (let x = 0; x < W; x++) {
+      const i = y * W + x, dist = Math.abs(x - line);
+      if (f.h[i] > 0.1 && dist < 6) { gch += f.fg[i]; nch++; } else if (f.h[i] <= 0.02 && dist >= 25 && dist < 40) { gfar += f.fg[i]; nfar++; }
+    }
+  }
+  check(gch / nch > gfar / nfar + 0.03, 'the channel’s bed armours: more gravel on top than the plain’s', `gravel on top: channel ${(100 * gch / nch).toFixed(0)}%, plain ${(100 * gfar / nfar).toFixed(0)}%`);
 }
 
 // Things to protect: a house on the channel's bank is undercut, one far off
@@ -136,17 +164,21 @@ const sum = (a) => { let s = 0; for (const v of a) s += v; return s; };
   const s = new Simulation('prof-1');
   const W = s.W;
   while (s.years < 0.3) s.step(20000);
-  const line = s.measure().line[100];
-  const near = s.place('house', 100 * W + line + 3), far = s.place('house', 100 * W + 10);
+  const m = s.measure();
+  // Houses right on the channel's bank down the valley, and others far off on the plain.
+  const near = [], far = [];
+  for (const y of [50, 70, 90, 110, 130]) { near.push(s.place('house', y * W + m.line[y] + 3)); far.push(s.place('house', y * W + 10)); }
   const field = s.place('field', 120 * W + 20);
-  const bridge = s.place('bridge', 0, [[line - 12, 140], [line + 12, 140]]);
-  check(near && far && field && bridge && field.cells.length === 64 && bridge.piers.length >= 5 && bridge.piers.every((j) => s.flow.rock[j] >= s.flow.z[j] - 1e-6), 'houses, fields and bridges go down, a bridge with piers of rock');
+  const bx = m.line[140] >= 0 ? m.line[140] : W >> 1;
+  const bridge = s.place('bridge', 0, [[bx - 12, 140], [bx + 12, 140]]);
+  check(near.every(Boolean) && far.every(Boolean) && field && bridge && field.cells.length === 64 && bridge.piers.length >= 5 && bridge.piers.every((j) => s.flow.rock[j] >= s.flow.z[j] - 1e-6), 'houses, fields and bridges go down, a bridge with piers of rock');
   while (s.years < 0.8) s.step(20000);
   const fr = s.frame(0);
   const st = (t) => fr.things.find((o) => o.id === t.id).state;
-  check(['undercut', 'lost'].includes(st(near)) && st(far) === 'fine', 'the river undercuts a house on its bank and leaves one far off', `on the bank ${st(near)}, far off ${st(far)}`);
+  const harmed = near.filter((t) => ['undercut', 'lost'].includes(st(t))).length;
+  check(harmed >= 1 && far.every((t) => st(t) === 'fine'), 'the river undercuts houses on its banks and leaves those far off', `on the banks ${near.map(st).join(', ')}; far off ${far.map(st).join(', ')}`);
   const r = Simulation.fromState(structuredClone(s.saveState()));
-  check(r.things.length === 4 && r.stateHash() === s.stateHash() && r.frame(0).things.map((t) => t.state).join() === fr.things.map((t) => t.state).join(), 'and they come back through a save');
+  check(r.things.length === 12 && r.stateHash() === s.stateHash() && r.frame(0).things.map((t) => t.state).join() === fr.things.map((t) => t.state).join(), 'and they come back through a save');
 }
 
 // The pump moves along the top edge, and the river comes in where it is.

@@ -4,7 +4,8 @@
 // the middle, dipping very gently toward its centre, with grassy terraces
 // rising either side and a beach shelving into the sea. There's no channel:
 // the river pours onto the sand and makes its own. The plain is sand with
-// a little mud in it; the terraces are old floodplain, muddier and firmer.
+// gravel and a little mud in it; the terraces are old floodplain, muddier
+// and firmer.
 
 import { makeNoise2D, fbm } from './rng.js';
 
@@ -18,10 +19,11 @@ export const INLET_HALF = 4;          // cells either side of it
 // The valley floor's fall, metres per metre, as set by the tilt.
 export const TILT = 0.002;
 
-// Mud in the ground, as a share of it by volume.
+// Mud and gravel in the ground, as shares of it by volume; the rest is sand.
 export const PLAIN_MUD = 0.1;
-const TERRACE_MUD = 0.4;
-const SHELF_MUD = 0.1;
+export const PLAIN_GRAVEL = 0.3;
+const TERRACE_MUD = 0.4, TERRACE_GRAVEL = 0.2;
+const SHELF_MUD = 0.1, SHELF_GRAVEL = 0.05;
 
 export function makeTable(rng, tilt = TILT) {
   const W = GRID_W, H = GRID_H, N = W * H;
@@ -29,6 +31,7 @@ export function makeTable(rng, tilt = TILT) {
   const rock = new Float32Array(N);
   const cover = new Float32Array(N);
   const mud = new Float32Array(N);
+  const gravel = new Float32Array(N);
   const rough = makeNoise2D(rng.fork('rough'));
   const lumps = makeNoise2D(rng.fork('lumps'));
   const sides = makeNoise2D(rng.fork('sides'));
@@ -63,7 +66,8 @@ export function makeTable(rng, tilt = TILT) {
       // Mud: in the terraces' old floodplain, a little in the plain's sand.
       const terrace = Math.max(0, Math.min(1, out / 3)) * headland;
       mud[i] = y > shoreY ? SHELF_MUD : PLAIN_MUD + (TERRACE_MUD - PLAIN_MUD) * terrace;
+      gravel[i] = y > shoreY ? SHELF_GRAVEL : PLAIN_GRAVEL + (TERRACE_GRAVEL - PLAIN_GRAVEL) * terrace;
     }
   }
-  return { W, H, N, z, rock, cover, mud, shoreY };
+  return { W, H, N, z, rock, cover, mud, gravel, shoreY };
 }

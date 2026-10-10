@@ -80,12 +80,16 @@ export function createHost(post) {
     if (!paused || dirty) sendFrame();
   }
 
-  // Runs steps until the owed time is paid or the slice budget is spent.
+  // Runs steps until the owed time is paid or the slice's budget is spent:
+  // at most BUDGET_MS, and no later than the next frame is due (so frames
+  // go out on time however long a step takes), but always one step.
   function runFor(years) {
     const start = performance.now();
     const morph = morphFor();
+    let budget = BUDGET_MS;
+    if (inFlight < MAX_IN_FLIGHT) budget = Math.min(budget, lastFrame + paceMs - start - stepMs * 0.5);
     let done = 0, n = 0;
-    while (done < years && performance.now() - start < BUDGET_MS) {
+    while (done < years && (n === 0 || performance.now() - start < budget)) {
       done += sim.step(morph);
       n++;
     }
@@ -176,7 +180,7 @@ export function createHost(post) {
       case 'section': sim.setSection(msg.points); changed(); break;
       case 'setting': sim.set(msg.key, msg.value); changed(); break;
       case 'mode':
-        sim.layer = ['depth', 'speed', 'drag', 'mud', 'change', 'cutfill'].includes(msg.mode) ? msg.mode : null;
+        sim.layer = ['depth', 'speed', 'drag', 'mud', 'bed', 'change', 'cutfill'].includes(msg.mode) ? msg.mode : null;
         changed();
         break;
       case 'inspect':
