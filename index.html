@@ -18,8 +18,12 @@
     <div class="map-frame" id="map-frame">
       <div class="rail left">
         <div class="map-mode" role="group" aria-label="Map shows">
-          <button type="button" id="mode-landscape" aria-pressed="true">Land</button>
-          <button type="button" id="mode-layers" aria-pressed="false" aria-haspopup="true" aria-expanded="false" aria-controls="layer-menu">Layers</button>
+          <button type="button" id="mode-landscape" data-mode="landscape" aria-pressed="true" title="The land"><i class="sw"></i>Land</button>
+          <button type="button" id="mode-depth" data-mode="depth" aria-pressed="false" aria-label="Water depth" title="Water depth"><i class="sw"></i>Depth</button>
+          <button type="button" id="mode-speed" data-mode="speed" aria-pressed="false" aria-label="Current" title="Current"><i class="sw"></i>Current</button>
+          <button type="button" id="mode-drag" data-mode="drag" aria-pressed="false" aria-label="Drag on the bed" title="Drag on the bed"><i class="sw"></i>Drag</button>
+          <button type="button" id="mode-change" data-mode="change" aria-pressed="false" aria-label="Cutting and filling now" title="Cutting and filling now"><i class="sw"></i>Change</button>
+          <button type="button" id="mode-cutfill" data-mode="cutfill" aria-pressed="false" aria-label="Cut and fill since the start" title="Cut and fill since the start"><i class="sw"></i>Cut/fill</button>
         </div>
         <div class="scale" aria-hidden="true"><span id="scale-bar" class="bar"></span><span id="scale-label">100 m</span></div>
       </div>
@@ -40,12 +44,10 @@
         <button type="button" id="view-3d" class="view-3d" aria-pressed="false" aria-label="Show the valley in 3D" title="3D view" hidden>3D</button>
       </div>
     </div>
-    <div class="layer-menu" id="layer-menu" role="menu" aria-label="Map layers" hidden>
-      <button type="button" role="menuitem" data-layer="depth">Water depth</button>
-      <button type="button" role="menuitem" data-layer="speed">Current</button>
-      <button type="button" role="menuitem" data-layer="drag">Drag on the bed</button>
-      <button type="button" role="menuitem" data-layer="change">Cutting and filling</button>
-      <button type="button" role="menuitem" data-layer="cutfill">Cut and fill since the start</button>
+    <div class="key layer-key" id="layer-key" hidden>
+      <p class="layer-name" id="layer-name"></p>
+      <div class="ramp" id="layer-ramp"></div>
+      <div class="ticks" id="layer-ticks"></div>
     </div>
     <div class="inspect" id="inspect" hidden>
       <div class="inspect-head">
@@ -116,12 +118,6 @@
           <canvas id="sp-s" aria-label="How much the river winds, over time"></canvas>
         </figure>
         <p class="axis"><span id="sp-from">−1 day</span><span>now</span></p>
-      </div>
-
-      <div class="key layer-key" id="layer-key" hidden>
-        <p class="layer-name" id="layer-name"></p>
-        <div class="ramp" id="layer-ramp"></div>
-        <div class="ticks" id="layer-ticks"></div>
       </div>
 
       <form class="seed" id="seed-form">

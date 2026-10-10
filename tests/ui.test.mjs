@@ -34,7 +34,7 @@ check(z1 > z0 + 0.2 && scroll1 === scroll0, 'a Raise stroke piles up sand and th
 const overlaps = await page.evaluate(() => {
   const m = document.getElementById('map').getBoundingClientRect();
   const hit = [];
-  for (const id of ['zoom-in', 'zoom-out', 'zoom-reset', 'view-3d', 'mode-landscape', 'mode-layers', 'scale-bar', 'phase']) {
+  for (const id of ['zoom-in', 'zoom-out', 'zoom-reset', 'view-3d', 'mode-landscape', 'mode-depth', 'mode-speed', 'mode-drag', 'mode-change', 'mode-cutfill', 'scale-bar', 'phase']) {
     const el = document.getElementById(id);
     if (!el || el.hidden) continue;
     const r = el.getBoundingClientRect();
@@ -87,14 +87,18 @@ check(Math.abs(rate - 6) < 0.01, 'Storm slows the clock to watch the flood', `${
 check((await page.evaluate(() => window.Headwaters.events())).some((e) => /storm/.test(e.label)), 'with a note');
 await page.evaluate(() => window.Headwaters.arm(null));
 // Layers.
+let keyGap = 0;
 for (const m of ['depth', 'speed', 'drag', 'change', 'cutfill']) {
-  await page.evaluate((mm) => window.Headwaters.mode(mm), m);
+  await page.tap(`#mode-${m}`);
   await page.waitForTimeout(400);
-  const ok = await page.evaluate(() => !!window.Headwaters.frame().layer && !document.getElementById('layer-key').hidden);
+  const ok = await page.evaluate((mm) => !!window.Headwaters.frame().layer && !document.getElementById('layer-key').hidden
+    && document.getElementById(`mode-${mm}`).getAttribute('aria-pressed') === 'true', m);
   if (!ok) check(false, `the ${m} layer shows`);
+  keyGap = Math.max(keyGap, await page.evaluate(() => document.getElementById('layer-key').getBoundingClientRect().top - document.getElementById('map').getBoundingClientRect().bottom));
 }
-check(true, 'the five layers show with their keys');
-await page.evaluate(() => window.Headwaters.mode('landscape'));
+check(true, 'each of the five layers shows from its own button, with its key');
+check(keyGap < 30, 'and the key sits just under the map', `${keyGap.toFixed(0)} px below it`);
+await page.tap('#mode-landscape');
 // 3D.
 await page.evaluate(() => window.Headwaters.set3d(true));
 await page.waitForTimeout(1500);

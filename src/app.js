@@ -445,33 +445,29 @@ function showTab(name) {
 for (const t of ['river', 'profile']) $(`tab-${t}`).addEventListener('click', () => showTab(t));
 
 const LAYER_NAMES = { depth: 'Water depth', speed: 'Current', drag: 'Drag on the bed (times what moves sand)', change: 'Cutting and filling now', cutfill: 'Cut and fill since the start' };
-const LAYER_SHORT = { depth: 'Depth', speed: 'Current', drag: 'Drag', change: 'Change', cutfill: 'Cut/fill' };
+const ramp = (L) => `linear-gradient(to right, ${L.stops.map((s) => `rgb(${s[1]}, ${s[2]}, ${s[3]}) ${s[0] * 100}%`).join(', ')})`;
+// The land and each layer have a button down the left of the map, each
+// with a strip of its colours.
+const modeButtons = [...document.querySelectorAll('.map-mode button')];
+for (const b of modeButtons) {
+  const L = LAYERS[b.dataset.mode];
+  b.querySelector('.sw').style.background = L ? ramp(L) : 'linear-gradient(to right, #6f8f4e, #c9b58c 50%, #2a5e84)';
+  b.addEventListener('click', () => setMode(b.dataset.mode));
+}
 function setMode(mode) {
   renderer.mode = mode;
   const layer = LAYERS[mode] ? mode : null;
-  $('mode-landscape').setAttribute('aria-pressed', mode === 'landscape' ? 'true' : 'false');
-  $('mode-layers').setAttribute('aria-pressed', layer ? 'true' : 'false');
-  $('mode-layers').textContent = layer ? LAYER_SHORT[layer] : 'Layers';
-  $('mode-layers').setAttribute('aria-label', layer ? `Layer: ${LAYER_NAMES[layer]}` : 'Layers');
-  for (const b of document.querySelectorAll('#layer-menu button')) b.setAttribute('aria-checked', b.dataset.layer === layer ? 'true' : 'false');
+  for (const b of modeButtons) b.setAttribute('aria-pressed', b.dataset.mode === mode ? 'true' : 'false');
   $('layer-key').hidden = !layer;
   if (layer) {
     const L = LAYERS[layer];
     $('layer-name').textContent = LAYER_NAMES[layer];
-    $('layer-ramp').style.background = `linear-gradient(to right, ${L.stops.map((s) => `rgb(${s[1]}, ${s[2]}, ${s[3]}) ${s[0] * 100}%`).join(', ')})`;
+    $('layer-ramp').style.background = ramp(L);
     $('layer-ticks').replaceChildren(...L.ticks.map((t) => el('span', '', t)));
   }
-  setLayerMenu(false);
   if (worker) worker.postMessage({ type: 'mode', mode });
   if (last) draw(last, true);
 }
-function setLayerMenu(open) {
-  $('layer-menu').hidden = !open;
-  $('mode-layers').setAttribute('aria-expanded', open ? 'true' : 'false');
-}
-$('mode-layers').addEventListener('click', () => setLayerMenu($('layer-menu').hidden));
-for (const b of document.querySelectorAll('#layer-menu button')) b.addEventListener('click', () => setMode(b.dataset.layer));
-$('mode-landscape').addEventListener('click', () => setMode('landscape'));
 
 // --- zoom and pan -------------------------------------------------------------
 

@@ -222,7 +222,8 @@ body {
   .map-col { width: min(100%, calc((100vh - 170px) * 128 / 256 + 2 * 54px)); margin: 0; }
 }
 
-/* Land or Layers, stacked in the left rail. */
+/* The land and the five layers, stacked in the left rail, each with a
+   strip of its colours. */
 .map-mode {
   display: flex;
   flex-direction: column;
@@ -232,44 +233,26 @@ body {
   box-shadow: 0 0 0 1px var(--line);
 }
 .map-mode button {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
   min-height: 44px;
   padding: 0;
   border: 0;
   border-top: 1px solid var(--line);
   background: var(--panel);
   color: var(--ink);
-  font: 600 10px/1 var(--font-display);
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
+  font: 600 10px/1 var(--font-body);
+  letter-spacing: 0;
   white-space: nowrap;
   cursor: pointer;
 }
 .map-mode button:first-child { border-top: 0; }
+.map-mode .sw { display: block; width: 30px; height: 5px; border-radius: 2px; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.15); }
 .map-mode button[aria-pressed="true"] { background: var(--ink); color: var(--panel); }
-#mode-layers { white-space: normal; line-height: 1.1; }
-/* The layers menu opens under the map. */
-.layer-menu {
-  display: grid;
-  border-radius: 6px;
-  overflow: hidden;
-  box-shadow: 0 0 0 1px var(--line);
-}
-.layer-menu[hidden] { display: none; }
-.layer-menu button {
-  min-height: 40px;
-  padding: 0 16px;
-  border: 0;
-  border-top: 1px solid rgba(29, 40, 39, 0.12);
-  background: var(--panel);
-  color: var(--ink);
-  font: 600 12px/1 var(--font-display);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  text-align: left;
-  cursor: pointer;
-}
-.layer-menu button:first-child { border-top: 0; }
-.layer-menu button[aria-checked="true"] { background: var(--ink); color: var(--panel); }
+.map-mode button[aria-pressed="true"] .sw { box-shadow: 0 0 0 1px var(--panel); }
 .layer-key[hidden] { display: none; }
 .layer-key .layer-name { margin: 0 0 6px; font: 600 12px/1 var(--font-display); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
 .map canvas { cursor: crosshair; touch-action: pan-y; }

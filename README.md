@@ -78,9 +78,10 @@ raining. Nothing is drawn over the map, so the river is always in view.
 ## Using it
 
 **Map.** The controls sit in rails either side of the map: zoom, reset,
-3D and north on the right; Land, Layers and the scale on the left. The map
-shows the land, with contours every half metre on dry ground, or one of
-five layers:
+3D and north on the right; on the left, the scale and a button for each
+thing the map can show, each with a strip of its colours. Land shows the
+land, with contours every half metre on dry ground; the other five are
+layers, with their key under the map:
 - water depth;
 - the current;
 - the drag on the bed, as a multiple of what moves sand;
