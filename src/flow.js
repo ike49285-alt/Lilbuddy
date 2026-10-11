@@ -75,6 +75,8 @@ export const TUNE = {
   spiral: 11,                     // how far a bend's spiral flow turns the sand inward (Engelund)
   bedSlope: 1.2,                  // how much the sand rolls downhill as it goes
   mudWs: 7e-5,                    // m/s mud settles through still water (fine silt and clay)
+  frMax: 2,                       // the fastest current a cell reports, as a multiple of its wave speed
+  seaDamp: 120,                   // seconds over which currents fade out at sea (0: never)
   transport: 3,                   // scales the sand and gravel's transport (calibrated to the river before gravel)
   mudE: 1e-7,                     // m/s of mud lifted per unit of drag past its threshold, from a bed of pure mud
 };
@@ -175,6 +177,7 @@ export class Flow {
     this.sea = 0;
     this.inflow = 15;                         // m³/s pumped in at the top
     this.inletX = W / 2;
+    this.seaY = (table.shoreY || H) + 12;    // past here, the open sea
     this.inletHalf = 4;
     this.supply = 0.6;                        // sand fed in, as a share of what the inflow can carry
     this.sediment = true;
@@ -295,6 +298,10 @@ export class Flow {
     }
     const cin = this.mudIn;
     let fed = 0, out = 0;
+    // Out at sea, past the river's mouth, currents fade over a couple of
+    // minutes, so the shelf doesn't slosh.
+    const seaY = this.seaY, seaDamp = TUNE.seaDamp > 0 ? 1 - dt / TUNE.seaDamp : 1, deepSea = sea - 0.3;
+    const frMax = TUNE.frMax;
     for (let y = 0; y < H; y++) {
       const row = y * W, frow = y * W1;
       const a = lo[y], b = hi[y];
@@ -322,6 +329,10 @@ export class Flow {
         }
         if (qB !== 0) m -= k * qB * (qB > 0 ? ci : C[i + W]);
         if (m < 0) m = 0;
+        if (y > seaY && z[i] < deepSea) {
+          if (x > a) qx[frow + x] *= seaDamp;
+          qy[i] *= seaDamp;
+        }
         if (y >= spongeY) {
           // The open sea: the level relaxes to the sea's, the currents die
           // away, and it takes the mud away.
@@ -343,6 +354,13 @@ export class Flow {
           let u = (qL + qR) / (2 * d), v = (qT + qB) / (2 * d);
           if (d > deepest) deepest = d;
           if (d > FILM) {
+            // A cell all but drained between full neighbours can report a
+            // current many times its wave speed for a step or two; no river
+            // runs like that, so it's held to frMax times it, for the step
+            // and for what the bed feels.
+            const m = frMax * Math.sqrt(G * d);
+            if (u > m) u = m; else if (u < -m) u = -m;
+            if (v > m) v = m; else if (v < -m) v = -m;
             const s = (u < 0 ? -u : u) + (v < 0 ? -v : v);
             if (s > fastest) fastest = s;
           } else {
