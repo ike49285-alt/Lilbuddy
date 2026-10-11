@@ -68,7 +68,9 @@ than the plain's sand.
 outside of a bend. A channel scouring at the foot of a bank brings some of
 the bank down with it, and any slope steeper than wet or dry sand can stand
 slumps. Bedrock lies 6 m down under the plain to start (the Table tab's Bedrock
-slider moves it), close under the terraces, and nothing wears below it.
+slider moves it), close under the terraces. Where the river runs over bare
+rock it wears it slowly, by the power of the water, fastest at a waterfall's
+lip; what it wears away becomes gravel. Rock put down by hand doesn't wear.
 
 **Plants** green bare ground over a year or two in the growing season. They
 drown under standing water, and a flood that drags hard enough tears them

@@ -60,6 +60,7 @@ const SG = ((RHO_S - RHO) / RHO) * G;      // (s − 1) g
 export const SHIELDS_C = 0.047;   // the threshold Shields stress, bare
 const POROSITY = 0.4;
 const LA = 0.3;                   // metres: the top layer of the ground that the river mixes
+const ROCK_SHIELD = 0.3;          // metres of loose ground that keep the water off the rock
 const MUD_TE = 0.2;               // Pa: the drag that starts lifting mud from the bed
 const MUD_PLANT = 2;              // full plant cover traps mud this many times faster
 // Tunable: how hard the banks are, how much plants hold them, how far a
@@ -75,6 +76,8 @@ export const TUNE = {
   spiral: 11,                     // how far a bend's spiral flow turns the sand inward (Engelund)
   bedSlope: 1.2,                  // how much the sand rolls downhill as it goes
   mudWs: 7e-5,                    // m/s mud settles through still water (fine silt and clay)
+  rockK: 2e-9,                    // m/s the bedrock wears per W/m² of stream power past its threshold
+  rockP: 10,                      // W/m²: the stream power that starts wearing rock
   frMax: 2,                       // the fastest current a cell reports, as a multiple of its wave speed
   seaDamp: 120,                   // seconds over which currents fade out at sea (0: never)
   transport: 3,                   // scales the sand and gravel's transport (calibrated to the river before gravel)
@@ -159,6 +162,7 @@ export class Flow {
     this.sg = Float64Array.from(this.fg);     // and of the ground below it
     this.dzG = new Float32Array(N);           // the gravel in this step's bed change
     this.gs = new Float32Array(N);            // gravel's share of what each cell's flow carries along the bed
+    this.rockWorn = 0;                        // bedrock worn into gravel, m³ (as solid) in all
     this.gravelIn = 0;                        // gravel pumped in and out to sea, m³ in all (bed time)
     this.gravelOut = 0;
     this.mudIn = 0;                           // the pump water's mud, by volume
@@ -677,9 +681,56 @@ export class Flow {
         dzRate[i] = dzRate[i] * keep + rate * d;
       }
     }
+    this.wearRock(mdt, HB, dzMax);
     if (this.slumpAll || this.steps % SLUMP_ALL_EVERY === 0) { this.slump(true); this.slumpAll = false; } else this.slump(false);
     this.plants(years, mdt);
     return mdt;
+  }
+
+  // Bare bedrock under flowing water wears away by the water's power
+  // (stream power: drag times speed), fastest where the bed steps down
+  // steeply, a waterfall's lip, where blocks are plucked away. A little loose
+  // ground over it shields it. What's worn off becomes gravel in the ground
+  // above it, bulked up by the room between the stones. Rock put down by
+  // hand doesn't wear.
+  wearRock(mdt, HB, dzMax) {
+    const { W, z, h, rock, placed, theta, ux, uy, fg, fm, sg, sm, lo, hi, dx } = this;
+    const tauK = (RHO_S - RHO) * G * D50;
+    const k = TUNE.rockK, pc = TUNE.rockP, bulk = 1 / (1 - POROSITY);
+    let worn = 0;
+    for (let y = 1; y < HB - 1; y++) {
+      for (let x = Math.max(1, lo[y]); x <= Math.min(W - 2, hi[y]); x++) {
+        const i = y * W + x;
+        if (h[i] <= WET || placed[i]) continue;
+        const S = z[i] - rock[i];
+        if (S >= ROCK_SHIELD) continue;
+        const power = theta[i] * tauK * Math.sqrt(ux[i] * ux[i] + uy[i] * uy[i]);
+        if (power <= pc) continue;
+        // How steeply the bed drops away from here.
+        const zi = z[i];
+        let drop = 0;
+        for (const j of [i - 1, i + 1, i - W, i + W]) { const d = zi - z[j]; if (d > drop) drop = d; }
+        let dr = k * (power - pc) * (1 + drop / dx / 0.1) * (1 - S / ROCK_SHIELD) * mdt;
+        if (dr > dzMax) dr = dzMax;
+        if (dr <= 0) continue;
+        // The rock drops; the gravel it makes, bulked, sits above it.
+        const v = dr * bulk;
+        if (S >= LA) {
+          const below = S - LA;
+          sg[i] = (sg[i] * below + v) / (below + v);
+          sm[i] = (sm[i] * below) / (below + v);
+        } else {
+          const s = S > 0 ? S : 0;
+          fg[i] = (fg[i] * s + v) / (s + v);
+          fm[i] = (fm[i] * s) / (s + v);
+          sg[i] = fg[i]; sm[i] = fm[i];
+        }
+        rock[i] -= dr;
+        z[i] += v - dr;
+        worn += dr * dx * dx;
+      }
+    }
+    this.rockWorn += worn;
   }
 
   // Mud settling out of the water and lifted from the bed, over dt seconds

@@ -26,10 +26,11 @@ const sum = (a) => { let s = 0; for (const v of a) s += v; return s; };
 {
   const s = new Simulation('sand-1');
   const f = s.flow;
-  const z0 = sum(f.z), fed0 = f.fedIn, out0 = f.toSea, mud0 = f.mudLaid;
+  const loose = () => { let t = 0; for (let i = 0; i < f.N; i++) t += f.z[i] - f.rock[i]; return t; };
+  const z0 = loose(), fed0 = f.fedIn, out0 = f.toSea, mud0 = f.mudLaid, worn0 = f.rockWorn;
   for (let k = 0; k < 8000; k++) s.step(500);
-  // The ground's growth, less the mud laid down in it.
-  const dv = (sum(f.z) - z0) * f.dx * f.dx * (1 - 0.4) - (f.mudLaid - mud0);
+  // The loose ground's growth, less the mud laid down in it and the rock worn into it.
+  const dv = (loose() - z0) * f.dx * f.dx * (1 - 0.4) - (f.mudLaid - mud0) - (f.rockWorn - worn0);
   const net = (f.fedIn - fed0) - (f.toSea - out0);
   check(Math.abs(dv - net) < 0.02 * Math.max(10, Math.abs(net)) + 1, 'sand is neither made nor lost', `bed gained ${dv.toFixed(1)} m³ of sand; in less out ${net.toFixed(1)} m³`);
   check(s.years > 0 && f.morph >= 1, 'the bed runs faster than the water when asked', `${(s.years * 365.25).toFixed(1)} days in 8000 steps, bed ×${f.morph.toFixed(0)}`);
@@ -116,9 +117,9 @@ const sum = (a) => { let s = 0; for (const v of a) s += v; return s; };
   const s = new Simulation('gravel-1');
   const f = s.flow, N = f.N, dA = f.dx * f.dx;
   const inGround = () => { let t = 0; for (let i = 0; i < N; i++) { const S = Math.max(0, f.z[i] - f.rock[i]); t += (f.fg[i] * Math.min(0.3, S) + f.sg[i] * Math.max(0, S - 0.3)) * 0.6 * dA; } return t; };
-  const g0 = inGround(), in0 = f.gravelIn, out0 = f.gravelOut;
+  const g0 = inGround(), in0 = f.gravelIn, out0 = f.gravelOut, w0 = f.rockWorn;
   for (let k = 0; k < 4000; k++) s.step(2000);
-  const net = (f.gravelIn - in0) - (f.gravelOut - out0), got = inGround() - g0;
+  const net = (f.gravelIn - in0) - (f.gravelOut - out0) + (f.rockWorn - w0), got = inGround() - g0;
   check(f.gravelIn > in0 && Math.abs(got - net) < 0.05 * Math.abs(net) + 0.05, 'gravel is neither made nor lost', `${got.toFixed(2)} m³ more in the ground, ${net.toFixed(2)} m³ in less out`);
   let bad = 0;
   for (let i = 0; i < N; i++) if (!(f.fg[i] >= 0 && f.fg[i] + f.fm[i] <= 1 + 1e-9 && f.sg[i] >= 0 && f.sg[i] <= 1)) bad++;
@@ -217,6 +218,26 @@ const sum = (a) => { let s = 0; for (const v of a) s += v; return s; };
   check(bad === 0, 'and the river runs on over the step to the sea');
   const r = Simulation.fromState(structuredClone(s.saveState()));
   check(r.lift === 20 && r.settings.lift === 20 && r.stateHash() === s.stateHash(), 'and it comes back through a save');
+}
+
+// Rock that wears: with the bedrock just under the plain, bare rock under
+// the flow wears away into gravel; rock put down by hand doesn't.
+{
+  const s = new Simulation('wear-1');
+  const f = s.flow, W = s.W;
+  s.set('rock', 1);
+  const blockAt = 30 * W + 64;
+  s.block(blockAt);
+  // Bare the rock under the pump's jet with the Lower brush.
+  for (let k = 0; k < 40; k++) for (const y of [4, 8, 12]) s.sculpt(y * W + 64, 'big', -1, 'bulldozer');
+  const rock0 = Float32Array.from(f.rock), blockRock = f.rock[blockAt];
+  for (let k = 0; k < 6000; k++) s.step(2000);
+  let lowered = 0, deepest = 0;
+  for (let i = 0; i < f.N; i++) if (!f.placed[i] && f.rock[i] < rock0[i] - 1e-4) { lowered++; deepest = Math.max(deepest, rock0[i] - f.rock[i]); }
+  check(f.rockWorn > 0 && lowered > 0 && f.rock[blockAt] === blockRock, 'bare rock under the flow wears into gravel; placed rock doesn’t', `${f.rockWorn.toFixed(1)} m³ worn from ${lowered} cells, up to ${(deepest * 1000).toFixed(1)} mm`);
+  let below = 0;
+  for (let i = 0; i < f.N; i++) if (f.z[i] < f.rock[i] - 1e-6) below++;
+  check(below === 0, 'and the ground never sinks below the rock');
 }
 
 // The pump moves along the top edge, and the river comes in where it is.

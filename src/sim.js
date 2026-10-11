@@ -665,7 +665,7 @@ export class Simulation {
         z0: f.z0.slice(), dzRate: f.dzRate.slice(), ux: f.ux.slice(), uy: f.uy.slice(),
         placed: f.placed.slice(),
         fm: f.fm.slice(), sm: f.sm.slice(), M: f.M.slice(), fg: f.fg.slice(), sg: f.sg.slice(),
-        gravel: { in: f.gravelIn, out: f.gravelOut },
+        gravel: { in: f.gravelIn, out: f.gravelOut, worn: f.rockWorn },
         mud: { fed: f.mudFed, out: f.mudOut, down: f.mudDown, laid: f.mudLaid, sea: f.mudSea, mark: f.mudMark },
         inletX: f.inletX, dt: f.dt, mNow: f.mNow, fedIn: f.fedIn, toSea: f.toSea, steps: f.steps, plantYears: f.plantYears, waterTime: f.waterTime,
       },
@@ -682,7 +682,7 @@ export class Simulation {
     // Rock put down by hand; an older save's is wherever rock stands at the ground.
     if (F.placed) f.placed.set(F.placed); else for (let i = 0; i < f.N; i++) f.placed[i] = f.rock[i] >= f.z[i] - 0.01 ? 1 : 0;
     if (F.fm) { f.fm.set(F.fm); f.sm.set(F.sm); f.M.set(F.M); }
-    if (F.fg) { f.fg.set(F.fg); f.sg.set(F.sg); f.gravelIn = F.gravel.in; f.gravelOut = F.gravel.out; }
+    if (F.fg) { f.fg.set(F.fg); f.sg.set(F.sg); f.gravelIn = F.gravel.in; f.gravelOut = F.gravel.out; f.rockWorn = F.gravel.worn || 0; }
     if (F.mud) { f.mudFed = F.mud.fed; f.mudOut = F.mud.out; f.mudDown = F.mud.down; f.mudLaid = F.mud.laid; f.mudSea = F.mud.sea; f.mudMark = F.mud.mark; }
     if (F.inletX != null) f.inletX = F.inletX;
     f.dt = F.dt; f.mNow = F.mNow; f.fedIn = F.fedIn; f.toSea = F.toSea; f.steps = F.steps; f.plantYears = F.plantYears; f.waterTime = F.waterTime;
@@ -710,7 +710,7 @@ export class Simulation {
 
   stateHash() {
     const f = this.flow;
-    return hashArrays([f.z, f.h, f.qx, f.qy, f.cover, f.fm, f.sm, f.M, f.fg, f.sg]);
+    return hashArrays([f.z, f.h, f.qx, f.qy, f.cover, f.fm, f.sm, f.M, f.fg, f.sg, f.rock]);
   }
 }
 
