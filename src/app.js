@@ -49,10 +49,15 @@ function cleanSeed(s) {
   return String(s || '').toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 32);
 }
 
+// The water on the GPU: the page's own choice, remembered on this device.
+let gpuOn = false;
+try { gpuOn = localStorage.getItem('headwaters-gpu') === '1'; } catch { /* storage off */ }
+
 function newWorker() {
   if (worker) worker.terminate();
   worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
   worker.onmessage = onMessage;
+  worker.postMessage({ type: 'gpu', on: gpuOn });
 }
 
 function start(seed) {
@@ -94,6 +99,9 @@ function onMessage(e) {
       drawPending = true;
       requestAnimationFrame(drawLatest);
     }
+  } else if (msg.type === 'gpu') {
+    $('gpu-row').hidden = !msg.available;
+    if (!msg.available && gpuOn) { gpuOn = false; $('gpu').checked = false; }
   } else if (msg.type === 'state') {
     saveWorld(msg.state).then(() => {
       lastSaved = Date.now();
@@ -300,7 +308,7 @@ function draw(f, force) {
   $('time').textContent = clock;
   $('time').classList.toggle('two', clock.includes('\n'));
   const m = f.stats.morph;
-  $('tick').textContent = f.held ? 'bed held while you shape' : m > 1.5 ? `bed ×${n0.format(m)}` : 'bed in real time';
+  $('tick').textContent = (f.held ? 'bed held while you shape' : m > 1.5 ? `bed ×${n0.format(m)}` : 'bed in real time') + (f.gpu ? ' · GPU' : '');
   const lag = $('lag');
   if (f.paused) {
     lag.textContent = 'paused';
@@ -897,6 +905,13 @@ function endShaping(cancelled) {
 // let go, and is saved with the world. [slider id]: [setting, slider units
 // per setting unit, label].
 const signed = (v, unit) => (Math.abs(v) < 1e-9 ? `±0 ${unit}` : `${v > 0 ? '+' : '−'}${n1.format(Math.abs(v))} ${unit}`);
+$('gpu').checked = gpuOn;
+$('gpu').addEventListener('change', () => {
+  gpuOn = $('gpu').checked;
+  try { localStorage.setItem('headwaters-gpu', gpuOn ? '1' : '0'); } catch { /* storage off */ }
+  if (worker) worker.postMessage({ type: 'gpu', on: gpuOn });
+});
+
 const SLIDERS = {
   flow: ['flow', 1, (v) => `${v} m³/s`],
   tilt: ['tilt', 1000, (v) => `${n1.format(v)} m/km`],

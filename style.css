@@ -333,6 +333,8 @@ body {
 /* The table's settings, in their own tab. */
 .table-pane { display: grid; gap: 8px; }
 .table-pane[hidden] { display: none; }
+.wet-row.gpu-row[hidden] { display: none; }
+.gpu-row input { justify-self: start; width: 22px; height: 22px; accent-color: #2b6c9e; }
 .wet-row {
   display: grid;
   grid-template-columns: 7em 1fr 4em;

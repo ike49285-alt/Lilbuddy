@@ -130,6 +130,9 @@ function dice(step, i) {
   return ((a ^ (a >>> 16)) >>> 0) / 4294967296;
 }
 
+// The water's constants, for the GPU's copy of the water (gpuflow.js).
+export const WATER = { G, FILM, N_BARE, N_PLANT, N_TREE, INFILTRATE, CFL, MAX_DT };
+
 // Cube roots by table: Math.cbrt is slow and is needed for every wet face.
 const CB_STEP = 1024, CB_N = 4 * CB_STEP;
 const CB = new Float64Array(CB_N + 2);
@@ -246,6 +249,7 @@ export class Flow {
   // One hydraulic step, with the bed's time running up to `morph` times
   // faster. Returns the bed-time it stood for, in seconds.
   step(morph) {
+    if (this.gpu) return this.gpuStep(morph);
     const dt = this.dt;
     this.water(dt);
     this.steps++;
@@ -256,6 +260,32 @@ export class Flow {
     this.waterTime = 0;
     return this.bed(t, morph);
   }
+
+  // The same step with the water worked out on the GPU (this.gpu, a
+  // GpuWater): its state comes down only when the bed is to move, and the
+  // bed, the plants and the mud it traded go back up after.
+  gpuStep(morph) {
+    const g = this.gpu;
+    if (this.gpuDirty) { g.load(this); this.gpuDirty = false; }
+    g.step(this);
+    this.steps++;
+    if (this.steps % BED_EVERY !== 0) return 0;
+    const got = g.fetch(this);
+    if (got < 0) return 0;
+    const t = got + this.waterTime;
+    this.waterTime = 0;
+    this.ranges();
+    if (!this.sediment) { this.morph = 1; return t; }
+    const mud = this.mudBefore || (this.mudBefore = new Float32Array(this.N));
+    mud.set(this.M);
+    const r = this.bed(t, morph);
+    g.loadBed(this, mud);
+    return r;
+  }
+
+  // Hands the water back to the CPU (or brings the GPU's copy up to date
+  // for a save).
+  gpuSync() { if (this.gpu) { this.gpu.fetchAll(this); this.ranges(); } }
 
   // --- water ------------------------------------------------------------------
 

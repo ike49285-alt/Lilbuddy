@@ -13,6 +13,8 @@
 // paused, frames go out only when something has changed.
 
 import { Simulation, transferList, stateTransferList, SEC_PER_YR } from './sim.js';
+import { GpuWater } from './gpuflow.js';
+import { gpuAvailable } from './gpu.js';
 
 const HOST_DAY = 1 / 365.25;
 const MIN_RATE = 1 / SEC_PER_YR;    // a second a second
@@ -32,6 +34,8 @@ export function createHost(post) {
   let paceMs = 1000 / 30;
   let inFlight = 0;
   let held = false;         // a brush is down on the map
+  let gpuWanted = false;    // the page asks for the water on the GPU
+  let gpuCan = null;        // whether this browser can (asked once)
   const MAX_IN_FLIGHT = 2;
   let dirty = true;
   let urgent = false;
@@ -67,6 +71,7 @@ export function createHost(post) {
     f.actualRate = paused ? 0 : actualRate();
     f.tickYears = tickYears();
     f.held = held;
+    f.gpu = !!sim.flow.gpu;
     post({ type: 'frame', frame: f }, transferList(f));
     lastFrame = performance.now();
     inFlight++;
@@ -125,6 +130,20 @@ export function createHost(post) {
     if (!timer) timer = setTimeout(loop, 0);
   }
 
+  // Puts the water on the GPU or back on the CPU, as the page asks and the
+  // browser allows.
+  function setGpu() {
+    if (!sim) return;
+    const f = sim.flow;
+    if (gpuWanted && !f.gpu && gpuCan) {
+      try { f.gpu = new GpuWater(f); f.gpuDirty = false; } catch (e) { f.gpu = null; gpuCan = false; post({ type: 'gpu', available: false, reason: String(e && e.message || e) }); }
+    } else if (!gpuWanted && f.gpu) {
+      f.gpuSync();
+      f.gpu.dispose();
+      f.gpu = null;
+    }
+  }
+
   function changed() {
     dirty = true;
     urgent = true;
@@ -143,13 +162,17 @@ export function createHost(post) {
         if (sim) maybeSend(performance.now());
         break;
       case 'init':
+        if (sim && sim.flow.gpu) sim.flow.gpu.dispose();
         sim = new Simulation(msg.seed);
+        setGpu();
         debt = 0; recent.length = 0; inFlight = 0;
         changed();
         start();
         break;
       case 'restore':
+        if (sim && sim.flow.gpu) sim.flow.gpu.dispose();
         sim = Simulation.fromState(msg.state);
+        setGpu();
         debt = 0; recent.length = 0; inFlight = 0;
         changed();
         start();
@@ -160,7 +183,15 @@ export function createHost(post) {
         recent.length = 0;
         changed();
         break;
+      case 'gpu':
+        if (gpuCan === null) gpuCan = gpuAvailable();
+        gpuWanted = !!msg.on;
+        post({ type: 'gpu', available: gpuCan });
+        setGpu();
+        changed();
+        break;
       case 'save': {
+        sim.flow.gpuSync();
         const state = sim.saveState();
         post({ type: 'state', state, reason: msg.reason }, stateTransferList(state));
         break;

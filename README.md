@@ -27,6 +27,7 @@ then open http://localhost:8000/.
 
 - `src/table.js` — the starting landscape: a bare sand floodplain, terraces, and a wide shallow sea for the delta
 - `src/flow.js` — the water, the sand, the banks and the plants
+- `src/gpu.js`, `src/gpuflow.js` — the water worked out on the GPU (WebGL2), when it's switched on
 - `src/weather.js` — rain, and the floods that come down from upstream
 - `src/sim.js` — one world: the clock, the seasons, the tools, measuring, saving
 - `src/save.js` — the continue slot in IndexedDB
@@ -156,6 +157,10 @@ zoom it.
 - **Bedrock:** how deep the rock lies under the plain, from 1 to 60 m
   (6 m to start). The river can't cut below it; set it deep and the river
   can cut down into its valley and the terraces as far as it likes.
+- **Water on the GPU:** works the water out on the phone's graphics chip
+  instead (shown only where the browser can). The time bar says GPU when
+  it's on. A world run either way looks the same, though not identical to
+  the last decimal.
 - **Mud in:** grams of mud in each litre of the pump's water (floods bring
   more).
 
@@ -173,7 +178,7 @@ Under it is the cross-section along the line from the Section tool.
 
 ## Tests
 
-`node tests/stream.test.mjs` checks the model. With the built page served (`node tools/build-artifact.mjs dist/headwaters.html`, then `python3 -m http.server 8112` in `dist`), `node tests/ui.test.mjs` drives the page on a phone-sized screen and `node tests/speed.test.mjs http://localhost:8112/headwaters.html` checks it stays responsive with the CPU slowed four times. The browser tests need Playwright; set `CHROMIUM` to a Chromium binary if it can't find one.
+`node tests/stream.test.mjs` checks the model. With the repository served (`python3 -m http.server 8114`), `node tests/gpu.test.mjs http://localhost:8114` checks the water on the GPU against the water on the CPU. With the built page served (`node tools/build-artifact.mjs dist/headwaters.html`, then `python3 -m http.server 8112` in `dist`), `node tests/ui.test.mjs` drives the page on a phone-sized screen and `node tests/speed.test.mjs http://localhost:8112/headwaters.html` checks it stays responsive with the CPU slowed four times. The browser tests need Playwright; set `CHROMIUM` to a Chromium binary if it can't find one.
 
 ## Saving
 

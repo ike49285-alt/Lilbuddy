@@ -180,6 +180,9 @@ export class Simulation {
   }
 
   reshaped() {
+    // With the water on the GPU, bring it down first, and send the new
+    // ground up before the next step.
+    if (this.flow.gpu) { this.flow.gpuSync(); this.flow.gpuDirty = true; }
     this.epoch++;
     this.flow.slumpAll = true;
     this.flow.ranges();
