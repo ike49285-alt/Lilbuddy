@@ -207,6 +207,7 @@ export class Simulation {
         flow.mix(j, moved, moved * (moved > 0 ? PLAIN_MUD : flow.fm[j]), moved * (moved > 0 ? PLAIN_GRAVEL : flow.fg[j]));
         z[j] = nz;
         cover[j] *= 1 - Math.min(1, Math.abs(dz) / 0.2);
+        flow.trees[j] *= 1 - Math.min(1, Math.abs(dz) / 0.2);
       }
     }
     this.reshaped();
@@ -256,6 +257,7 @@ export class Simulation {
         z[j] = top + BLOCK_H;
         rock[j] = z[j];
         cover[j] = 0;
+        this.flow.trees[j] = 0;
         this.flow.placed[j] = 1;
         this.flow.fm[j] = 0;
         this.flow.sm[j] = 0;
@@ -282,7 +284,7 @@ export class Simulation {
       const cx = i % W, cy = (i / W) | 0;
       const x0 = Math.max(0, Math.min(W - n, cx - (n >> 1))), y0 = Math.max(0, Math.min(H - SPONGE - n, cy - (n >> 1)));
       for (let y = y0; y < y0 + n; y++) for (let x = x0; x < x0 + n; x++) cells.push(y * W + x);
-      if (kind === 'field') for (const j of cells) if (f.h[j] <= WET) f.cover[j] = Math.max(f.cover[j], CROP);
+      if (kind === 'field') for (const j of cells) { if (f.h[j] <= WET) f.cover[j] = Math.max(f.cover[j], CROP); f.trees[j] = 0; f.noTrees[j] = 1; }
     } else if (kind === 'bridge') {
       cells = lineCells(W, H, points || []);
       if (cells.length < 3) return null;
@@ -466,10 +468,10 @@ export class Simulation {
     const { W, N, shoreY } = this;
     const f = this.flow;
     const { z, h, cover, sy, z0 } = f;
-    let plants = 0, land = 0, delta = 0, deepest = 0;
+    let plants = 0, wood = 0, land = 0, delta = 0, deepest = 0;
     for (let i = 0; i < N; i++) {
       const y = (i / W) | 0;
-      if (y < shoreY) { land++; plants += cover[i]; if (h[i] > deepest) deepest = h[i]; }
+      if (y < shoreY) { land++; plants += cover[i]; wood += f.trees[i]; if (h[i] > deepest) deepest = h[i]; }
       if (z0[i] < this.settings.sea && z[i] > z0[i]) delta += z[i] - z0[i];
     }
     // Sand moving past the middle of the valley.
@@ -484,6 +486,7 @@ export class Simulation {
       sinuosity: m.sinuosity,
       deepest,
       plants: land ? plants / land : 0,
+      trees: land ? wood / land : 0,
       sand: this.sandRate,
       toSea: this.toSeaRate,
       mudToSea: this.mudSeaRate,
@@ -571,6 +574,7 @@ export class Simulation {
       h: new Float32Array(f.h),
       rock: this.rockBytes(),
       cover: bytes(f.cover, 255),
+      trees: bytes(f.trees, 255),
       mud: this.mudBytes(),
       soil: bytes(f.fm, 255),
       gravel: bytes(f.fg, 255),
@@ -632,6 +636,7 @@ export class Simulation {
       change: f.z[i] - f.z0[i],
       rate: f.dzRate[i],
       cover: f.cover[i],
+      trees: f.trees[i],
       mudWater: wet ? (f.M[i] / f.h[i]) * MUD_DENSITY : 0,  // grams a litre
       mudGround: f.fm[i],
       gravelGround: f.fg[i],
@@ -666,7 +671,7 @@ export class Simulation {
       flow: {
         z: f.z.slice(), h: f.h.slice(), qx: f.qx.slice(), qy: f.qy.slice(), cover: f.cover.slice(), rock: f.rock.slice(),
         z0: f.z0.slice(), dzRate: f.dzRate.slice(), ux: f.ux.slice(), uy: f.uy.slice(),
-        placed: f.placed.slice(),
+        placed: f.placed.slice(), trees: f.trees.slice(), noTrees: f.noTrees.slice(),
         fm: f.fm.slice(), sm: f.sm.slice(), M: f.M.slice(), fg: f.fg.slice(), sg: f.sg.slice(),
         gravel: { in: f.gravelIn, out: f.gravelOut, worn: f.rockWorn },
         slides: f.slides, slideYears: f.slideYears,
@@ -685,6 +690,7 @@ export class Simulation {
     // A save from before the ground knew its mud keeps the table's, with clear water.
     // Rock put down by hand; an older save's is wherever rock stands at the ground.
     if (F.placed) f.placed.set(F.placed); else for (let i = 0; i < f.N; i++) f.placed[i] = f.rock[i] >= f.z[i] - 0.01 ? 1 : 0;
+    if (F.trees) { f.trees.set(F.trees); f.noTrees.set(F.noTrees); } else f.trees.fill(0);
     if (F.fm) { f.fm.set(F.fm); f.sm.set(F.sm); f.M.set(F.M); }
     if (F.fg) { f.fg.set(F.fg); f.sg.set(F.sg); f.gravelIn = F.gravel.in; f.gravelOut = F.gravel.out; f.rockWorn = F.gravel.worn || 0; }
     if (F.mud) { f.mudFed = F.mud.fed; f.mudOut = F.mud.out; f.mudDown = F.mud.down; f.mudLaid = F.mud.laid; f.mudSea = F.mud.sea; f.mudMark = F.mud.mark; }
@@ -715,7 +721,7 @@ export class Simulation {
 
   stateHash() {
     const f = this.flow;
-    return hashArrays([f.z, f.h, f.qx, f.qy, f.cover, f.fm, f.sm, f.M, f.fg, f.sg, f.rock]);
+    return hashArrays([f.z, f.h, f.qx, f.qy, f.cover, f.trees, f.fm, f.sm, f.M, f.fg, f.sg, f.rock]);
   }
 }
 
@@ -759,7 +765,7 @@ export function lineCells(W, H, pts) {
 }
 
 export function transferList(f) {
-  const list = [f.z.buffer, f.h.buffer, f.rock.buffer, f.cover.buffer, f.mud.buffer, f.soil.buffer, f.gravel.buffer,
+  const list = [f.z.buffer, f.h.buffer, f.rock.buffer, f.cover.buffer, f.mud.buffer, f.soil.buffer, f.gravel.buffer, f.trees.buffer,
     f.profile.bed.buffer, f.profile.water.buffer, f.profile.start.buffer];
   if (f.layer) list.push(f.layer.buffer);
   if (f.section) list.push(f.section.bed.buffer, f.section.water.buffer, f.section.start.buffer);

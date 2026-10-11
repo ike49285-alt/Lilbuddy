@@ -74,10 +74,12 @@ slider moves it), close under the terraces. Where the river runs over bare
 rock it wears it slowly, by the power of the water, fastest at a waterfall's
 lip; what it wears away becomes gravel. Rock put down by hand doesn't wear.
 
-**Plants** green bare ground over a year or two in the growing season. They
-drown under standing water, and a flood that drags hard enough tears them
-out. Where they grow they hold the banks, slow the water and keep the sand
-in place.
+**Plants** come in two kinds. Grass greens bare ground over a year or two in
+the growing season; trees come up slowly on grassed ground, over years, and
+the terraces start partly wooded. Both drown under standing water (trees
+after much longer) and a flood that drags hard enough tears them out (trees
+hold on harder). Where they grow they slow the water, trap mud and hold the
+banks together, trees far more than grass.
 
 **Time.** The bed changes far more slowly than the water moves. At the faster
 rates each second of water stands for many seconds of the bed's time, the

@@ -357,6 +357,7 @@ function drawSlow(f) {
   $('s-sea').textContent = st.toSea >= 0.5 ? `${n0.format(st.toSea)} m³/day` : 'none yet';
   $('s-delta').textContent = fmtVolume(st.delta);
   $('s-plants').textContent = `${n0.format(st.plants * 100)}%`;
+  $('s-trees').textContent = `${n0.format(st.trees * 100)}%`;
   $('s-mudsea').textContent = st.mudToSea >= 0.5 ? `${n0.format(st.mudToSea)} m³/day` : 'none yet';
   $('s-mudlaid').textContent = st.mudLaid > 0 ? fmtVolume(st.mudLaid) : 'none yet';
   $('s-slides').textContent = st.slides ? n0.format(st.slides) : 'none yet';
@@ -971,7 +972,8 @@ function renderInspect(info) {
   fact(ch >= 0 ? 'Built up' : 'Cut down', `${n1.format(Math.abs(ch))} m since the start`);
   const r = info.rate;
   if (Math.abs(r) > 0.01) fact(r < 0 ? 'Cutting' : 'Filling', `${n1.format(Math.abs(r) * 100)} cm a year`);
-  fact('Plant cover', `${n0.format(info.cover * 100)}%`);
+  fact('Grass', `${n0.format(info.cover * 100)}%`);
+  if (info.trees > 0.01) fact('Trees', `${n0.format(info.trees * 100)}%`);
   const t = info.thing;
   if (t) {
     const what = { house: 'A house', field: 'A field', bridge: 'A bridge' }[t.kind];

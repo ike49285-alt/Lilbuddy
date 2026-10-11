@@ -45,7 +45,8 @@ import { CELL_M } from './table.js';
 const G = 9.81;
 export const WET = 0.02;          // metres: shallower than this counts as dry
 const N_BARE = 0.03;              // Manning's n on bare sand and gravel
-const N_PLANT = 0.05;             // added by full plant cover
+const N_PLANT = 0.05;             // added by full grass cover
+const N_TREE = 0.08;              // added by full tree cover
 const CFL = 0.7;
 const MAX_DT = 2;                 // seconds
 const FILM = 0.1;                 // water shallower than this doesn't set the step, m
@@ -70,6 +71,7 @@ export const TUNE = {
   bankK: 2e-6,                    // m/s a bank wears back per unit of Shields stress past its threshold
   bankCrit: 2.5,                  // a bank's threshold, as a multiple of the bed's (more with plants: ×(1 + 3·cover))
   growYears: 0.8,                 // years for bare ground to green over
+  treeYears: 6,                   // years for trees to grow up on grassed ground
   rootHold: 0.9,                  // how much full plant cover cuts what a bank loses
   dzMax: 0.04,                    // metres: the most the bed may change in one step
   held: 0.1,                      // share of busy cells allowed to hit that limit before the bed slows
@@ -90,6 +92,8 @@ const SLUMP = 0.5;                // share of the excess that slumps each step
 export const SEC_PER_YR = 3.156e7;
 const PLANT_DROWN_YR = 0.4;       // years under water to drown them
 const PLANT_UPROOT = 1.6;         // times the threshold stress that tears them out
+const TREE_DROWN_YR = 1.5;        // trees stand floods longer
+const TREE_UPROOT = 3;            // and hold on harder
 const PLANT_EVERY = 16;           // steps between the plants' slow updates
 const SLUMP_ALL_EVERY = 64;       // steps between slumps over the whole valley
 
@@ -144,7 +148,9 @@ export class Flow {
     this.dx = CELL_M;
     this.z = table.z;
     this.rock = table.rock;
-    this.cover = table.cover;
+    this.cover = table.cover;                 // grass, 0..1
+    this.trees = table.trees || new Float32Array(N);   // trees, 0..1
+    this.noTrees = new Uint8Array(N);         // kept clear of trees (fields)
     this.placed = new Uint8Array(N);          // rock put down by hand (blocks, piers): stays when the bedrock moves
     this.z0 = Float32Array.from(table.z);   // the bed at the start, for cut and fill
     this.h = new Float32Array(N);
@@ -254,7 +260,7 @@ export class Flow {
   // --- water ------------------------------------------------------------------
 
   water(dt) {
-    const { W, H, N, z, h, qx, qy, cover, dx, lo, hi } = this;
+    const { W, H, N, z, h, qx, qy, cover, trees, dx, lo, hi } = this;
     const W1 = W + 1;
     const gdt = G * dt;
     const dry = WET * 0.5;
@@ -268,7 +274,7 @@ export class Flow {
         const ei = zi + h[i], ej = zj + h[j];
         const hf = (ei > ej ? ei : ej) - (zi > zj ? zi : zj);
         if (hf <= dry) { qx[f] = 0; continue; }
-        const n = N_BARE + N_PLANT * 0.5 * (cover[i] + cover[j]);
+        const n = N_BARE + 0.5 * (N_PLANT * (cover[i] + cover[j]) + N_TREE * (trees[i] + trees[j]));
         let q = qx[f];
         q = (q - gdt * hf * (ej - ei) / dx) / (1 + (gdt * n * n * (q < 0 ? -q : q)) / (hf * hf * cbrt(hf)));
         // No faster than critical flow, and never draining more than is there.
@@ -287,7 +293,7 @@ export class Flow {
         const ei = zi + h[i], ej = zj + h[j];
         const hf = (ei > ej ? ei : ej) - (zi > zj ? zi : zj);
         if (hf <= dry) { qy[j] = 0; continue; }
-        const n = N_BARE + N_PLANT * 0.5 * (cover[i] + cover[j]);
+        const n = N_BARE + 0.5 * (N_PLANT * (cover[i] + cover[j]) + N_TREE * (trees[i] + trees[j]));
         let q = qy[j];
         q = (q - gdt * hf * (ej - ei) / dx) / (1 + (gdt * n * n * (q < 0 ? -q : q)) / (hf * hf * cbrt(hf)));
         if (q * q > G * hf * hf * hf) q = (q > 0 ? 1 : -1) * hf * Math.sqrt(G * hf);
@@ -418,7 +424,7 @@ export class Flow {
   // `morph` (less if the bed would change too fast). Returns the bed-time,
   // seconds.
   bed(dt, morph) {
-    const { W, H, z, h, ux, uy, sx, sy, theta, cover, rock, dx, fx, fy, dz, avail, lo, hi, fm, dzM, fg, dzG, gs } = this;
+    const { W, H, z, h, ux, uy, sx, sy, theta, cover, trees, rock, dx, fx, fy, dz, avail, lo, hi, fm, dzM, fg, dzG, gs } = this;
     const W1 = W + 1;
     const shieldsK = 1 / (((RHO_S - RHO) / RHO) * G * D50);
     const tauK = (RHO_S - RHO) * G * D50;      // Pa per unit of theta
@@ -436,7 +442,7 @@ export class Flow {
         const u = ux[i], v = uy[i];
         const U2 = u * u + v * v;
         if (U2 < 1e-6) continue;
-        const n = N_BARE + N_PLANT * cover[i];
+        const n = N_BARE + N_PLANT * cover[i] + N_TREE * trees[i];
         const th = (n * n * U2 * shieldsK) / cbrt(d);   // τ/((ρs−ρ)gD), τ = ρ g n² U² / h^⅓
         theta[i] = th;
         // The top layer's sand and gravel move, each by its own share of
@@ -445,7 +451,7 @@ export class Flow {
         const f = fm[i], coarse = 1 - f;
         if (coarse <= 0) continue;
         const Fg = fg[i] / coarse, Fs = 1 - Fg;
-        const hold = (1 + 2 * cover[i]) * (f > 0.3 ? 1 + 3 * (f - 0.3) / 0.7 : 1);
+        const hold = (1 + 2 * cover[i] + 3 * trees[i]) * (f > 0.3 ? 1 + 3 * (f - 0.3) / 0.7 : 1);
         const tau = th * tauK;
         const kf = (Fs < 0 ? 0 : Fs > 1 ? 1 : Fs) * WC_N, k0 = kf | 0, k1 = k0 < WC_N ? k0 + 1 : k0, w = kf - k0;
         const rs = (WC_SAND[k0] + (WC_SAND[k1] - WC_SAND[k0]) * w) * hold;
@@ -611,7 +617,8 @@ export class Flow {
         for (let q = 0; q < 4; q++) {
           const j = q === 0 ? (l ? i - 1 : -1) : q === 1 ? (r ? i + 1 : -1) : q === 2 ? (u ? i - W : -1) : (d ? i + W : -1);
           if (j < 0) continue;
-          const want = (each * (1 - TUNE.rootHold * cover[j])) / (1 + 2 * fm[j]);
+          const roots = cover[j] + 2 * trees[j];
+          const want = (each * (1 - TUNE.rootHold * (roots < 1 ? roots : 1))) / (1 + 2 * fm[j]);
           const room = z[j] + dz[j] - rock[j];
           const t = want < room ? want : room > 0 ? room : 0;
           dz[j] -= t;
@@ -640,12 +647,13 @@ export class Flow {
           for (let q = 0; q < 4; q++) {
             const j = q === 0 ? i - 1 : q === 1 ? i + 1 : q === 2 ? i - W : i + W;
             if (h[j] > WET) continue;
-            const ex = th - SHIELDS_C * TUNE.bankCrit * (1 + 3 * cover[j]) * (1 + 4 * fm[j]);
+            const ex = th - SHIELDS_C * TUNE.bankCrit * (1 + 3 * cover[j] + 6 * trees[j]) * (1 + 4 * fm[j]);
             if (ex <= 0) continue;
             const top = z[j] + dz[j];
             const room = top - (zi > rock[j] ? zi : rock[j]);
             if (room <= 0) continue;
-            let m = bankK * ex * (1 - TUNE.rootHold * cover[j]);
+            const roots = cover[j] + 2 * trees[j];
+            let m = bankK * ex * (1 - TUNE.rootHold * (roots < 1 ? roots : 1));
             if (m > room) m = room;
             if (m > dzMax) m = dzMax;
             dz[j] -= m;
@@ -713,7 +721,7 @@ export class Flow {
   // step and the cell, so a restored world has the same landslides.)
   landslides(years) {
     if (years <= 0) return;
-    const { W, H, z, h, rock, cover, fm, fg, placed, dx } = this;
+    const { W, H, z, h, rock, cover, trees, fm, fg, placed, dx } = this;
     const HB = H - SPONGE;
     for (let y = 2; y < HB - 2; y++) {
       for (let x = 2; x < W - 2; x++) {
@@ -730,7 +738,7 @@ export class Flow {
         if (j < 0) continue;
         const height = z[i] - z[j];
         if (height < 2) continue;
-        const stand = SLOPE_DRY * (1 + cover[i]) * (1 + 0.5 * fm[i]);
+        const stand = SLOPE_DRY * (1 + cover[i] + trees[i]) * (1 + 0.5 * fm[i]);
         let r = (height / (jd * dx) / stand - 0.5) / 0.5;
         if (r <= 0) continue;
         if (r > 1) r = 1;
@@ -750,6 +758,7 @@ export class Flow {
             this.mix(k, -a, -a * fm[k], -a * fg[k]);
             z[k] -= a;
             cover[k] = 0;
+            trees[k] = 0;
           }
         }
         if (vol <= 0) continue;
@@ -813,7 +822,7 @@ export class Flow {
   // Mud settling out of the water and lifted from the bed, over dt seconds
   // of the water's time (mdt of the bed's).
   mudExchange(dt, mdt, HB, dzMax) {
-    const { W, z, h, M, fm, rock, cover, theta, dz, dzM, lo, hi, dx } = this;
+    const { W, z, h, M, fm, rock, cover, trees, theta, dz, dzM, lo, hi, dx } = this;
     const morph = mdt / dt;
     const tauK = (RHO_S - RHO) * G * D50;     // Pa per unit of Shields stress
     const bulk = 1 / (1 - POROSITY);           // metres of ground per metre of mud laid down
@@ -826,7 +835,7 @@ export class Flow {
         // It settles through the water, faster among plants; what's left
         // when the water's gone stays where it is.
         let dep = 0, ero = 0;
-        if (m > 0) dep = d > WET ? ws * (m / d) * dt * (1 + MUD_PLANT * cover[i]) : m;
+        if (m > 0) dep = d > WET ? ws * (m / d) * dt * (1 + MUD_PLANT * cover[i] + 3 * trees[i]) : m;
         if (dep > m) dep = m;
         // It's lifted where the flow drags at a muddy bed (Partheniades).
         if (f > 0 && d > WET) { const ex = (theta[i] * tauK) / MUD_TE - 1; if (ex > 0) ero = mudE * f * ex * dt; }
@@ -901,7 +910,7 @@ export class Flow {
     const wet = h[hi] > WET || h[lo] > WET;
     // Mud lets a bank stand steeper; roots too.
     const fh = this.fm[hi], gh = this.fg[hi];
-    const crit = (wet ? SLOPE_WET * (1 + fh) : SLOPE_DRY * (1 + 0.5 * fh)) * (1 + cover[hi]) * dx;
+    const crit = (wet ? SLOPE_WET * (1 + fh) : SLOPE_DRY * (1 + 0.5 * fh)) * (1 + this.cover[hi] + this.trees[hi]) * dx;
     if (a <= crit) return;
     let m = ((a - crit) / 2) * SLUMP;
     const room = z[hi] - rock[hi];
@@ -916,28 +925,42 @@ export class Flow {
   // Plants green dry ground over a year or two, drown under standing water,
   // and are torn out where the flow drags hard at them.
   plants(years, mdt) {
-    const { W, H, h, cover, theta, dz, lo, hi } = this;
-    const drown = Math.min(1, years / PLANT_DROWN_YR);
+    const { W, H, h, cover, trees, theta, dz, lo, hi } = this;
+    const drown = Math.min(1, years / PLANT_DROWN_YR), drownT = Math.min(1, years / TREE_DROWN_YR);
     const rip = Math.min(1, mdt / 3600);
     for (let y = 0; y < H; y++) {
       for (let x = lo[y]; x <= hi[y]; x++) {
         const i = y * W + x;
         if (h[i] <= WET) continue;
-        let c = cover[i];
-        if (c <= 0) continue;
-        if (h[i] > 0.3) c -= c * drown;
-        if (theta[i] > PLANT_UPROOT * SHIELDS_C * (1 + 2 * c)) c -= c * rip;
-        if (dz[i] < -0.002) c *= 0.5;
-        cover[i] = c < 1e-3 ? 0 : c;
+        let c = cover[i], t = trees[i];
+        if (c > 0) {
+          if (h[i] > 0.3) c -= c * drown;
+          if (theta[i] > PLANT_UPROOT * SHIELDS_C * (1 + 2 * c)) c -= c * rip;
+          if (dz[i] < -0.002) c *= 0.5;
+          cover[i] = c < 1e-3 ? 0 : c;
+        }
+        if (t > 0) {
+          if (h[i] > 0.3) t -= t * drownT;
+          if (theta[i] > TREE_UPROOT * SHIELDS_C * (1 + 2 * c + 3 * t)) t -= t * rip;
+          if (dz[i] < -0.01) t *= 0.5;
+          trees[i] = t < 1e-3 ? 0 : t;
+        }
       }
     }
     // Growth, over the whole valley now and then.
     this.plantYears += years;
     if (this.steps % PLANT_EVERY !== 0) return;
-    const grow = Math.min(1, (this.growth * this.plantYears) / TUNE.growYears);
+    const yrs = this.plantYears;
     this.plantYears = 0;
+    const grow = Math.min(1, (this.growth * yrs) / TUNE.growYears);
     if (grow <= 0) return;
     const N = this.N;
-    for (let i = 0; i < N; i++) if (h[i] <= WET && cover[i] < 1) cover[i] += (1 - cover[i]) * grow;
+    // Trees come up slowly on ground that's already grassed (not in fields).
+    const growT = Math.min(1, (this.growth * yrs) / TUNE.treeYears);
+    for (let i = 0; i < N; i++) {
+      if (h[i] > WET) continue;
+      if (cover[i] < 1) cover[i] += (1 - cover[i]) * grow;
+      if (cover[i] > 0.5 && trees[i] < 1 && !this.noTrees[i]) trees[i] += (1 - trees[i]) * growT * (cover[i] - 0.5) * 2;
+    }
   }
 }

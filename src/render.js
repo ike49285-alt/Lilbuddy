@@ -17,6 +17,7 @@ const ROCK = [126, 122, 116];
 const SHALLOW = [96, 162, 176], DEEP = [26, 78, 124], SILTY = [150, 122, 82];
 const MUDDY = [128, 104, 78];          // ground with mud on top
 const GRAVELLY = [150, 148, 142];      // and with gravel
+const TREE = [46, 74, 40];             // a tree canopy
 
 // Colour ramps for the map's layers, low to high: [position 0–1, r, g, b].
 export const LAYERS = {
@@ -162,7 +163,7 @@ export class MapRenderer {
   // Paints the cell image for a frame: one pixel per cell. With flat set
   // (for the 3D view, which lights the ground itself) there's no hillshade.
   paint(f) {
-    const { W, H, z, h, cover, rock, mud, soil, gravel, seaLevel } = f;
+    const { W, H, z, h, cover, trees, rock, mud, soil, gravel, seaLevel } = f;
     if (!this.image || this.image.width !== W || this.image.height !== H) {
       this.terrain.width = W;
       this.terrain.height = H;
@@ -210,6 +211,13 @@ export class MapRenderer {
           const gr = grass[0] + (SHRUB[0] - grass[0]) * t * 0.6, gg = grass[1] + (SHRUB[1] - grass[1]) * t * 0.6, gb = grass[2] + (SHRUB[2] - grass[2]) * t * 0.6;
           const a = Math.min(1, c * 1.15);
           r += (gr - r) * a; g += (gg - g) * a; b += (gb - b) * a;
+        }
+        // Trees: a darker canopy, dappled cell by cell.
+        const tc = trees ? trees[i] / 255 : 0;
+        if (tc > 0.03) {
+          const dapple = 0.82 + 0.3 * (((i * 2654435761) >>> 24) / 255);
+          const a = Math.min(0.9, tc * 1.1);
+          r += (TREE[0] * dapple - r) * a; g += (TREE[1] * dapple - g) * a; b += (TREE[2] * dapple - b) * a;
         }
       }
       r *= shade; g *= shade; b *= shade;

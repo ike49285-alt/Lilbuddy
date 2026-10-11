@@ -31,6 +31,7 @@ export function makeTable(rng, tilt = TILT) {
   const rock = new Float32Array(N);
   const cover = new Float32Array(N);
   const mud = new Float32Array(N);
+  const trees = new Float32Array(N);
   const gravel = new Float32Array(N);
   const rough = makeNoise2D(rng.fork('rough'));
   const lumps = makeNoise2D(rng.fork('lumps'));
@@ -63,11 +64,13 @@ export function makeTable(rng, tilt = TILT) {
       // Grass and shrubs on the terraces; the plain and the beach are bare
       // sand, and grass takes the dry ground as the years go by.
       cover[i] = y > shoreY - 2 ? 0 : out > 0 ? 0.85 * headland : 0;
+      // Woods on the terraces, thinning toward the plain.
+      trees[i] = y > shoreY - 2 ? 0 : out > 0 ? 0.4 * headland * Math.min(1, out / 4) : 0;
       // Mud: in the terraces' old floodplain, a little in the plain's sand.
       const terrace = Math.max(0, Math.min(1, out / 3)) * headland;
       mud[i] = y > shoreY ? SHELF_MUD : PLAIN_MUD + (TERRACE_MUD - PLAIN_MUD) * terrace;
       gravel[i] = y > shoreY ? SHELF_GRAVEL : PLAIN_GRAVEL + (TERRACE_GRAVEL - PLAIN_GRAVEL) * terrace;
     }
   }
-  return { W, H, N, z, rock, cover, mud, gravel, shoreY };
+  return { W, H, N, z, rock, cover, trees, mud, gravel, shoreY };
 }

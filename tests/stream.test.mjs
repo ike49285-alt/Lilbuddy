@@ -257,6 +257,32 @@ const sum = (a) => { let s = 0; for (const v of a) s += v; return s; };
   check(f.slides > n0 && fr.events.some((e) => e.kind === 'slide') && fr.stats.slides === f.slides, 'a tall, steep pile beside the river gives way in a landslide', `after ${k} steps`);
 }
 
+// Trees: they come up over years on dry, grassed ground, not on wet; and
+// wooded banks wear back more slowly than grassed ones.
+{
+  const s = new Simulation('trees-1');
+  const f = s.flow, W = s.W;
+  const dry = 60 * W + 30, wet = s.H * W - W * 20 + 64;
+  f.cover[dry] = 1; f.trees[dry] = 0; f.cover[wet] = 1; f.trees[wet] = 0;
+  f.growth = 1;
+  for (let k = 1; k <= 60; k++) { f.steps = 16 * k; f.plants(0.1, 0); }   // six years
+  check(f.trees[dry] > 0.5 && f.trees[wet] === 0, 'trees grow up over years on dry grassed ground, not in the water', `${(f.trees[dry] * 100).toFixed(0)}% after six years`);
+  // The same river, its dry ground all grass or all woods.
+  const base = new Simulation('banks-1');
+  while (base.years < 0.3) base.step(20000);
+  const worn = (wooded) => {
+    const t = Simulation.fromState(structuredClone(base.saveState()));
+    const g = t.flow;
+    const was = Float32Array.from(g.z), dryAt = g.h.map((d) => (d <= 0.02 ? 1 : 0));
+    for (let i = 0; i < g.N; i++) if (dryAt[i]) { g.cover[i] = 1; g.trees[i] = wooded ? 1 : 0; }
+    while (t.years < 0.45) t.step(20000);
+    let v = 0; for (let i = 0; i < g.N; i++) if (dryAt[i] && g.z[i] < was[i]) v += was[i] - g.z[i];
+    return v * 16;
+  };
+  const grass = worn(false), woods = worn(true);
+  check(woods < 0.8 * grass, 'wooded banks wear back more slowly than grassed ones', `${grass.toFixed(0)} m³ off grassed banks, ${woods.toFixed(0)} m³ off wooded`);
+}
+
 // The pump moves along the top edge, and the river comes in where it is.
 {
   const s = new Simulation('pump-1');
