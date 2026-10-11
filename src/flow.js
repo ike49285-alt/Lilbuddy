@@ -76,6 +76,7 @@ export const TUNE = {
   spiral: 11,                     // how far a bend's spiral flow turns the sand inward (Engelund)
   bedSlope: 1.2,                  // how much the sand rolls downhill as it goes
   mudWs: 7e-5,                    // m/s mud settles through still water (fine silt and clay)
+  slideRate: 50,                  // landslides a year from a wall at the steepest it can stand, its foot in water
   rockK: 2e-9,                    // m/s the bedrock wears per W/m² of stream power past its threshold
   rockP: 10,                      // W/m²: the stream power that starts wearing rock
   frMax: 2,                       // the fastest current a cell reports, as a multiple of its wave speed
@@ -115,6 +116,14 @@ function wcW(phi) {
   if (phi < 1.35) { const p2 = phi * phi; return 0.002 * p2 * p2 * p2 * phi * r; }
   const t = 1 - 0.894 / r;
   return 14 * t * t * t * t * Math.sqrt(t);
+}
+
+// A number in [0, 1) from a step and a cell, the same every time.
+function dice(step, i) {
+  let a = (step * 0x9e3779b1) ^ (i * 0x85ebca77);
+  a = Math.imul(a ^ (a >>> 16), 0x7feb352d);
+  a = Math.imul(a ^ (a >>> 15), 0x846ca68b);
+  return ((a ^ (a >>> 16)) >>> 0) / 4294967296;
 }
 
 // Cube roots by table: Math.cbrt is slow and is needed for every wet face.
@@ -162,6 +171,9 @@ export class Flow {
     this.sg = Float64Array.from(this.fg);     // and of the ground below it
     this.dzG = new Float32Array(N);           // the gravel in this step's bed change
     this.gs = new Float32Array(N);            // gravel's share of what each cell's flow carries along the bed
+    this.slideYears = 0;                      // bed-years since walls were last checked for landslides
+    this.slides = 0;                          // landslides in all
+    this.slidAt = [];                         // where they've happened since the sim last looked
     this.rockWorn = 0;                        // bedrock worn into gravel, m³ (as solid) in all
     this.gravelIn = 0;                        // gravel pumped in and out to sea, m³ in all (bed time)
     this.gravelOut = 0;
@@ -682,9 +694,74 @@ export class Flow {
       }
     }
     this.wearRock(mdt, HB, dzMax);
-    if (this.slumpAll || this.steps % SLUMP_ALL_EVERY === 0) { this.slump(true); this.slumpAll = false; } else this.slump(false);
+    this.slideYears += years;
+    if (this.slumpAll || this.steps % SLUMP_ALL_EVERY === 0) {
+      this.landslides(this.slideYears);
+      this.slideYears = 0;
+      this.slump(true);
+      this.slumpAll = false;
+    } else this.slump(false);
     this.plants(years, mdt);
     return mdt;
+  }
+
+  // Walls that fail: a dry wall standing two metres or more over the water
+  // may give way all at once, the likelier the taller it is and the nearer
+  // its face is to as steep as it can stand. A patch of it drops to the
+  // slope wet sand stands at, and what falls lands in the river at its
+  // foot, plants and all. Rock doesn't fall. (The dice are a hash of the
+  // step and the cell, so a restored world has the same landslides.)
+  landslides(years) {
+    if (years <= 0) return;
+    const { W, H, z, h, rock, cover, fm, fg, placed, dx } = this;
+    const HB = H - SPONGE;
+    for (let y = 2; y < HB - 2; y++) {
+      for (let x = 2; x < W - 2; x++) {
+        const i = y * W + x;
+        if (h[i] > WET || placed[i]) continue;
+        // The wall's foot: the lowest wet cell within two.
+        let j = -1, jd = 0;
+        for (let yy = y - 2; yy <= y + 2; yy++) {
+          for (let xx = x - 2; xx <= x + 2; xx++) {
+            const n = yy * W + xx;
+            if (h[n] > WET && (j < 0 || z[n] < z[j])) { j = n; jd = Math.hypot(xx - x, yy - y); }
+          }
+        }
+        if (j < 0) continue;
+        const height = z[i] - z[j];
+        if (height < 2) continue;
+        const stand = SLOPE_DRY * (1 + cover[i]) * (1 + 0.5 * fm[i]);
+        let r = (height / (jd * dx) / stand - 0.5) / 0.5;
+        if (r <= 0) continue;
+        if (r > 1) r = 1;
+        const p = 1 - Math.exp(-TUNE.slideRate * years * r * r * Math.min(1, height / 5));
+        if (dice(this.steps, i) >= p) continue;
+        // The patch: dry ground within two cells, above the foot.
+        const jx = j % W, jy = (j / W) | 0;
+        let vol = 0, mud = 0, grav = 0;
+        for (let yy = y - 2; yy <= y + 2; yy++) {
+          for (let xx = x - 2; xx <= x + 2; xx++) {
+            const k = yy * W + xx;
+            if (h[k] > WET || placed[k]) continue;
+            const target = Math.max(rock[k], z[j] + SLOPE_WET * dx * Math.hypot(xx - jx, yy - jy));
+            const a = z[k] - target;
+            if (a <= 0.05) continue;
+            mud += a * fm[k]; grav += a * fg[k]; vol += a;
+            this.mix(k, -a, -a * fm[k], -a * fg[k]);
+            z[k] -= a;
+            cover[k] = 0;
+          }
+        }
+        if (vol <= 0) continue;
+        // It lands at the foot and spreads to the wet cells beside it.
+        const toes = [j];
+        for (const n of [j - 1, j + 1, j - W, j + W]) if (n !== i && h[n] > WET && toes.length < 3) toes.push(n);
+        const each = vol / toes.length;
+        for (const t of toes) { this.mix(t, each, (each * mud) / vol, (each * grav) / vol); z[t] += each; }
+        this.slides++;
+        this.slidAt.push(i);
+      }
+    }
   }
 
   // Bare bedrock under flowing water wears away by the water's power

@@ -78,6 +78,8 @@ export class Simulation {
   step(morph) {
     this.climate();
     const secs = this.flow.step(morph);
+    const slid = this.flow.slidAt;
+    if (slid.length) { for (const i of slid) this.event('slide', i); slid.length = 0; }
     const yrs = secs / SEC_PER_YR;
     this.years += yrs;
     if (yrs > 0) {
@@ -485,6 +487,7 @@ export class Simulation {
       sand: this.sandRate,
       toSea: this.toSeaRate,
       mudToSea: this.mudSeaRate,
+      slides: f.slides,
       mudLaid: f.mudLaid,
       delta: delta * CELL_M * CELL_M,
       fedIn: f.fedIn,
@@ -666,6 +669,7 @@ export class Simulation {
         placed: f.placed.slice(),
         fm: f.fm.slice(), sm: f.sm.slice(), M: f.M.slice(), fg: f.fg.slice(), sg: f.sg.slice(),
         gravel: { in: f.gravelIn, out: f.gravelOut, worn: f.rockWorn },
+        slides: f.slides, slideYears: f.slideYears,
         mud: { fed: f.mudFed, out: f.mudOut, down: f.mudDown, laid: f.mudLaid, sea: f.mudSea, mark: f.mudMark },
         inletX: f.inletX, dt: f.dt, mNow: f.mNow, fedIn: f.fedIn, toSea: f.toSea, steps: f.steps, plantYears: f.plantYears, waterTime: f.waterTime,
       },
@@ -685,6 +689,7 @@ export class Simulation {
     if (F.fg) { f.fg.set(F.fg); f.sg.set(F.sg); f.gravelIn = F.gravel.in; f.gravelOut = F.gravel.out; f.rockWorn = F.gravel.worn || 0; }
     if (F.mud) { f.mudFed = F.mud.fed; f.mudOut = F.mud.out; f.mudDown = F.mud.down; f.mudLaid = F.mud.laid; f.mudSea = F.mud.sea; f.mudMark = F.mud.mark; }
     if (F.inletX != null) f.inletX = F.inletX;
+    if (F.slides != null) { f.slides = F.slides; f.slideYears = F.slideYears; }
     f.dt = F.dt; f.mNow = F.mNow; f.fedIn = F.fedIn; f.toSea = F.toSea; f.steps = F.steps; f.plantYears = F.plantYears; f.waterTime = F.waterTime;
     sim.years = s.years;
     Object.assign(sim.settings, s.settings);

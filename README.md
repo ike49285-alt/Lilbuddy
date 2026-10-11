@@ -67,7 +67,9 @@ than the plain's sand.
 **Banks** wear back where the flow drags hardest beside them, which is the
 outside of a bend. A channel scouring at the foot of a bank brings some of
 the bank down with it, and any slope steeper than wet or dry sand can stand
-slumps. Bedrock lies 6 m down under the plain to start (the Table tab's Bedrock
+slumps. A tall, steep wall over the water (a gorge's side, a high bank) may
+give way all at once in a landslide, dropping its sand, gravel and plants
+into the river; the River tab counts them. Bedrock lies 6 m down under the plain to start (the Table tab's Bedrock
 slider moves it), close under the terraces. Where the river runs over bare
 rock it wears it slowly, by the power of the water, fastest at a waterfall's
 lip; what it wears away becomes gravel. Rock put down by hand doesn't wear.

@@ -359,6 +359,7 @@ function drawSlow(f) {
   $('s-plants').textContent = `${n0.format(st.plants * 100)}%`;
   $('s-mudsea').textContent = st.mudToSea >= 0.5 ? `${n0.format(st.mudToSea)} m³/day` : 'none yet';
   $('s-mudlaid').textContent = st.mudLaid > 0 ? fmtVolume(st.mudLaid) : 'none yet';
+  $('s-slides').textContent = st.slides ? n0.format(st.slides) : 'none yet';
   $('things-line').hidden = !(f.things && f.things.length);
   if (f.things && f.things.length) $('things-line').textContent = thingsSummary(f.things);
 

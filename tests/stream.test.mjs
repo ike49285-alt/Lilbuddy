@@ -240,6 +240,23 @@ const sum = (a) => { let s = 0; for (const v of a) s += v; return s; };
   check(below === 0, 'and the ground never sinks below the rock');
 }
 
+// Landslides: a tall, steep pile beside the river gives way, and what falls
+// lands in the river; nothing is made or lost (the balances above cover it).
+{
+  const s = new Simulation('slide-1');
+  const f = s.flow, W = s.W;
+  for (let k = 0; k < 2000; k++) s.step(2000);
+  const line = s.measure().line[100];
+  const at = 100 * W + line + 4;
+  for (let k = 0; k < 60; k++) s.sculpt(at, 'small', 1, 'bulldozer');
+  const loose = () => { let t = 0; for (let i = 0; i < f.N; i++) t += f.z[i] - f.rock[i]; return t; };
+  const n0 = f.slides;
+  let k = 0;
+  while (f.slides === n0 && k < 20000) { s.step(2000); k++; }
+  const fr = s.frame(0);
+  check(f.slides > n0 && fr.events.some((e) => e.kind === 'slide') && fr.stats.slides === f.slides, 'a tall, steep pile beside the river gives way in a landslide', `after ${k} steps`);
+}
+
 // The pump moves along the top edge, and the river comes in where it is.
 {
   const s = new Simulation('pump-1');
