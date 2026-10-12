@@ -157,9 +157,10 @@ zoom it.
 - **Bedrock:** how deep the rock lies under the plain, from 1 to 60 m
   (6 m to start). The river can't cut below it; set it deep and the river
   can cut down into its valley and the terraces as far as it likes.
-- **River on the GPU:** works the river out on the phone's graphics chip
-  instead: the water and the bed both, so nothing waits on the CPU between
-  steps (shown only where the browser can). The time bar says GPU when it's
+- **River on the GPU:** works the river out on the phone's graphics chip:
+  the water and the bed both, so nothing waits on the CPU between steps.
+  On by default wherever the browser can (and shown only there); switch it
+  off to run the river on the CPU. The time bar says GPU when it's
   on. A world run either way behaves the same, though not identical to the
   last decimal; landslides and anything you do to the ground still happen
   on the CPU.
@@ -180,7 +181,7 @@ Under it is the cross-section along the line from the Section tool.
 
 ## Tests
 
-`node tests/stream.test.mjs` checks the model. With the repository served (`python3 -m http.server 8114`), `node tests/gpu.test.mjs http://localhost:8114` checks the river on the GPU against the river on the CPU: one move of the bed pass by pass, then hundreds of steps. With the built page served (`node tools/build-artifact.mjs dist/headwaters.html`, then `python3 -m http.server 8112` in `dist`), `node tests/ui.test.mjs` drives the page on a phone-sized screen and `node tests/speed.test.mjs http://localhost:8112/headwaters.html` checks it stays responsive with the CPU slowed four times. The browser tests need Playwright; set `CHROMIUM` to a Chromium binary if it can't find one.
+`node tests/stream.test.mjs` checks the model. With the repository served (`python3 -m http.server 8114`), `node tests/gpu.test.mjs http://localhost:8114` checks the river on the GPU against the river on the CPU: one move of the bed pass by pass, then hundreds of steps. With the built page served (`node tools/build-artifact.mjs dist/headwaters.html`, then `python3 -m http.server 8112` in `dist`), `node tests/ui.test.mjs` drives the page on a phone-sized screen and `node tests/speed.test.mjs http://localhost:8112/headwaters.html` checks it stays responsive with the CPU slowed four times (both with the river on the CPU), and `node tests/gpu-page.test.mjs` runs the page with the river on the GPU: the tools, switching it off and on, and a save and reload. The browser tests need Playwright; set `CHROMIUM` to a Chromium binary if it can't find one.
 
 ## Saving
 

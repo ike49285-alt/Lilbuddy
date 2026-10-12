@@ -49,9 +49,10 @@ function cleanSeed(s) {
   return String(s || '').toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 32);
 }
 
-// The water on the GPU: the page's own choice, remembered on this device.
-let gpuOn = false;
-try { gpuOn = localStorage.getItem('headwaters-gpu') === '1'; } catch { /* storage off */ }
+// The river on the GPU: on wherever the browser can, unless switched off
+// on this device (remembered). The worker says when it can't.
+let gpuOn = true;
+try { gpuOn = localStorage.getItem('headwaters-gpu') !== '0'; } catch { /* storage off */ }
 
 function newWorker() {
   if (worker) worker.terminate();

@@ -6,6 +6,8 @@ const check = (ok, l, e = '') => { console.log(`${ok ? 'PASS' : 'FAIL'}  ${l}${e
 const BASE = process.argv[2] || 'http://localhost:8112';
 const browser = await chromium.launch({ executablePath: process.env.CHROMIUM || undefined, args: ['--enable-unsafe-swiftshader'] });
 const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 2 });
+// The CPU's river: these checks don't run the river on the (here emulated) GPU.
+await ctx.addInitScript(() => { try { localStorage.setItem('headwaters-gpu', '0'); } catch { /* storage off */ } });
 const page = await ctx.newPage();
 const errs = [];
 page.on('pageerror', (e) => errs.push(e.message));

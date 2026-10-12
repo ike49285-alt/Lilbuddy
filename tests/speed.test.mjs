@@ -5,6 +5,8 @@ const fails = [];
 const check = (ok, l, e = '') => { console.log(`${ok ? 'PASS' : 'FAIL'}  ${l}${e ? '  — ' + e : ''}`); if (!ok) fails.push(l); };
 const browser = await chromium.launch({ executablePath: process.env.CHROMIUM || undefined });
 const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 3 });
+// The CPU's river: these checks don't run the river on the (here emulated) GPU.
+await ctx.addInitScript(() => { try { localStorage.setItem('headwaters-gpu', '0'); } catch { /* storage off */ } });
 const page = await ctx.newPage();
 const errors = [];
 page.on('pageerror', (e) => errors.push(e.message));
