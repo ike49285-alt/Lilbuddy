@@ -130,8 +130,13 @@ function dice(step, i) {
   return ((a ^ (a >>> 16)) >>> 0) / 4294967296;
 }
 
-// The water's constants, for the GPU's copy of the water (gpuflow.js).
+// The water's and the bed's constants, for the river on the GPU
+// (gpuflow.js, gpuriver.js).
 export const WATER = { G, FILM, N_BARE, N_PLANT, N_TREE, INFILTRATE, CFL, MAX_DT };
+export const BEDK = {
+  D50, RHO, RHO_S, SG, POROSITY, LA, ROCK_SHIELD, MUD_TE, MUD_PLANT, SLOPE_WET, SLOPE_DRY, SLUMP,
+  PLANT_DROWN_YR, PLANT_UPROOT, TREE_DROWN_YR, TREE_UPROOT, PLANT_EVERY, BED_EVERY, WC_N, WC_MIN, WC_SAND, WC_GRAVEL,
+};
 
 // Cube roots by table: Math.cbrt is slow and is needed for every wet face.
 const CB_STEP = 1024, CB_N = 4 * CB_STEP;
@@ -249,7 +254,8 @@ export class Flow {
   // One hydraulic step, with the bed's time running up to `morph` times
   // faster. Returns the bed-time it stood for, in seconds.
   step(morph) {
-    if (this.gpu) return this.gpuStep(morph);
+    // The river on the GPU (gpuriver.js) instead, if it's there.
+    if (this.gpu) return this.gpu.step(this, morph);
     const dt = this.dt;
     this.water(dt);
     this.steps++;
@@ -261,31 +267,13 @@ export class Flow {
     return this.bed(t, morph);
   }
 
-  // The same step with the water worked out on the GPU (this.gpu, a
-  // GpuWater): its state comes down only when the bed is to move, and the
-  // bed, the plants and the mud it traded go back up after.
-  gpuStep(morph) {
-    const g = this.gpu;
-    if (this.gpuDirty) { g.load(this); this.gpuDirty = false; }
-    g.step(this);
-    this.steps++;
-    if (this.steps % BED_EVERY !== 0) return 0;
-    const got = g.fetch(this);
-    if (got < 0) return 0;
-    const t = got + this.waterTime;
-    this.waterTime = 0;
+  // With the river on the GPU: brings the CPU's copy up to date, for a
+  // save, a tool, or handing the river back to the CPU.
+  gpuSync() {
+    if (!this.gpu) return;
+    this.gpu.pull(this);
     this.ranges();
-    if (!this.sediment) { this.morph = 1; return t; }
-    const mud = this.mudBefore || (this.mudBefore = new Float32Array(this.N));
-    mud.set(this.M);
-    const r = this.bed(t, morph);
-    g.loadBed(this, mud);
-    return r;
   }
-
-  // Hands the water back to the CPU (or brings the GPU's copy up to date
-  // for a save).
-  gpuSync() { if (this.gpu) { this.gpu.fetchAll(this); this.ranges(); } }
 
   // --- water ------------------------------------------------------------------
 

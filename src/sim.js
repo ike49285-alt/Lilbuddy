@@ -66,6 +66,7 @@ export class Simulation {
     this.toSeaRate = 0;          // m³ a day of sand reaching the open sea, smoothed
     this.sandRate = 0;           // m³ a day moving past the middle of the valley, smoothed
     this.lastToSea = 0;
+    this.rateYears = 0;          // years since the rates were last worked out
     this.thalwegZ0 = this.thalweg(this.flow.z0, null);
     this.applySettings();
     this.climate();
@@ -84,13 +85,21 @@ export class Simulation {
     this.years += yrs;
     if (yrs > 0) {
       this.weather.update(this.years, yrs);
-      const k = Math.min(1, (yrs * 365.25) / 0.5);     // half a day's smoothing
-      const toSea = this.flow.toSea - this.lastToSea;
-      this.lastToSea = this.flow.toSea;
-      this.toSeaRate += ((toSea / (yrs * 365.25)) - this.toSeaRate) * k;
-      const mudSea = this.flow.mudSea - this.lastMudSea;
-      this.lastMudSea = this.flow.mudSea;
-      this.mudSeaRate += ((mudSea / (yrs * 365.25)) - this.mudSeaRate) * k;
+      // The rates out to sea, over the time since the counters last moved
+      // on (every bed step on the CPU; as they come back from the GPU).
+      this.rateYears += yrs;
+      if (!this.flow.gpu || this.flow.folded) {
+        this.flow.folded = false;
+        const ry = this.rateYears;
+        this.rateYears = 0;
+        const k = Math.min(1, (ry * 365.25) / 0.5);     // half a day's smoothing
+        const toSea = this.flow.toSea - this.lastToSea;
+        this.lastToSea = this.flow.toSea;
+        this.toSeaRate += ((toSea / (ry * 365.25)) - this.toSeaRate) * k;
+        const mudSea = this.flow.mudSea - this.lastMudSea;
+        this.lastMudSea = this.flow.mudSea;
+        this.mudSeaRate += ((mudSea / (ry * 365.25)) - this.mudSeaRate) * k;
+      }
       if (this.years >= this.history.next) this.sample();
     }
     return yrs;
@@ -180,9 +189,9 @@ export class Simulation {
   }
 
   reshaped() {
-    // With the water on the GPU, bring it down first, and send the new
-    // ground up before the next step.
-    if (this.flow.gpu) { this.flow.gpuSync(); this.flow.gpuDirty = true; }
+    // With the river on the GPU (the host brought it down first), the new
+    // ground goes up before the next step.
+    if (this.flow.gpu) this.flow.gpuDirty = true;
     this.epoch++;
     this.flow.slumpAll = true;
     this.flow.ranges();

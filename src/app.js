@@ -1003,6 +1003,7 @@ window.Headwaters = {
   state: () => (last ? { years: last.years, stats: last.stats, climate: last.climate, paused: last.paused, stepMs: last.stepMs, targetRate: last.targetRate, actualRate: last.actualRate, tickYears: last.tickYears } : null),
   runTo: (years, morph) => new Promise((resolve) => { pendingRunTo = resolve; worker.postMessage({ type: 'runTo', years, morph }); }),
   setRate: (r) => setRate(r),
+  send: (msg) => worker.postMessage(msg),
   fps: () => ({ fps: drawnAt.length / 2, paceMs, frameCost }),
   saveNow: () => new Promise((resolve) => { pendingSave = resolve; requestSave('test'); }),
   view: () => ({ zoom: renderer.zoom, x0: renderer.x0, y0: renderer.y0, inspectAt }),

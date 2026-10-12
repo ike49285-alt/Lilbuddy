@@ -1,0 +1,76 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>GPU bed check</title>
+<script type="module">
+// One move of the bed, from the same world, on the CPU (Flow.bed()) and on
+// the GPU (gpuriver.js): pass by pass, how far apart. Read by
+// tests/gpu.test.mjs.
+import { Simulation } from '../src/sim.js';
+import { GpuRiver } from '../src/gpuriver.js';
+import { SEC_PER_YR } from '../src/flow.js';
+import { read } from '../src/gpu.js';
+const q = new URLSearchParams(location.search);
+const seed = q.get('seed') || 'gpu-2', warm = Number(q.get('warm') || 3000), morph = Number(q.get('morph') || 2000);
+const out = {};
+try {
+  const sim = new Simulation(seed);
+  for (let k = 0; k < warm; k++) sim.step(morph);
+  const f = sim.flow;
+  // Water up to the next bed step, on the CPU.
+  while ((f.steps + 1) % 2 !== 0 || (f.steps + 1) % 64 === 0) { f.water(f.dt); f.steps++; f.waterTime = 0; }
+  f.water(f.dt); f.waterTime += f.dt;
+  f.water(f.dt); f.waterTime += f.dt; f.steps += 2;
+  f.ranges();
+  f.slumpAll = false;
+  const t = f.waterTime;
+  const g = new GpuRiver(f);
+  const before = { z: Float32Array.from(f.z), M: Float32Array.from(f.M), mNow: f.mNow };
+  g.uniforms(f, morph);
+  g.bed(f.steps % 16 === 0);
+  const C = (name) => g.peek(name);
+  // The CPU's move.
+  const tot0 = { toSea: f.toSea, fedIn: f.fedIn, mudLaid: f.mudLaid, mudDown: f.mudDown, gravelIn: f.gravelIn, gravelOut: f.gravelOut, rockWorn: f.rockWorn };
+  const mdt = f.bed(t, morph);
+  const cmp = (label, gpu, k, cpu, stride = 4, only = null) => {
+    let worst = 0, scale = 0, at = -1, n = 0, sumD = 0;
+    for (let i = 0; i < cpu.length; i++) {
+      if (only && !only(i)) continue;
+      const a = cpu[i], b = gpu[i * stride + k];
+      const d = Math.abs(a - b);
+      scale = Math.max(scale, Math.abs(a));
+      sumD += d; n++;
+      if (d > worst) { worst = d; at = i; }
+    }
+    out[label] = { worst, scale, rel: scale > 0 ? worst / scale : worst, at, mean: n ? sumD / n : 0, cpu: at >= 0 ? cpu[at] : 0, gpu: at >= 0 ? gpu[at * stride + k] : 0 };
+  };
+  const T = C('T'), A = C('A'), B = C('B'), Cc = C('C'), S = C('S'), DZ2 = C('DZ2');
+  cmp('theta', T, 2, f.theta);
+  cmp('sx', T, 0, f.sx);
+  cmp('sy', T, 1, f.sy);
+  cmp('gs', T, 3, f.gs);
+  cmp('dz (after banks)', DZ2, 0, f.dz);
+  cmp('z', A, 0, f.z);
+  const dzCpu = f.z.map((v, i) => v - before.z[i]), dzGpu = A.map((v, k) => (k % 4 === 0 ? v - before.z[k / 4] : v));
+  cmp('z change', dzGpu, 0, dzCpu);
+  cmp('fm', B, 0, f.fm);
+  cmp('fg', B, 2, f.fg);
+  cmp('M', S, 1, f.M);
+  cmp('cover', Cc, 0, f.cover);
+  cmp('trees', Cc, 1, f.trees);
+  const BED = C('BED');
+  const K = g.K[g.b].map((t) => read(g.gl, t, new Float32Array(4)));
+  out.mdt = [mdt, K[0][0]];
+  out.mNow = [f.mNow, BED[0]];
+  out.counters = {
+    toSea: [f.toSea - tot0.toSea, K[0][1]], fedIn: [f.fedIn - tot0.fedIn, K[0][2]], mudLaid: [f.mudLaid - tot0.mudLaid, K[0][3]],
+    mudDown: [f.mudDown - tot0.mudDown, K[1][1]], gravelIn: [f.gravelIn - tot0.gravelIn, K[1][2]], gravelOut: [f.gravelOut - tot0.gravelOut, K[1][3]],
+    rockWorn: [f.rockWorn - tot0.rockWorn, K[2][0]], water: [t, K[2][1]],
+  };
+  let vc = 0, vg = 0;
+  for (let i = 0; i < f.N; i++) { vc += f.z[i] - before.z[i]; vg += A[i * 4] - before.z[i]; }
+  out.volume = [vc * 16, vg * 16];
+  out.years = mdt / SEC_PER_YR;
+  g.dispose();
+} catch (e) { out.error = String(e && e.stack || e); }
+window.result = out;
+</script>

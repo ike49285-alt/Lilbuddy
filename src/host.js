@@ -13,7 +13,7 @@
 // paused, frames go out only when something has changed.
 
 import { Simulation, transferList, stateTransferList, SEC_PER_YR } from './sim.js';
-import { GpuWater } from './gpuflow.js';
+import { GpuRiver } from './gpuriver.js';
 import { gpuAvailable } from './gpu.js';
 
 const HOST_DAY = 1 / 365.25;
@@ -54,7 +54,8 @@ export function createHost(post) {
     // what's built stays put until the finger lifts.
     if (held) return 1;
     if (rate === Infinity) return MAX_MORPH;
-    const steps = (1000 / Math.max(0.05, stepMs)) * (BUDGET_MS / LOOP_MS);
+    const g = sim.flow.gpu;
+    const steps = g ? Math.max(100, g.stepsPerSec) : (1000 / Math.max(0.05, stepMs)) * (BUDGET_MS / LOOP_MS);
     const water = steps * sim.flow.dt;                 // hydraulic seconds per real second
     return Math.max(1, Math.min(MAX_MORPH, (rate * SEC_PER_YR) / Math.max(1e-3, water)));
   }
@@ -97,6 +98,8 @@ export function createHost(post) {
     while (done < years && (n === 0 || performance.now() - start < budget)) {
       done += sim.step(morph);
       n++;
+      // On the GPU: stop once far enough ahead of it.
+      if (sim.flow.gpu && sim.flow.gpuStalled) break;
     }
     if (n) stepMs = stepMs * 0.8 + ((performance.now() - start) / n) * 0.2;
     return done;
@@ -108,6 +111,8 @@ export function createHost(post) {
     const now = performance.now();
     const dt = Math.min(250, now - last);
     last = now;
+    const g = sim.flow.gpu;
+    if (g) g.tick(now);
     if (!paused) {
       if (rate === Infinity) {
         runFor(Infinity);
@@ -117,11 +122,15 @@ export function createHost(post) {
         debt -= runFor(debt);
       }
     }
+    // The river as the GPU last had it, when it comes back.
+    if (g && g.poll(sim.flow, performance.now())) dirty = true;
     recent.push([now, sim.years]);
     while (recent.length > 2 && now - recent[0][0] > 1000) recent.shift();
     maybeSend(now);
     let wait = LOOP_MS;
     if (!paused && inFlight < MAX_IN_FLIGHT) wait = Math.max(2, Math.min(LOOP_MS, lastFrame + paceMs - performance.now()));
+    // Waiting on the GPU: look again soon.
+    if (!paused && g && sim.flow.gpuStalled) wait = Math.min(wait, 3);
     timer = setTimeout(loop, wait);
   }
 
@@ -136,17 +145,28 @@ export function createHost(post) {
     if (!sim) return;
     const f = sim.flow;
     if (gpuWanted && !f.gpu && gpuCan) {
-      try { f.gpu = new GpuWater(f); f.gpuDirty = false; } catch (e) { f.gpu = null; gpuCan = false; post({ type: 'gpu', available: false, reason: String(e && e.message || e) }); }
+      try { f.gpu = new GpuRiver(f); f.gpuDirty = false; } catch (e) { f.gpu = null; gpuCan = false; post({ type: 'gpu', available: false, reason: String(e && e.message || e) }); }
     } else if (!gpuWanted && f.gpu) {
       f.gpuSync();
       f.gpu.dispose();
       f.gpu = null;
+      f.gpuStalled = false;
     }
   }
 
   function changed() {
     dirty = true;
     urgent = true;
+  }
+
+  // Something done to the ground: with the river on the GPU, it comes back
+  // first, and goes back up (changed) before the next step.
+  function shape(fn) {
+    const f = sim.flow;
+    if (f.gpu) f.gpuSync();
+    fn();
+    if (f.gpu) f.gpuDirty = true;
+    changed();
   }
 
   return function onMessage(msg) {
@@ -196,20 +216,20 @@ export function createHost(post) {
         post({ type: 'state', state, reason: msg.reason }, stateTransferList(state));
         break;
       }
-      case 'sculpt': sim.sculpt(msg.i, msg.size, msg.dir, msg.strength); changed(); break;
+      case 'sculpt': shape(() => sim.sculpt(msg.i, msg.size, msg.dir, msg.strength)); break;
       case 'hold':
         held = !!msg.on;
         // Afterwards the bed's speed-up builds back up from real time.
-        if (!held && sim) sim.flow.mNow = 1;
+        if (!held && sim) { if (sim.flow.gpu) sim.flow.gpu.setMNow(sim.flow, 1); else sim.flow.mNow = 1; }
         changed();
         break;
-      case 'dig': sim.dig(msg.points || []); changed(); break;
-      case 'block': sim.block(msg.i); changed(); break;
-      case 'place': sim.place(msg.kind, msg.i, msg.points); changed(); break;
+      case 'dig': shape(() => sim.dig(msg.points || [])); break;
+      case 'block': shape(() => sim.block(msg.i)); break;
+      case 'place': shape(() => sim.place(msg.kind, msg.i, msg.points)); break;
       case 'storm': sim.storm(msg.i); changed(); break;
       case 'pump': sim.movePump(msg.x); changed(); break;
       case 'section': sim.setSection(msg.points); changed(); break;
-      case 'setting': sim.set(msg.key, msg.value); changed(); break;
+      case 'setting': shape(() => sim.set(msg.key, msg.value)); break;
       case 'mode':
         sim.layer = ['depth', 'speed', 'drag', 'mud', 'bed', 'change', 'cutfill'].includes(msg.mode) ? msg.mode : null;
         changed();
@@ -232,7 +252,10 @@ export function createHost(post) {
       // Test hook: advance synchronously to a year, the bed up to `morph` times the water.
       case 'runTo': {
         const morph = msg.morph || 1000;
+        const g = sim.flow.gpu;
+        if (g) g.blocking = true;
         while (sim.years < msg.years) sim.step(morph);
+        if (g) { g.blocking = false; sim.flow.gpuSync(); }
         recent.length = 0;
         sendFrame();
         post({ type: 'ranTo', years: sim.years });

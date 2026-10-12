@@ -1,11 +1,11 @@
 <!doctype html>
 <meta charset="utf-8">
-<title>GPU water check</title>
+<title>GPU river check</title>
 <script type="module">
-// The same world run with the water on the CPU and on the GPU: how far
+// The same world run with the river on the CPU and on the GPU: how far
 // apart they end up. Read by tests/gpu.test.mjs.
 import { Simulation } from '../src/sim.js';
-import { GpuWater } from '../src/gpuflow.js';
+import { GpuRiver } from '../src/gpuriver.js';
 import { gpuAvailable } from '../src/gpu.js';
 import { TUNE } from '../src/flow.js';
 const q = new URLSearchParams(location.search);
@@ -14,20 +14,23 @@ const out = { available: gpuAvailable() };
 const years = Number(q.get('years') || 0);
 if (years > 0) {
   // A long run each way from a bare plain: does the river come out the same?
-  const run = (useGpu, wait = false, nudge = 0) => {
+  const run = (useGpu, nudge = 0) => {
     const s = new Simulation(seed);
-    if (useGpu) { s.flow.gpu = new GpuWater(s.flow); s.flow.gpu.waitEachTime = wait; }
+    if (useGpu) { s.flow.gpu = new GpuRiver(s.flow); s.flow.gpu.blocking = true; s.flow.gpu.debug = !!q.get('debug'); }
     const fr = TUNE.frMax;
     TUNE.frMax = fr * (1 + nudge);
     const t0 = performance.now();
     while (s.years < years) s.step(20000);
+    s.flow.gpuSync();
     const m = s.measure(), st = s.stats(m);
     TUNE.frMax = fr;
-    return { width: m.width, sinuosity: m.sinuosity, delta: st.delta, mudLaid: st.mudLaid, sec: (performance.now() - t0) / 1000 };
+    const f = s.flow;
+    if (f.gpu) f.gpu.dispose();
+    return { width: m.width, sinuosity: m.sinuosity, delta: st.delta, mudLaid: st.mudLaid, fedIn: f.fedIn, toSea: f.toSea, slides: f.slides, trees: st.trees, plants: st.plants, rockWorn: f.rockWorn, years: s.years, sec: (performance.now() - t0) / 1000 };
   };
   try {
     out.cpu = run(false);
-    if (q.get('more')) { out.cpuNudged = run(false, false, 1e-4); out.gpuWaiting = run(true, true); }
+    if (q.get('more')) out.cpuNudged = run(false, 1e-4);
     out.gpu = run(true);
   } catch (e) { out.error = String(e && e.stack || e); }
   window.result = out;
@@ -37,7 +40,8 @@ if (years > 0) {
   const state = base.saveState();
   const cpu = Simulation.fromState(structuredClone(state));
   const gpu = Simulation.fromState(structuredClone(state));
-  gpu.flow.gpu = new GpuWater(gpu.flow);
+  gpu.flow.gpu = new GpuRiver(gpu.flow);
+  gpu.flow.gpu.blocking = true;
   let t0 = performance.now();
   for (let k = 0; k < n; k++) cpu.step(morph);
   out.cpuMs = (performance.now() - t0) / n;
@@ -46,13 +50,17 @@ if (years > 0) {
   gpu.flow.gpuSync();
   out.gpuMs = (performance.now() - t0) / n;
   const a = cpu.flow, b = gpu.flow;
-  let wet = 0, close = 0, worst = 0, va = 0, vb = 0, ma = 0, mb = 0, za = 0;
+  let wet = 0, close = 0, worst = 0, va = 0, vb = 0, ma = 0, mb = 0, za = 0, ga = 0, gb = 0, sa = 0, sb = 0;
   for (let i = 0; i < a.N; i++) {
     va += a.h[i]; vb += b.h[i]; ma += a.M[i]; mb += b.M[i];
+    ga += a.z[i]; gb += b.z[i];
+    sa += a.fm[i] * a.z[i]; sb += b.fm[i] * b.z[i];
     za = Math.max(za, Math.abs(a.z[i] - b.z[i]));
     if (a.h[i] > 0.02 || b.h[i] > 0.02) { wet++; const d = Math.abs(a.h[i] - b.h[i]); if (d < 0.01) close++; worst = Math.max(worst, d); }
   }
-  Object.assign(out, { wet, close: close / wet, worst, water: [va * 16, vb * 16], mud: [ma * 16, mb * 16], bedDiff: za, years: [cpu.years, gpu.years], dt: [a.dt, b.dt] });
+  Object.assign(out, { wet, close: close / wet, worst, water: [va * 16, vb * 16], mud: [ma * 16, mb * 16], bedDiff: za, years: [cpu.years, gpu.years], dt: [a.dt, b.dt],
+    ground: [ga * 16, gb * 16], fedIn: [a.fedIn, b.fedIn], toSea: [a.toSea, b.toSea], mudLaid: [a.mudLaid, b.mudLaid], mNow: [a.mNow, b.mNow] });
+  gpu.flow.gpu.dispose();
 } catch (e) { out.error = String(e && e.stack || e); }
 if (!(years > 0)) window.result = out;
 </script>
