@@ -100,6 +100,33 @@ check(house && Math.abs(house.x - 31) < 2 && Math.abs(house.y - 151) < 2, 'Place
 check(bridge && bridge.piers.length >= 10, 'and draws a bridge with piers across', bridge ? `${bridge.piers.length} piers, ${bridge.state}` : 'none');
 const line = await page.evaluate(() => document.getElementById('things-line').textContent);
 check(/Houses: 1/.test(line) && /Bridges: 1/.test(line), 'and the River tab says how they fare', line);
+// A dam by drawing a line across the valley, with its height picked.
+await page.tap('#place-row [data-place="dam"]');
+check(await page.evaluate(() => !document.getElementById('dam-row').hidden), 'Dam shows its heights');
+await page.tap('#dam-row [data-dam="low"]');
+const da = at(2 / 128, 100 / 256), db = at(126 / 128, 100 / 256);
+await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: da.x, y: da.y }] });
+for (let k = 1; k <= 10; k++) await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: da.x + (db.x - da.x) * k / 10, y: da.y }] });
+await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+await page.waitForTimeout(1000);
+const dam = (await page.evaluate(() => window.Headwaters.frame().things)).find((t) => t.kind === 'dam');
+check(dam && dam.height === 2 && /Dams: 1/.test(await page.evaluate(() => document.getElementById('things-line').textContent)), 'and draws a dam across, which the River tab reports', dam ? `${dam.height} m, ${dam.state}` : 'none');
+// A gauge by tap, charted in the Profile tab.
+await page.tap('#place-row [data-place="gauge"]');
+const gc = at(64.5 / 128, 40.5 / 256);
+await page.touchscreen.tap(gc.x, gc.y);
+await page.waitForTimeout(800);
+check((await page.evaluate(() => window.Headwaters.frame().things)).some((t) => t.kind === 'gauge' && t.n === 1), 'Gauge puts a gauge where tapped');
+await page.evaluate(() => window.Headwaters.tab('profile'));
+await page.waitForTimeout(1200);
+const gaugeChart = await page.evaluate(() => { const c = document.querySelector('#gauges canvas.level'); return c && c.width > 0 && document.getElementById('gauges-hint').hidden; });
+check(gaugeChart, 'and the Profile tab charts it');
+await page.evaluate(() => window.Headwaters.tab('river'));
+// Remove the block of rock.
+await page.tap('#place-row [data-place="remove"]');
+await page.touchscreen.tap(c.x, c.y);
+await page.waitForTimeout(800);
+check(await page.evaluate(() => { const f = window.Headwaters.frame(); return f.rock[60 * f.W + 64] === 0; }), 'Remove takes the block of rock away');
 await page.tap('.tool-rail [data-kind="storm"]');
 await page.touchscreen.tap(c.x, c.y);
 await page.waitForTimeout(800);

@@ -50,6 +50,7 @@ const N_TREE = 0.08;              // added by full tree cover
 const CFL = 0.7;
 const MAX_DT = 2;                 // seconds
 const FILM = 0.1;                 // water shallower than this doesn't set the step, m
+const STILL_H = 1;                // metres: water deeper than this in a reservoir is still water
 const MARGIN = 3;                 // dry cells worked on beside the water
 export const SPONGE = 6;          // rows along the bottom edge where the open sea soaks up waves and sand
 const BED_EVERY = 2;              // hydraulic steps between moves of the bed
@@ -82,7 +83,7 @@ export const TUNE = {
   rockK: 2e-9,                    // m/s the bedrock wears per W/m² of stream power past its threshold
   rockP: 10,                      // W/m²: the stream power that starts wearing rock
   frMax: 2,                       // the fastest current a cell reports, as a multiple of its wave speed
-  seaDamp: 120,                   // seconds over which currents fade out at sea (0: never)
+  seaDamp: 120,                   // seconds over which currents fade out at sea and in deep reservoirs (0: never)
   transport: 3,                   // scales the sand and gravel's transport (calibrated to the river before gravel)
   mudE: 1e-7,                     // m/s of mud lifted per unit of drag past its threshold, from a bed of pure mud
 };
@@ -95,6 +96,10 @@ const PLANT_UPROOT = 1.6;         // times the threshold stress that tears them 
 const TREE_DROWN_YR = 1.5;        // trees stand floods longer
 const TREE_UPROOT = 3;            // and hold on harder
 const PLANT_EVERY = 16;           // steps between the plants' slow updates
+// The pump's sand, when its water arrives in a reservoir backed up to it
+// (which carries nothing away from the inlet): no less than what it has
+// been feeding lately for the flow, learned over FEED_T years before.
+const FEED_T = 0.02;
 const SLUMP_ALL_EVERY = 64;       // steps between slumps over the whole valley
 
 // Wilcock and Crowe (2003): the drag at which sand and gravel start to move
@@ -132,10 +137,11 @@ function dice(step, i) {
 
 // The water's and the bed's constants, for the river on the GPU
 // (gpuflow.js, gpuriver.js).
-export const WATER = { G, FILM, N_BARE, N_PLANT, N_TREE, INFILTRATE, CFL, MAX_DT };
+export const WATER = { G, FILM, N_BARE, N_PLANT, N_TREE, INFILTRATE, CFL, MAX_DT, STILL_H };
 export const BEDK = {
   D50, RHO, RHO_S, SG, POROSITY, LA, ROCK_SHIELD, MUD_TE, MUD_PLANT, SLOPE_WET, SLOPE_DRY, SLUMP,
   PLANT_DROWN_YR, PLANT_UPROOT, TREE_DROWN_YR, TREE_UPROOT, PLANT_EVERY, BED_EVERY, WC_N, WC_MIN, WC_SAND, WC_GRAVEL,
+  FEED_T,
 };
 
 // Cube roots by table: Math.cbrt is slow and is needed for every wet face.
@@ -159,6 +165,7 @@ export class Flow {
     this.cover = table.cover;                 // grass, 0..1
     this.trees = table.trees || new Float32Array(N);   // trees, 0..1
     this.noTrees = new Uint8Array(N);         // kept clear of trees (fields)
+    this.still = new Uint8Array(N);           // a dam's reservoir (its deep water's currents fade, as at sea)
     this.placed = new Uint8Array(N);          // rock put down by hand (blocks, piers): stays when the bedrock moves
     this.z0 = Float32Array.from(table.z);   // the bed at the start, for cut and fill
     this.h = new Float32Array(N);
@@ -213,6 +220,8 @@ export class Flow {
     this.sediment = true;
     this.rainRate = 0;                        // metres a second
     this.fedIn = 0;                           // sand pumped in, m³ in all
+    this.feedEma = 0;                         // what the pump's sand has been lately, per unit of supply and of inflow
+    this.feedGs = 0;                          // and gravel's share of it
     this.toSea = 0;                           // sand out past the bottom edge, m³ in all
     this.morph = 1;                           // the bed-time factor of the last step
     this.growth = 1;                          // how fast plants grow now (0 in winter)
@@ -338,9 +347,9 @@ export class Flow {
     }
     const cin = this.mudIn;
     let fed = 0, out = 0;
-    // Out at sea, past the river's mouth, currents fade over a couple of
-    // minutes, so the shelf doesn't slosh.
-    const seaY = this.seaY, seaDamp = TUNE.seaDamp > 0 ? 1 - dt / TUNE.seaDamp : 1, deepSea = sea - 0.3;
+    // Out at sea, past the river's mouth, and in a reservoir's deep water,
+    // currents fade over a couple of minutes, so they don't slosh.
+    const seaY = this.seaY, seaDamp = TUNE.seaDamp > 0 ? 1 - dt / TUNE.seaDamp : 1, deepSea = sea - 0.3, still = this.still;
     const frMax = TUNE.frMax;
     for (let y = 0; y < H; y++) {
       const row = y * W, frow = y * W1;
@@ -369,7 +378,7 @@ export class Flow {
         }
         if (qB !== 0) m -= k * qB * (qB > 0 ? ci : C[i + W]);
         if (m < 0) m = 0;
-        if (y > seaY && z[i] < deepSea) {
+        if ((y > seaY && z[i] < deepSea) || (still[i] && h[i] > STILL_H)) {
           if (x > a) qx[frow + x] *= seaDamp;
           qy[i] *= seaDamp;
         }
@@ -524,8 +533,15 @@ export class Flow {
       }
     }
     // The pump's sand comes in with its water; the sea takes what goes out.
+    // Water arriving drowned carries what the pump has been feeding lately.
     const x0 = Math.max(0, Math.round(this.inletX - this.inletHalf)), x1 = Math.min(W - 1, Math.round(this.inletX + this.inletHalf));
-    for (let x = 0; x < W; x++) fy[x] = x >= x0 && x <= x1 ? this.supply * Math.max(0, sy[x]) : 0;
+    const feed = this.supply * this.inflow;
+    let local = 0, inLake = 0;
+    for (let x = x0; x <= x1; x++) { local += this.supply * Math.max(0, sy[x]); inLake += this.still[x]; }
+    const lake = 2 * inLake > x1 - x0 + 1;
+    const least = this.feedEma * feed;
+    const drowned = lake && local < least;
+    for (let x = 0; x < W; x++) fy[x] = x >= x0 && x <= x1 ? (drowned ? least / (x1 - x0 + 1) : this.supply * Math.max(0, sy[x])) : 0;
     for (let x = 0; x < W; x++) { const i = (HB - 1) * W + x; fy[HB * W + x] = x >= lo[HB - 1] && x <= hi[HB - 1] ? Math.max(0, sy[i]) : 0; }
     // How fast the bed may change: the factor creeps up toward what's asked
     // while few cells would change too fast in one step, and backs off when
@@ -589,11 +605,18 @@ export class Flow {
     // The gravel through each face is its share of what the upwind cell
     // sends.
     const k = per * mdt;
+    const gIn0 = drowned ? this.feedGs : -1;
     let fed = 0, lost = 0, gIn = 0, gOut = 0;
     for (let x = 0; x < W; x++) {
-      fed += fy[x]; gIn += fy[x] * gs[x];
+      fed += fy[x]; gIn += fy[x] * (gIn0 >= 0 ? gIn0 : gs[x]);
       const o = fy[HB * W + x];
       lost += o; gOut += o * gs[(HB - 1) * W + x];
+    }
+    // Learning what the pump feeds, while it isn't drowned.
+    if (!lake && feed > 0) {
+      const a = Math.min(1, mdt / (FEED_T * SEC_PER_YR));
+      this.feedEma += (fed / feed - this.feedEma) * a;
+      if (fed > 0) this.feedGs += (gIn / fed - this.feedGs) * a;
     }
     this.fedIn += fed * dx * mdt;
     this.toSea += lost * dx * mdt;
@@ -607,7 +630,7 @@ export class Flow {
         dz[i] = k * (fl - fr + ft - fb);
         const gl = fl * (fl > 0 ? gs[i - 1] : gs[i]);
         const gr = fr * (fr > 0 ? gs[i] : gs[i + 1]);
-        const gt = ft * (ft > 0 && y > 0 ? gs[i - W] : gs[i]);
+        const gt = ft * (ft > 0 && y > 0 ? gs[i - W] : y === 0 && gIn0 >= 0 ? gIn0 : gs[i]);
         const gb = fb * (fb > 0 ? gs[i] : gs[i + W]);
         dzG[i] = k * (gl - gr + gt - gb);
         dzM[i] = 0;

@@ -10,7 +10,7 @@ const check = (ok, l, e = '') => { console.log(`${ok ? 'PASS' : 'FAIL'}  ${l}${e
 const browser = await chromium.launch({ executablePath: process.env.CHROMIUM || undefined, args: ['--enable-unsafe-swiftshader'] });
 const page = await browser.newPage();
 page.on('pageerror', (e) => console.log('page error:', e.message));
-for (const [label, query] of [['a quiet bed', 'seed=gpu-2&warm=3000&morph=2000'], ['a busy bed', 'seed=river-a&warm=12000&morph=20000']]) {
+for (const [label, query] of [['a quiet bed', 'seed=gpu-2&warm=3000&morph=2000'], ['a busy bed', 'seed=river-a&warm=12000&morph=20000'], ['a dam drowning the inlet', 'seed=river-a&warm=12000&morph=20000&dam=1']]) {
   await page.goto(`${BASE}/tests/gpu-bed.html?${query}`, { waitUntil: 'commit' });
   await page.waitForFunction(() => window.result, null, { timeout: 900000, polling: 1000 });
   const r = await page.evaluate(() => window.result);
@@ -22,6 +22,7 @@ for (const [label, query] of [['a quiet bed', 'seed=gpu-2&warm=3000&morph=2000']
   check(Math.abs(r.mdt[0] - r.mdt[1]) < 1e-4 * r.mdt[0] && r.mNow[0] === Math.fround(r.mNow[1]) || Math.abs(r.mNow[0] - r.mNow[1]) < 1e-3 * r.mNow[0], `${label}: the same bed time and speed-up`, `${r.mdt.map((v) => v.toFixed(1)).join(' / ')} s`);
   const c = r.counters;
   check(Math.abs(c.fedIn[0] - c.fedIn[1]) <= 1e-4 * c.fedIn[0] + 1e-12, `${label}: the same sand fed in`, c.fedIn.map((v) => v.toExponential(4)).join(' / '));
+  check(Math.abs(r.feed[0] - r.feed[1]) <= 1e-3 * r.feed[0] + 1e-15, `${label}: the same memory of the pump's sand`, r.feed.map((v) => v.toExponential(3)).join(' / '));
   check(Math.abs(r.volume[0] - r.volume[1]) < 0.1 * Math.abs(r.volume[0]) + 1e-3, `${label}: about the same ground laid down`, r.volume.map((v) => v.toFixed(3)).join(' / ') + ' m³');
 }
 for (const [label, query] of [['young water', 'seed=gpu-1&warm=600&steps=200'], ['with the bed moving fast', 'seed=gpu-2&warm=3000&steps=400&morph=2000']]) {

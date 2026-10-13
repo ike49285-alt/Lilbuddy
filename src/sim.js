@@ -18,7 +18,12 @@ const BRUSH_NUDGE = 0.1;                   // seconds of brushing each nudge fro
 const DIG_DEPTH = 1.2;                     // metres below the ground either side
 const BLOCK_H = 1.5;                       // metres a dropped block stands above the bed
 // Things to protect: their size in cells, and how many there may be.
-const HOUSE = 3, FIELD = 8, PIER_EVERY = 4, MAX_THINGS = 24;
+const HOUSE = 3, FIELD = 8, PIER_EVERY = 4, MAX_THINGS = 40;
+// A dam stands this far above the lowest bed along it, metres, with a
+// spillway SPILL_DROP lower over SPILL_W cells where that bed was lowest.
+export const DAM_H = { low: 2, medium: 4, high: 8 };
+const SPILL_DROP = 0.5, SPILL_W = 3;
+const MAX_GAUGES = 4;
 const CROP = 0.5;                          // a field's crop, as plant cover
 const LASTING = { undercut: 1, scoured: 1, lost: 2 };   // harms that don't heal, worse ones higher
 
@@ -101,6 +106,7 @@ export class Simulation {
         this.mudSeaRate += ((mudSea / (ry * 365.25)) - this.mudSeaRate) * k;
       }
       if (this.years >= this.history.next) this.sample();
+      for (const t of this.things) if (t.kind === 'gauge' && this.years >= t.next) this.readGauge(t);
     }
     return yrs;
   }
@@ -148,7 +154,10 @@ export class Simulation {
       if (dz === 0) continue;
       for (let x = 0; x < W; x++) { const i = y * W + x; z[i] += dz; rock[i] += dz; z0[i] += dz; }
     }
-    for (const t of this.things) t.watch.forEach((j, k) => { t.base[k] += by[(j / W) | 0]; });
+    for (const t of this.things) {
+      t.watch.forEach((j, k) => { t.base[k] += by[(j / W) | 0]; });
+      if (t.under) t.under.cells.forEach((j, k) => { const d = by[(j / W) | 0]; t.under.z[k] += d; t.under.rock[k] += d; });
+    }
     this.thalwegZ0 = this.thalweg(z0, null);
     this.reshaped();
   }
@@ -181,6 +190,11 @@ export class Simulation {
         if (placed[i]) continue;
         const r = rock[i] - d;
         rock[i] = r < z[i] ? r : z[i];
+      }
+      // And under the rock put down by hand, for when it's taken away.
+      for (const t of this.things) {
+        const u = t.under;
+        if (u) u.cells.forEach((_, k) => { if (!u.placed[k]) u.rock[k] = Math.min(u.rock[k] - d, u.z[k]); });
       }
       this.rockDepth = depth;
       this.reshaped();
@@ -261,7 +275,10 @@ export class Simulation {
     if (!(i >= 0 && i < this.N)) return;
     const cx = i % W, cy = (i / W) | 0;
     let top = -Infinity;
-    for (let y = cy - 1; y <= cy + 1; y++) for (let x = cx - 1; x <= cx + 1; x++) if (x >= 0 && y >= 0 && x < W && y < H) top = Math.max(top, z[y * W + x]);
+    const cells = [];
+    for (let y = cy - 1; y <= cy + 1; y++) for (let x = cx - 1; x <= cx + 1; x++) if (x >= 0 && y >= 0 && x < W && y < H) { top = Math.max(top, z[y * W + x]); cells.push(y * W + x); }
+    // Remembered, so it can be taken away again.
+    this.addThing({ kind: 'block', cells, under: this.under(cells) });
     for (let y = cy - 1; y <= cy + 1; y++) {
       for (let x = cx - 1; x <= cx + 1; x++) {
         if (x < 0 || y < 0 || x >= W || y >= H) continue;
@@ -281,15 +298,41 @@ export class Simulation {
     this.event('block', i);
   }
 
-  // --- things to protect -------------------------------------------------------
+  // --- things to protect, dams and gauges -------------------------------------
 
-  // Puts down a house or a field centred on cell i, or a bridge along a
-  // line: each remembers the ground under it, to tell how the river treats it.
-  place(kind, i, points) {
+  // The ground under some cells as it is, to put back when what's built on
+  // it is taken away.
+  under(cells) {
+    const f = this.flow;
+    const take = (a) => cells.map((j) => a[j]);
+    return { cells: cells.slice(), z: take(f.z), rock: take(f.rock), fm: take(f.fm), sm: take(f.sm), fg: take(f.fg), sg: take(f.sg), placed: take(f.placed) };
+  }
+
+  addThing(t) {
+    const { W } = this;
+    if (this.things.length >= MAX_THINGS && this.things.shift().kind === 'dam') this.markReservoirs();
+    const cells = t.cells;
+    const thing = {
+      id: this.nextThingId++, piers: [], watch: [], base: [], line: null,
+      x: cells.reduce((s, j) => s + (j % W), 0) / cells.length + 0.5,
+      y: cells.reduce((s, j) => s + ((j / W) | 0), 0) / cells.length + 0.5,
+      state: 'fine', worst: 'fine', flooded: 0, eroded: 0, buried: 0,
+      ...t,
+    };
+    this.things.push(thing);
+    return thing;
+  }
+
+  // Puts down a house or a field centred on cell i, a bridge or a dam along
+  // a line, or a gauge at cell i. Houses, fields and bridges remember the
+  // ground under them, to tell how the river treats them; a dam, what's
+  // behind it; a gauge, what passes it.
+  place(kind, i, points, size) {
     const { W, H } = this;
     const f = this.flow;
-    if (this.things.length >= MAX_THINGS) this.things.shift();
-    let cells = [], piers = [], line = null;
+    let cells = [], piers = [], line = null, under = null;
+    if (kind === 'dam') return this.dam(points, size);
+    if (kind === 'gauge') return this.gauge(i);
     if (kind === 'house' || kind === 'field') {
       if (!(i >= 0 && i < this.N)) return null;
       const n = kind === 'house' ? HOUSE : FIELD;
@@ -303,9 +346,9 @@ export class Simulation {
       const a = points[0], b = points[points.length - 1];
       line = [a[0], a[1], b[0], b[1]];
       // Piers of rock along it, between its ends.
-      for (let k = PIER_EVERY >> 1; k < cells.length - 1; k += PIER_EVERY) {
-        const j = cells[k];
-        piers.push(j);
+      for (let k = PIER_EVERY >> 1; k < cells.length - 1; k += PIER_EVERY) piers.push(cells[k]);
+      under = this.under(piers);
+      for (const j of piers) {
         f.rock[j] = f.z[j];
         f.placed[j] = 1;
         f.fm[j] = 0;
@@ -314,18 +357,177 @@ export class Simulation {
     } else return null;
     // The ground around a pier, for its scour.
     const watch = kind === 'bridge' ? [...new Set(piers.flatMap((j) => [j - 1, j + 1, j - W, j + W].filter((n) => n >= 0 && n < this.N)))] : cells;
-    const t = {
-      id: this.nextThingId++, kind, cells, piers, watch, line,
-      base: watch.map((j) => f.z[j]),
-      x: cells.reduce((s, j) => s + (j % W), 0) / cells.length + 0.5,
-      y: cells.reduce((s, j) => s + ((j / W) | 0), 0) / cells.length + 0.5,
-      state: 'fine', worst: 'fine', flooded: 0, eroded: 0, buried: 0,
-    };
-    this.things.push(t);
+    const t = this.addThing({ kind, cells, piers, watch, line, base: watch.map((j) => f.z[j]), ...(kind === 'bridge' ? { under } : {}) });
     this.checkThings();
     if (kind === 'bridge') this.reshaped();
     this.event('place', cells[cells.length >> 1]);
     return t;
+  }
+
+  // A dam along a line: a wall of rock the river can't wear, standing
+  // DAM_H[size] above the lowest bed along it and keyed into the ground
+  // either side, with a spillway where the river ran. The river backs up
+  // behind it into a reservoir, which fills with the sand it drops; below
+  // it, the river runs clear and hungry. The reservoir starts full: the
+  // water here runs far slower than the bed's clock, and filling it would
+  // take years of it (a real one fills in days).
+  dam(points, size) {
+    const { W, H } = this;
+    const f = this.flow;
+    const cells = lineCells(W, H, points || []);
+    if (cells.length < 3) return null;
+    const a = points[0], b = points[points.length - 1];
+    const height = DAM_H[size] || DAM_H.medium;
+    let low = Infinity, at = 0;
+    cells.forEach((j, k) => { if (f.z[j] < low) { low = f.z[j]; at = k; } });
+    const crest = low + height, spill = crest - SPILL_DROP;
+    const under = this.under(cells);
+    cells.forEach((j, k) => {
+      const top = Math.max(f.z[j], Math.abs(k - at) <= SPILL_W >> 1 ? spill : crest);
+      f.z[j] = top; f.rock[j] = top; f.placed[j] = 1;
+      f.fm[j] = 0; f.sm[j] = 0; f.fg[j] = 0; f.sg[j] = 0;
+      f.cover[j] = 0; f.trees[j] = 0;
+      f.h[j] = 0;
+    });
+    // The reservoir: everything below the spillway that the water behind
+    // the dam reaches, on its upstream side (toward the pump). It starts
+    // full of water; how full of sand is what the river has laid in it
+    // since, against the room there was below the spillway.
+    const ax = a[0], ay = a[1], dx = b[0] - ax, dy = b[1] - ay, L = Math.hypot(dx, dy) || 1;
+    const up = dx > 0 ? -1 : 1;   // the sign of the cross product toward smaller y
+    const upside = (j) => (((dx * ((((j / W) | 0) + 0.5) - ay) - dy * ((j % W) + 0.5 - ax)) / L) * up) > 0;
+    const seen = new Set(cells), queue = [], watch = [];
+    const spread = (j) => {
+      const x = j % W, y = (j / W) | 0;
+      for (const n of [x > 0 ? j - 1 : -1, x < W - 1 ? j + 1 : -1, y > 0 ? j - W : -1, y < H - 1 ? j + W : -1]) {
+        if (n < 0 || seen.has(n) || f.z[n] >= spill || !upside(n)) continue;
+        seen.add(n);
+        queue.push(n);
+      }
+    };
+    // From the dam's upstream face, filling it with water as it goes.
+    for (const j of cells) spread(j);
+    let room = 0;
+    while (queue.length) {
+      const j = queue.pop();
+      watch.push(j);
+      room += (spill - f.z[j]) * CELL_M * CELL_M;
+      f.h[j] = Math.max(f.h[j], spill - f.z[j]);
+      spread(j);
+    }
+    const t = this.addThing({
+      kind: 'dam', cells, line: [ax, ay, b[0], b[1]], under, height, watch, base: watch.map((j) => f.z[j]),
+      room, held: 0, fullness: 0, state: 'filling',
+    });
+    this.markReservoirs();
+    this.checkThings();
+    this.reshaped();
+    this.event('place', cells[cells.length >> 1]);
+    return t;
+  }
+
+  // A gauge at cell i, numbered 1 to MAX_GAUGES: the water level, the bed,
+  // the flow and the sand passing it, sampled over time. (One more than
+  // MAX_GAUGES moves the oldest.)
+  gauge(i) {
+    if (!(i >= 0 && i < this.N)) return null;
+    const gauges = this.things.filter((t) => t.kind === 'gauge');
+    if (gauges.length >= MAX_GAUGES) this.things.splice(this.things.indexOf(gauges[0]), 1);
+    const used = new Set(this.things.filter((t) => t.kind === 'gauge').map((t) => t.n));
+    let n = 1;
+    while (used.has(n)) n++;
+    const t = this.addThing({ kind: 'gauge', cells: [i], n, series: { level: [], bed: [], flow: [], sand: [] }, every: HOUR, next: this.years, bed0: null });
+    this.readGauge(t);
+    this.event('place', i);
+    return t;
+  }
+
+  // What a gauge reads now: in the stretch of water it stands in (or the
+  // nearest within ten cells), the water level at the deepest point and the
+  // lowest bed; and across the valley there, all the flow down it (every
+  // channel, and the floodplain in a flood) and the sand with it.
+  gaugeAt(i) {
+    const { W } = this;
+    const { h, z, uy, sy } = this.flow;
+    const row = ((i / W) | 0) * W, x0 = i % W;
+    let x = -1;
+    for (let d = 0; d <= 10 && x < 0; d++) {
+      if (x0 - d >= 0 && h[row + x0 - d] > WET) x = x0 - d;
+      else if (x0 + d < W && h[row + x0 + d] > WET) x = x0 + d;
+    }
+    if (x < 0) return { level: NaN, bed: z[i], flow: 0, sand: 0 };   // (dry for ten cells either way: nothing passes)
+    let a = x, b = x;
+    while (a > 0 && h[row + a - 1] > WET) a--;
+    while (b < W - 1 && h[row + b + 1] > WET) b++;
+    let deep = row + x, bed = Infinity, q = 0, sand = 0;
+    for (let k = a; k <= b; k++) {
+      const j = row + k;
+      if (h[j] > h[deep]) deep = j;
+      if (z[j] < bed) bed = z[j];
+    }
+    for (let k = 0; k < W; k++) {
+      const j = row + k;
+      if (h[j] > WET) q += h[j] * uy[j];
+      sand += sy[j];
+    }
+    return { level: z[deep] + h[deep], bed, flow: q * CELL_M, sand: sand * CELL_M * 86400 };
+  }
+
+  readGauge(t) {
+    const r = this.gaugeAt(t.cells[0]);
+    const s = t.series;
+    for (const k of ['level', 'bed', 'flow', 'sand']) s[k].push(r[k]);
+    if (t.bed0 == null) t.bed0 = r.bed;
+    // Full: keep every other sample and sample half as often.
+    if (s.level.length > HISTORY_LEN) {
+      for (const k of ['level', 'bed', 'flow', 'sand']) s[k] = s[k].filter((_, m) => m % 2 === 0);
+      t.every *= 2;
+    }
+    t.next = this.years + t.every;
+  }
+
+  // Takes away whatever was put down nearest cell i (within three cells):
+  // rock, a dam or a bridge's piers go and the ground under them comes back
+  // as it was; a field stops being kept; a house or a gauge just goes.
+  remove(i) {
+    const { W } = this;
+    if (!(i >= 0 && i < this.N)) return null;
+    const x = i % W, y = (i / W) | 0;
+    let best = null, bd = 3.5;
+    for (const t of this.things) {
+      for (const j of t.cells) {
+        const d = Math.hypot((j % W) - x, ((j / W) | 0) - y);
+        if (d < bd) { bd = d; best = t; }
+      }
+    }
+    if (!best) return null;
+    const f = this.flow;
+    this.things.splice(this.things.indexOf(best), 1);
+    const u = best.under;
+    if (u) {
+      u.cells.forEach((j, k) => {
+        // A bridge's piers leave the ground as the river has made it.
+        if (best.kind !== 'bridge') f.z[j] = u.z[k];
+        f.rock[j] = Math.min(u.rock[k], f.z[j]);
+        f.fm[j] = u.fm[k]; f.sm[j] = u.sm[k]; f.fg[j] = u.fg[k]; f.sg[j] = u.sg[k];
+        f.placed[j] = u.placed[k];
+      });
+      this.reshaped();
+    }
+    if (best.kind === 'dam') this.markReservoirs();
+    if (best.kind === 'field') {
+      const kept = new Set(this.things.filter((t) => t.kind === 'field').flatMap((t) => t.cells));
+      for (const j of best.cells) if (!kept.has(j)) f.noTrees[j] = 0;
+    }
+    this.event('remove', i);
+    return best;
+  }
+
+  // Where the dams' reservoirs are, for the water.
+  markReservoirs() {
+    const still = this.flow.still;
+    still.fill(0);
+    for (const t of this.things) if (t.kind === 'dam') for (const j of t.watch) still[j] = 1;
   }
 
   // How each thing is faring. A house is flooded under water, undercut
@@ -337,6 +539,16 @@ export class Simulation {
   checkThings() {
     const { z, h } = this.flow;
     for (const t of this.things) {
+      if (t.kind === 'dam') {
+        // The sand held behind it, and how full of it the reservoir is.
+        let held = 0;
+        t.watch.forEach((j, k) => { held += z[j] - t.base[k]; });
+        t.held = held * CELL_M * CELL_M;
+        t.fullness = t.room > 0 ? Math.max(0, Math.min(1, t.held / t.room)) : 0;
+        t.state = t.fullness >= 0.9 ? 'silted up' : 'filling';
+        continue;
+      }
+      if (t.kind === 'gauge' || t.kind === 'block') continue;
       let wet = 0, down = 0, up = 0, drop = 0;
       t.watch.forEach((j, k) => {
         const d = z[j] - t.base[k];
@@ -503,6 +715,8 @@ export class Simulation {
       toSea: this.toSeaRate,
       mudToSea: this.mudSeaRate,
       slides: f.slides,
+      dams: this.things.filter((t) => t.kind === 'dam').length,
+      damHeld: this.things.reduce((s, t) => s + (t.kind === 'dam' ? t.held : 0), 0),
       mudLaid: f.mudLaid,
       delta: delta * CELL_M * CELL_M,
       fedIn: f.fedIn,
@@ -606,8 +820,20 @@ export class Simulation {
       section: this.sectionData(),
       history: { inflow: this.history.inflow.slice(), sinuosity: this.history.sinuosity.slice(), every: this.history.every },
       events: this.takeEvents(),
-      things: this.things.map((t) => ({ id: t.id, kind: t.kind, x: t.x, y: t.y, state: t.state, line: t.line, piers: t.piers.map((j) => [(j % this.W) + 0.5, ((j / this.W) | 0) + 0.5]), flooded: t.flooded, eroded: t.eroded, buried: t.buried })),
+      // (Blocks show as rock; they're things only so they can be taken away.)
+      things: this.things.filter((t) => t.kind !== 'block').map((t) => this.thingView(t)),
     };
+  }
+
+  // A thing as the page sees it.
+  thingView(t) {
+    const v = { id: t.id, kind: t.kind, x: t.x, y: t.y, state: t.state, line: t.line, piers: t.piers.map((j) => [(j % this.W) + 0.5, ((j / this.W) | 0) + 0.5]), flooded: t.flooded, eroded: t.eroded, buried: t.buried };
+    if (t.kind === 'dam') Object.assign(v, { height: t.height, fullness: t.fullness, held: t.held });
+    if (t.kind === 'gauge') {
+      const s = t.series;
+      Object.assign(v, { n: t.n, every: t.every, bed0: t.bed0, series: { level: s.level.slice(), bed: s.bed.slice(), flow: s.flow.slice(), sand: s.sand.slice() } });
+    }
+    return v;
   }
 
   // Where blocks of rock stand, one byte per cell.
@@ -654,7 +880,14 @@ export class Simulation {
       gravelGround: f.fg[i],
       rockBelow: f.z[i] - f.rock[i],
       block: f.rock[i] >= f.z[i] - 0.01,
-      thing: (() => { const t = this.things.find((o) => o.cells.includes(i)); return t ? { kind: t.kind, state: t.state, flooded: t.flooded, eroded: t.eroded, buried: t.buried } : null; })(),
+      thing: (() => {
+        const t = this.things.find((o) => o.kind !== 'block' && o.cells.includes(i));
+        if (!t) return null;
+        const v = { kind: t.kind, state: t.state, flooded: t.flooded, eroded: t.eroded, buried: t.buried };
+        if (t.kind === 'dam') Object.assign(v, { height: t.height, fullness: t.fullness, held: t.held });
+        if (t.kind === 'gauge') Object.assign(v, { n: t.n, now: this.gaugeAt(i) });
+        return v;
+      })(),
     };
   }
 
@@ -677,7 +910,7 @@ export class Simulation {
       mudSeaRate: this.mudSeaRate, lastMudSea: this.lastMudSea,
       toSeaRate: this.toSeaRate, sandRate: this.sandRate, lastToSea: this.lastToSea,
       nextEventId: this.nextEventId,
-      things: this.things.map((t) => ({ ...t, cells: t.cells.slice(), piers: t.piers.slice(), watch: t.watch.slice(), base: t.base.slice(), line: t.line && t.line.slice() })),
+      things: this.things.map((t) => structuredClone(t)),
       nextThingId: this.nextThingId,
       weather: this.weather.saveState(),
       flow: {
@@ -688,7 +921,7 @@ export class Simulation {
         gravel: { in: f.gravelIn, out: f.gravelOut, worn: f.rockWorn },
         slides: f.slides, slideYears: f.slideYears,
         mud: { fed: f.mudFed, out: f.mudOut, down: f.mudDown, laid: f.mudLaid, sea: f.mudSea, mark: f.mudMark },
-        inletX: f.inletX, dt: f.dt, mNow: f.mNow, fedIn: f.fedIn, toSea: f.toSea, steps: f.steps, plantYears: f.plantYears, waterTime: f.waterTime,
+        inletX: f.inletX, dt: f.dt, mNow: f.mNow, fedIn: f.fedIn, feed: [f.feedEma, f.feedGs], toSea: f.toSea, steps: f.steps, plantYears: f.plantYears, waterTime: f.waterTime,
       },
     };
   }
@@ -707,6 +940,7 @@ export class Simulation {
     if (F.fg) { f.fg.set(F.fg); f.sg.set(F.sg); f.gravelIn = F.gravel.in; f.gravelOut = F.gravel.out; f.rockWorn = F.gravel.worn || 0; }
     if (F.mud) { f.mudFed = F.mud.fed; f.mudOut = F.mud.out; f.mudDown = F.mud.down; f.mudLaid = F.mud.laid; f.mudSea = F.mud.sea; f.mudMark = F.mud.mark; }
     if (F.inletX != null) f.inletX = F.inletX;
+    if (F.feed) [f.feedEma, f.feedGs] = F.feed;
     if (F.slides != null) { f.slides = F.slides; f.slideYears = F.slideYears; }
     f.dt = F.dt; f.mNow = F.mNow; f.fedIn = F.fedIn; f.toSea = F.toSea; f.steps = F.steps; f.plantYears = F.plantYears; f.waterTime = F.waterTime;
     sim.years = s.years;
@@ -722,7 +956,7 @@ export class Simulation {
     if (s.mudSeaRate != null) { sim.mudSeaRate = s.mudSeaRate; sim.lastMudSea = s.lastMudSea; }
     sim.toSeaRate = s.toSeaRate; sim.sandRate = s.sandRate; sim.lastToSea = s.lastToSea;
     sim.nextEventId = s.nextEventId;
-    if (s.things) { sim.things = s.things.map((t) => ({ ...t, cells: t.cells.slice(), piers: t.piers.slice(), watch: t.watch.slice(), base: t.base.slice(), line: t.line && t.line.slice() })); sim.nextThingId = s.nextThingId; }
+    if (s.things) { sim.things = s.things.map((t) => structuredClone(t)); sim.nextThingId = s.nextThingId; sim.markReservoirs(); }
     sim.sentEvent = s.nextEventId - 1;
     sim.weather.restoreState(s.weather);
     sim.thalwegZ0 = sim.thalweg(f.z0, null);

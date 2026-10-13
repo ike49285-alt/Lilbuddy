@@ -56,10 +56,11 @@ precision highp sampler2D;
 #define WC_N ${BEDK.WC_N}
 #define SEC_PER_YR ${glf(SEC_PER_YR)}
 #define FIELD_CROP ${glf(FIELD_CROP)}
+#define FEED_T ${glf(BEDK.FEED_T)}
 // The world: S = (depth, mud, current x, current y); A = (bed, rock,
 // recent change, put by hand); B = (mud share of the top layer, of the
 // ground below, gravel share of the top layer, of the ground below);
-// C = (grass, trees, kept clear of trees, the bed at the start); T = (sand
+// C = (grass, trees, kept clear of trees + 2 in a reservoir, the bed at the start); T = (sand
 // carried x, y, Shields stress, gravel's share of it).
 uniform sampler2D uS, uA, uB, uC, uT, uDT, uBED;
 uniform int uW, uH, uHB;
@@ -74,6 +75,29 @@ bool inside(int x, int y) { return x >= 0 && y >= 0 && x < uW && y < uH; }
 float waterTime() { return texelFetch(uDT, ivec2(0), 0).z; }
 float bedTime() { return waterTime() * min(texelFetch(uBED, ivec2(0), 0).x, uMorph); }
 float per() { return 1.0 / ((1.0 - POROSITY) * uDx); }
+// The pump's inlet along the top edge: the sand its water carries away
+// (and the gravel in it), and whether it arrives in a reservoir (C's third
+// channel 2 or more), when the pump feeds no less than what it has been
+// feeding lately (BED.z, per unit of supply and of inflow).
+uniform int uX0, uX1;
+uniform float uSupply, uInflow;
+void inletNow(out float local, out float localG, out bool lake) {
+  local = 0.0; localG = 0.0;
+  int n = 0;
+  for (int x = uX0; x <= uX1; x++) {
+    vec4 t = T(x, 0);
+    float v = uSupply * max(0.0, t.y);
+    local += v; localG += v * t.w;
+    if (C(x, 0).z > 1.5) n++;
+  }
+  lake = 2 * n > uX1 - uX0 + 1;
+}
+float feedLeast() { return texelFetch(uBED, ivec2(0), 0).z * uSupply * uInflow; }
+bool drownedNow() {
+  float local, localG; bool lake;
+  inletNow(local, localG, lake);
+  return lake && local < feedLeast();
+}
 // The top layer's make-up (b) after the ground rises or falls by d, dm of
 // it mud and dg gravel (Flow.mix).
 void mixLayer(inout vec4 b, float z, float rock, float d, float dm, float dg) {
@@ -175,14 +199,12 @@ void main() {
   o = vec4(v, 0.0, 0.0, 0.0);
 }`;
 const SED_FY = BHEAD + UPWIND + `
-uniform int uX0, uX1;
-uniform float uSupply;
 out vec4 o;
 void main() {
   ivec2 p = ivec2(gl_FragCoord.xy);
   int x = p.x, fy = p.y;
   float v = 0.0;
-  if (fy == 0) v = x >= uX0 && x <= uX1 ? uSupply * max(0.0, T(x, 0).y) : 0.0;
+  if (fy == 0) v = x >= uX0 && x <= uX1 ? (drownedNow() ? feedLeast() / float(uX1 - uX0 + 1) : uSupply * max(0.0, T(x, 0).y)) : 0.0;
   else if (fy == uHB) v = max(0.0, T(x, uHB - 1).y);
   else if (fy < uHB) v = upwind(T(x, fy - 1).y, T(x, fy).y);
   o = vec4(v, 0.0, 0.0, 0.0);
@@ -270,9 +292,11 @@ void main() {
   float gL = x > 0 ? T(x - 1, y).w : 0.0, gR = x < uW - 1 ? T(x + 1, y).w : 0.0;
   float gU = y > 0 ? T(x, y - 1).w : gi, gD = T(x, y + 1).w;
   float dz = k * (fl - fr + ft - fb);
+  // What the pump feeds drowned has the gravel it has been feeding lately.
+  if (y == 0 && x >= uX0 && x <= uX1 && drownedNow()) gU = texelFetch(uBED, ivec2(0), 0).w; else if (y == 0) gU = gi;
   float dzG = k * (fl * (fl > 0.0 ? gL : gi) - fr * (fr > 0.0 ? gi : gR) + ft * (ft > 0.0 ? gU : gi) - fb * (fb > 0.0 ? gi : gD));
   float dzM = 0.0;
-  if (y == 0) { oCa.x = ft; oCa.z = ft * gi; }
+  if (y == 0) { oCa.x = ft; oCa.z = ft * gU; }
   if (y == uHB - 1) { oCa.y = fb; oCa.w = fb * gi; }
   // Mud settles through the water, faster among plants, and is lifted
   // where the flow drags at a muddy bed (Flow.mudExchange).
@@ -568,10 +592,10 @@ void main() {
       if (grow > 0.0) {
         float growT = min(1.0, (uGrowth * yrs) / uTreeYears);
         if (cv < 1.0) cv += (1.0 - cv) * grow;
-        if (cv > 0.5 && tr < 1.0 && c.z < 0.5) tr += (1.0 - tr) * growT * (cv - 0.5) * 2.0;
+        if (cv > 0.5 && tr < 1.0 && mod(c.z, 2.0) < 0.5) tr += (1.0 - tr) * growT * (cv - 0.5) * 2.0;
       }
     }
-    if (c.z > 0.5 && cv < FIELD_CROP) cv = FIELD_CROP;
+    if (mod(c.z, 2.0) > 0.5 && cv < FIELD_CROP) cv = FIELD_CROP;
   }
   o = vec4(cv, tr, c.z, c.w);
 }`;
@@ -596,14 +620,14 @@ void main() {
 }`;
 
 // The bed's clock and counters. BED = (bed-time factor, plant-years since
-// the plants last grew, the factor this step, 0). The counters since the
+// the plants last grew, what the pump has been feeding lately per unit of
+// supply and of inflow, the gravel's share of it). The counters since the
 // CPU last read them: (bed time, sand to sea, sand fed in, mud laid), (mud
 // to sea, mud settled less lifted, gravel in, gravel out), (rock worn,
 // water time, mud out of the water to sea, bed steps).
-const BEDUP = `#version 300 es
-precision highp float;
-uniform sampler2D uRa, uRb, uRc, uBED, uDT, uK0, uK1, uK2;
-uniform float uMorph, uHeld, uDx;
+const BEDUP = BHEAD + `
+uniform sampler2D uRa, uRb, uRc, uK0, uK1, uK2;
+uniform float uHeld;
 uniform int uGrow, uAccReset;
 layout(location = 0) out vec4 oBED;
 layout(location = 1) out vec4 oK0;
@@ -615,9 +639,19 @@ void main() {
   vec4 bed = texelFetch(uBED, z, 0), DT = texelFetch(uDT, z, 0);
   float t = DT.z, m = min(bed.x, uMorph), mdt = t * m;
   float mNew = rb.w > rb.z * uHeld ? max(1.0, m * 0.8) : min(uMorph, m * 1.05 + 0.5);
-  float years = mdt / ${glf(SEC_PER_YR)};
+  float years = mdt / SEC_PER_YR;
   float morph = t > 0.0 ? mdt / t : 1.0;
-  oBED = vec4(mNew, uGrow == 1 ? 0.0 : bed.y + years, morph, 0.0);
+  // Learning what the pump feeds, while it isn't drowned.
+  float local, localG; bool lake;
+  inletNow(local, localG, lake);
+  float feed = uSupply * uInflow;
+  float ema = bed.z, gs = bed.w;
+  if (!lake && feed > 0.0) {
+    float a = min(1.0, mdt / (FEED_T * SEC_PER_YR));
+    ema += (ra.x / feed - ema) * a;
+    if (ra.x > 0.0) gs += (ra.z / ra.x - gs) * a;
+  }
+  oBED = vec4(mNew, uGrow == 1 ? 0.0 : bed.y + years, ema, gs);
   vec4 k0 = uAccReset == 1 ? vec4(0.0) : texelFetch(uK0, z, 0);
   vec4 k1 = uAccReset == 1 ? vec4(0.0) : texelFetch(uK1, z, 0);
   vec4 k2 = uAccReset == 1 ? vec4(0.0) : texelFetch(uK2, z, 0);
@@ -732,13 +766,20 @@ export class GpuRiver {
     pack(this.S[this.s], flow.h, flow.M, flow.ux, flow.uy);
     pack(this.A[this.g], flow.z, flow.rock, flow.dzRate, flow.placed);
     pack(this.B[this.g], flow.fm, flow.sm, flow.fg, flow.sg);
-    pack(this.C[this.c], flow.cover, flow.trees, flow.noTrees, flow.z0);
+    pack(this.C[this.c], flow.cover, flow.trees, this.clear(flow), flow.z0);
     upload(gl, this.QX[this.q], flow.qx);
     upload(gl, this.QY[this.q], flow.qy);
     upload(gl, this.DT[this.q], new Float32Array([flow.dt, flow.dtPrev || flow.dt, flow.waterTime, Math.max(0, flow.mudOut - flow.mudMark)]));
-    upload(gl, this.BED[this.b], new Float32Array([flow.mNow, flow.plantYears, flow.morph, 0]));
+    upload(gl, this.BED[this.b], new Float32Array([flow.mNow, flow.plantYears, flow.feedEma, flow.feedGs]));
     for (const k of this.K[this.b]) upload(gl, k, new Float32Array(4));
     this.reset = 0; this.accReset = 0; this.accSince = 0; this.estSince = 0; this.bedSince = 0;
+  }
+
+  // C's third channel: kept clear of trees (1), and in a reservoir (+2).
+  clear(flow) {
+    const out = this.clearBuf || (this.clearBuf = new Float32Array(this.N));
+    for (let i = 0; i < this.N; i++) out[i] = flow.noTrees[i] + 2 * flow.still[i];
+    return out;
   }
 
   // Uniforms for this step: the world's settings and the tunables.
@@ -750,7 +791,7 @@ export class GpuRiver {
       uSeaY: flow.seaY, uSpongeY: H - SPONGE, uSea: flow.sea, uSeaT: TUNE.seaDamp,
       uCin: flow.mudIn, uRain: flow.rainRate, uSoak: WATER.INFILTRATE, uFrMax: TUNE.frMax,
       uX0: x0, uX1: x1, uQin: flow.inflow / ((x1 - x0 + 1) * flow.dx), uCfl: WATER.CFL, uMaxDt: WATER.MAX_DT,
-      uMorph: morph, uSupply: flow.supply, uDzMax: TUNE.dzMax, uHeld: TUNE.held,
+      uMorph: morph, uSupply: flow.supply, uInflow: flow.inflow, uDzMax: TUNE.dzMax, uHeld: TUNE.held,
       uSpiral: TUNE.spiral, uBedSlope: TUNE.bedSlope, uTransport: TUNE.transport, uMudWs: TUNE.mudWs, uMudE: TUNE.mudE,
       uBank: TUNE.bank, uBankK: TUNE.bankK, uBankCrit: TUNE.bankCrit, uRootHold: TUNE.rootHold,
       uRockK: TUNE.rockK, uRockP: TUNE.rockP, uGrowth: flow.growth, uGrowYears: TUNE.growYears, uTreeYears: TUNE.treeYears,
@@ -799,7 +840,7 @@ export class GpuRiver {
     let src = [this.Ca, this.Cb, this.Cc];
     for (const t of this.reduceC) { this.pass('sum3', t, { uI0: src[0], uI1: src[1], uI2: src[2] }, { uSize: [src[0].w, src[0].h] }); src = t; }
     const bn = 1 - this.b, K = this.K[this.b];
-    this.pass('bedup', [this.BED[bn], ...this.K[bn]], { uRa: src[0], uRb: src[1], uRc: src[2], uBED: this.BED[this.b], uDT: this.DT[this.q], uK0: K[0], uK1: K[1], uK2: K[2] },
+    this.pass('bedup', [this.BED[bn], ...this.K[bn]], { uRa: src[0], uRb: src[1], uRc: src[2], uBED: this.BED[this.b], uDT: this.DT[this.q], uK0: K[0], uK1: K[1], uK2: K[2], uS: this.S[this.s], uT: this.T },
       { uGrow: grow ? 1 : 0, uAccReset: this.accReset });
     this.accReset = 0;
     this.accSince++;
@@ -922,7 +963,7 @@ export class GpuRiver {
       sx[i] = T[k]; sy[i] = T[k + 1]; theta[i] = T[k + 2]; gs[i] = T[k + 3];
     }
     const s = this.gotSmall;
-    flow.mNow = s[0]; flow.plantYears = s[1]; flow.morph = s[2];
+    flow.mNow = s[0]; flow.plantYears = s[1]; flow.feedEma = s[2]; flow.feedGs = s[3];
     flow.dt = s[16]; flow.dtPrev = s[17]; flow.waterTime = s[18];
     flow.mudMark = flow.mudOut - s[19];
     if (r.fresh) {
@@ -932,6 +973,7 @@ export class GpuRiver {
       flow.rockWorn += worn; flow.mudOut += mudOut; flow.mudMark += mudOut;
       flow.mudFed += flow.inflow * flow.mudIn * water;
       flow.slideYears += mdt / SEC_PER_YR;
+      if (water > 0) flow.morph = mdt / water;
       this.owed += mdt - r.est;
       flow.folded = true;
     } else this.estSince += r.est;
@@ -946,6 +988,7 @@ export class GpuRiver {
     flow.landslides(flow.slideYears);
     flow.slideYears = 0;
     const { gl, W, H } = this;
+    const clear = this.clear(flow);
     for (let n = from; n < flow.slidAt.length; n++) {
       const i = flow.slidAt[n];
       const cx = i % W, cy = (i / W) | 0;
@@ -962,7 +1005,7 @@ export class GpuRiver {
       };
       put(this.A[this.g], flow.z, flow.rock, flow.dzRate, flow.placed);
       put(this.B[this.g], flow.fm, flow.sm, flow.fg, flow.sg);
-      put(this.C[this.c], flow.cover, flow.trees, flow.noTrees, flow.z0);
+      put(this.C[this.c], flow.cover, flow.trees, clear, flow.z0);
     }
   }
 

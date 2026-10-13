@@ -4,7 +4,7 @@
 // and cross-sections as charts.
 
 const MAX_ZOOM = 8;
-const EFFECT_MS = { storm: 5000, block: 1800, dig: 1600, pump: 1800, place: 1800, slide: 2500 };
+const EFFECT_MS = { storm: 5000, block: 1800, dig: 1600, pump: 1800, place: 1800, slide: 2500, remove: 1600 };
 
 // Ground: sand and gravel by how high above the water table it stands
 // (darker and damper low down), grass and shrubs over it, grey rock.
@@ -374,7 +374,7 @@ export class MapRenderer {
   drawShaping(ctx, at, dpr) {
     const path = this.digPath;
     if (path && path.length) {
-      const section = this.digKind === 'section' || this.digKind === 'bridge';
+      const section = this.digKind === 'section' || this.digKind === 'bridge' || this.digKind === 'dam';
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
       const pts = section ? [path[0], path[path.length - 1]] : path;
@@ -452,6 +452,7 @@ export function drawSpark(canvas, values, { color, fill, grid, zeroLine = null }
 // How a thing to protect is faring, by colour: fine, in trouble, harmed, gone.
 export const THING_COLOURS = {
   fine: '#ffffff', flooded: '#f2b233', stranded: '#f2b233', damaged: '#f2b233',
+  filling: '#d8d3c8', 'silted up': '#f2b233',
   undercut: '#e0552b', scoured: '#e0552b', lost: '#8c1d1d',
 };
 
@@ -462,6 +463,37 @@ export function drawThings(ctx, things, at, dpr) {
   ctx.lineJoin = 'round';
   for (const t of things) {
     const col = THING_COLOURS[t.state] || '#ffffff';
+    if (t.kind === 'dam' && t.line) {
+      // A wall of concrete across the valley.
+      const a = at(t.line[0], t.line[1]), b = at(t.line[2], t.line[3]);
+      if (!a || !b) continue;
+      ctx.lineCap = 'square';
+      for (const [wd, st] of [[9, 'rgba(29,40,39,0.85)'], [5, col]]) {
+        ctx.lineWidth = Math.max(wd * dpr, (wd / 6) * a.s);
+        ctx.strokeStyle = st;
+        ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+      }
+      continue;
+    }
+    if (t.kind === 'gauge') {
+      // A staff in the water, with its number.
+      const c = at(t.x, t.y);
+      if (!c) continue;
+      const r = Math.max(7 * dpr, 1.6 * c.s);
+      ctx.lineWidth = 1.5 * dpr;
+      ctx.strokeStyle = 'rgba(29,40,39,0.9)';
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath(); ctx.arc(c.x, c.y - r * 0.9, r * 0.75, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(c.x, c.y - r * 0.15); ctx.lineTo(c.x, c.y + r * 0.6); ctx.stroke();
+      ctx.fillStyle = 'rgba(29,40,39,0.95)';
+      ctx.font = `600 ${Math.round(r * 0.95)}px "IBM Plex Mono", monospace`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(String(t.n), c.x, c.y - r * 0.85);
+      ctx.textAlign = 'start';
+      ctx.textBaseline = 'alphabetic';
+      continue;
+    }
     if (t.kind === 'bridge' && t.line) {
       const a = at(t.line[0], t.line[1]), b = at(t.line[2], t.line[3]);
       if (!a || !b) continue;

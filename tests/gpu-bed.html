@@ -16,6 +16,8 @@ try {
   const sim = new Simulation(seed);
   for (let k = 0; k < warm; k++) sim.step(morph);
   const f = sim.flow;
+  // A dam backing a reservoir up to the pump: its sand comes in drowned.
+  if (q.get('dam')) { sim.place('dam', 0, [[0.5, 110.5], [127.5, 110.5]], 'medium'); for (let k = 0; k < 40; k++) sim.step(morph); }
   // Water up to the next bed step, on the CPU.
   while ((f.steps + 1) % 2 !== 0 || (f.steps + 1) % 64 === 0) { f.water(f.dt); f.steps++; f.waterTime = 0; }
   f.water(f.dt); f.waterTime += f.dt;
@@ -70,6 +72,7 @@ try {
   for (let i = 0; i < f.N; i++) { vc += f.z[i] - before.z[i]; vg += A[i * 4] - before.z[i]; }
   out.volume = [vc * 16, vg * 16];
   out.years = mdt / SEC_PER_YR;
+  out.feed = [f.feedEma, BED[2], f.feedGs, BED[3]];
   g.dispose();
 } catch (e) { out.error = String(e && e.stack || e); }
 window.result = out;

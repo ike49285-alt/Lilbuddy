@@ -42,12 +42,14 @@ float faceFlow(float q, float dt, float zi, float zj, float hi, float hj, float 
   return q;
 }
 // How much a cell's left and top faces were damped after the last step:
-// out at sea, currents fade; in the sponge rows by the open sea, more.
+// out at sea and in a reservoir's deep water (uP's third channel 2 or
+// more), currents fade; in the sponge rows by the open sea, more.
 uniform int uSeaY, uSpongeY;
 uniform float uSea, uSeaT;
 float damping(int x, int y, float dtPrev) {
   float d = 1.0;
-  if (y > uSeaY && zAt(x, y) < uSea - 0.3 && uSeaT > 0.0) d *= 1.0 - dtPrev / uSeaT;
+  bool still = texelFetch(uP, ivec2(x, y), 0).b > 1.5 && sAt(x, y).x > ${WATER.STILL_H.toFixed(6)};
+  if (((y > uSeaY && zAt(x, y) < uSea - 0.3) || still) && uSeaT > 0.0) d *= 1.0 - dtPrev / uSeaT;
   if (y >= uSpongeY) d *= 1.0 - 0.5 * float(y - uSpongeY + 1) / ${SPONGE.toFixed(1)};
   return d;
 }

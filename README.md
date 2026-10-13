@@ -132,6 +132,24 @@ it down; what it does, and a brush's size and strength, show under the map.
   - **Bridge:** drawn as a line across the river, with rock piers in it. It
     turns red when the river scours round its piers and amber when the river
     leaves it high and dry.
+  - **Dam:** drawn as a line across the valley: a wall 2, 4 or 8 m above the
+    lowest bed along it (Low, Mid, High), keyed into the ground either
+    side, with a spillway where the river ran. A reservoir backs up behind
+    it, full to the spillway from the start (the water here runs far
+    slower than the bed's clock, so filling it would take years of it; a
+    real one fills in days), and its deep water lies still. The river drops
+    its sand where it meets the lake, building a delta out into it; below
+    the dam it runs clear and hungry, and cuts down. When a reservoir backs
+    up to the pump, the pump goes on feeding the sand it was feeding before.
+    The River tab says how full of sand it is. Draw it bank to bank, or the
+    river goes round it.
+  - **Gauge:** tap the river to put one there (up to four). Each charts, in
+    the Profile tab, its water level over the bed (and the bed when it was
+    put down), and the flow and the sand passing it across the valley. Put
+    one above a dam and one below it.
+  - **Remove:** tap anything put down to take it away. Rock, a dam or a
+    bridge's piers go and the ground under them comes back as it was:
+    take a dam away and its reservoir drains and its sand flushes out.
 
   The River tab says how they're all faring, and tapping one tells you.
 - **Pump:** moves the pump along the top edge, above where you tap, like
@@ -177,7 +195,8 @@ Profile tab draws the river's long profile, from the inlet to the sea:
 - the water over it;
 - the bed at the start, dashed.
 
-Under it is the cross-section along the line from the Section tool.
+Under it is the cross-section along the line from the Section tool, and
+then each gauge's charts.
 
 ## Tests
 

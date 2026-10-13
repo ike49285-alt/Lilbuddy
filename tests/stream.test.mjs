@@ -319,6 +319,95 @@ const sum = (a) => { let s = 0; for (const v of a) s += v; return s; };
   check(s.settings.flow === 80, 'settings stay in their range');
 }
 
+// Dams: a reservoir backs up behind one (full to its spillway from the
+// start), the pump's sand builds a delta into it, its deep water lies still,
+// and the river below runs short of sand and cuts down. Taken away, the
+// ground under it comes back and the reservoir's sand flushes out.
+{
+  const run = (s, y) => { while (s.years < y) s.step(20000); };
+  const make = (dam) => { const s = new Simulation('dam-1'); run(s, 0.15); if (dam) s.place('dam', 0, [[0.5, 110.5], [127.5, 110.5]], 'medium'); return s; };
+  const a = make(true), b = make(false);
+  const f = a.flow, W = a.W;
+  const d = a.things.find((t) => t.kind === 'dam');
+  const mid = d.cells[64];
+  check(d && d.watch.length > 1000 && d.room > 1e5 && d.cells.every((j) => f.placed[j] && f.rock[j] >= f.z[j] - 1e-6), 'a dam goes down as rock across the valley, with a reservoir behind it', `${d.watch.length} cells, room for ${d.room.toFixed(0)} m³`);
+  let lake = 0;
+  for (const j of d.watch) if (f.h[j] > 0.5) lake++;
+  check(lake > 0.9 * d.watch.length, 'the reservoir starts full of water');
+  const fed0 = f.fedIn;
+  run(a, 0.6); run(b, 0.6);
+  a.checkThings();
+  let fast = 0, n = 0;
+  for (const j of d.watch) if (f.h[j] > 1) { fast += Math.hypot(f.ux[j], f.uy[j]); n++; }
+  check(fast / n < 0.1, 'its deep water lies still', `${(fast / n).toFixed(3)} m/s on average`);
+  check(f.fedIn - fed0 > 100 && d.held > 0.5 * (f.fedIn - fed0) && d.fullness > 0, 'the pump keeps feeding sand, and the reservoir holds it', `${(f.fedIn - fed0).toFixed(0)} m³ fed, ${d.held.toFixed(0)} m³ held, ${(d.fullness * 100).toFixed(1)}% full`);
+  let headA = 0, headB = 0;
+  for (let y = 0; y < 15; y++) for (let x = 0; x < W; x++) { headA += f.z[y * W + x]; headB += b.flow.z[y * W + x]; }
+  check(headA - headB > 50, 'a delta builds at its head', `${((headA - headB) * 16).toFixed(0)} m³ higher there than without the dam`);
+  const fr = a.frame(0.001);
+  check(fr.things.some((t) => t.kind === 'dam' && t.line && t.fullness >= 0) && fr.stats.dams === 1, 'frames carry the dam and how full it is');
+  // Its state comes back through a save, and the water it calms with it.
+  const r = Simulation.fromState(structuredClone(a.saveState()));
+  check(r.things.some((t) => t.kind === 'dam' && t.watch.length === d.watch.length) && r.flow.still.reduce((x, v) => x + v, 0) === d.watch.length, 'and comes back through a save');
+  // Taken away: the ground under it as it was.
+  const under = d.under;
+  a.remove(mid);
+  check(!a.things.some((t) => t.kind === 'dam') && under.cells.every((j, k) => f.z[j] === under.z[k] && !f.placed[j]) && f.still.every((v) => v === 0), 'Remove takes it away, and the ground under it comes back');
+  const held = () => d.watch.reduce((x, j, k) => x + f.z[j] - d.base[k], 0) * 16;
+  const h0 = held();
+  run(a, 0.9);
+  check(held() < h0, 'and the reservoir’s sand flushes out', `${h0.toFixed(0)} → ${held().toFixed(0)} m³`);
+}
+
+// Remove: rock and bridges go, the ground under them comes back; a field
+// stops being kept.
+{
+  const s = new Simulation('remove-1');
+  for (let k = 0; k < 100; k++) s.step(100);
+  const f = s.flow, W = s.W;
+  const j = 60 * W + 30, z0 = f.z[j], r0 = f.rock[j];
+  s.block(j);
+  s.remove(j);
+  check(f.z[j] === z0 && f.rock[j] === r0 && !f.placed[j], 'Remove takes away a block of rock');
+  const field = s.place('field', 40 * W + 20);
+  s.remove(40 * W + 20);
+  check(!s.things.includes(field) && field.cells.every((c) => !f.noTrees[c]), 'and a field');
+  const bridge = s.place('bridge', 0, [[50, 120], [80, 120]]);
+  const piers = bridge.piers.slice();
+  s.remove(piers[0]);
+  check(!s.things.includes(bridge) && piers.every((c) => !f.placed[c]), 'and a bridge’s piers');
+  check(s.remove(5) === null, 'and nothing where nothing was put');
+}
+
+// Gauges: they read the flow and the sand passing them, sample as time
+// goes, and come back through a save.
+{
+  const s = new Simulation('gauge-1');
+  while (s.years < 0.1) s.step(20000);
+  const f = s.flow, W = s.W, y = 60;
+  let at = y * W;
+  for (let x = 0; x < W; x++) if (f.h[y * W + x] > f.h[at]) at = y * W + x;
+  const g = s.place('gauge', at);
+  const dry = s.place('gauge', 60 * W + 1);
+  while (s.years < 0.2) s.step(20000);
+  const r = s.gaugeAt(at);
+  check(g.n === 1 && dry.n === 2 && g.series.level.length > 20, 'gauges go down numbered and sample as time goes', `${g.series.level.length} samples`);
+  // (The flow through the row's faces: the pump's own flow takes a while
+  // to get there, on the water's clock.)
+  let through = 0;
+  for (let x = 0; x < W; x++) through += ((f.qy[y * W + x] + f.qy[(y + 1) * W + x]) / 2) * f.dx;
+  check(Math.abs(r.flow - through) < 0.1 * Math.abs(through) && through > 0.3 * f.inflow, 'a gauge on the river reads the flow coming down it', `${r.flow.toFixed(1)} m³/s, ${through.toFixed(1)} through the row, ${f.inflow.toFixed(1)} pumped in`);
+  check(Number.isFinite(r.level) && r.level > r.bed && g.series.sand.some((v) => v > 0), 'and its water level, bed and sand');
+  check(!Number.isFinite(s.gaugeAt(60 * W + 1).level) || s.gaugeAt(60 * W + 1).flow < 0.2 * f.inflow, 'one on the bank reads little or nothing');
+  for (let k = 0; k < 4; k++) s.place('gauge', 30 * W + 10 * k);
+  check(s.things.filter((t) => t.kind === 'gauge').length === 4, 'no more than four');
+  const back = Simulation.fromState(structuredClone(s.saveState()));
+  const bg = back.things.filter((t) => t.kind === 'gauge');
+  check(bg.length === 4 && bg.every((t) => t.series && Array.isArray(t.series.level)), 'and they come back through a save');
+  const fr = s.frame(0.001);
+  check(fr.things.filter((t) => t.kind === 'gauge').every((t) => t.series.flow.length === t.series.level.length), 'frames carry their readings');
+}
+
 // Frames.
 {
   const s = new Simulation('frame-1');

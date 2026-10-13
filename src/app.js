@@ -337,14 +337,15 @@ function fmtVolume(v) {
 }
 
 // "Houses: 2 fine, 1 flooded. Fields: 1 fine."
-const THING_NAMES = { house: 'Houses', field: 'Fields', bridge: 'Bridges' };
+const THING_NAMES = { house: 'Houses', field: 'Fields', bridge: 'Bridges', dam: 'Dams' };
 function thingsSummary(things) {
   const parts = [];
-  for (const kind of ['house', 'field', 'bridge']) {
+  for (const kind of ['house', 'field', 'bridge', 'dam']) {
     const of = things.filter((t) => t.kind === kind);
     if (!of.length) continue;
     const by = {};
-    for (const t of of) by[t.state] = (by[t.state] || 0) + 1;
+    // A dam filling says how full.
+    for (const t of of) { const s = t.kind === 'dam' && t.state === 'filling' ? `filling (${n0.format(t.fullness * 100)}% full)` : t.state; by[s] = (by[s] || 0) + 1; }
     parts.push(`${THING_NAMES[kind]}: ${Object.entries(by).map(([s, n]) => `${n} ${s}`).join(', ')}.`);
   }
   return parts.join(' ');
@@ -370,8 +371,11 @@ function drawSlow(f) {
   $('s-mudsea').textContent = st.mudToSea >= 0.5 ? `${n0.format(st.mudToSea)} m³/day` : 'none yet';
   $('s-mudlaid').textContent = st.mudLaid > 0 ? fmtVolume(st.mudLaid) : 'none yet';
   $('s-slides').textContent = st.slides ? n0.format(st.slides) : 'none yet';
-  $('things-line').hidden = !(f.things && f.things.length);
-  if (f.things && f.things.length) $('things-line').textContent = thingsSummary(f.things);
+  const summary = f.things ? thingsSummary(f.things) : '';
+  $('things-line').hidden = !summary;
+  $('things-line').textContent = summary;
+  $('s-dams-row').hidden = !st.dams;
+  if (st.dams) $('s-dams').textContent = `${fmtVolume(Math.max(0, st.damHeld))} of sand`;
 
   if (!tokens) readTokens();
   const { water, soft, grid } = tokens;
@@ -394,6 +398,52 @@ function drawCharts(f) {
   $('section-hint').hidden = !!s;
   $('section-len').textContent = s ? `${n0.format(s.length)} m, A to B` : '';
   if (s) drawProfile($('section'), s, colors, ['A', 'B']);
+  drawGauges(f, colors);
+}
+
+// Each gauge: its water level over the bed (and the bed when it was put
+// down), and the flow and the sand passing it, over the time since.
+const gaugeEls = new Map();
+function drawGauges(f, colors) {
+  const gauges = (f.things || []).filter((t) => t.kind === 'gauge').sort((a, b) => a.n - b.n);
+  $('gauges-hint').hidden = gauges.length > 0;
+  const box = $('gauges');
+  const ids = new Set(gauges.map((g) => g.id));
+  for (const [id, els] of gaugeEls) if (!ids.has(id)) { els.root.remove(); gaugeEls.delete(id); }
+  for (const g of gauges) {
+    let els = gaugeEls.get(g.id);
+    if (!els) {
+      const root = el('figure', 'chart gauge');
+      const head = el('figcaption');
+      const name = el('span', '', `Gauge ${g.n}`), val = el('span', 'val');
+      head.append(name, val);
+      const level = el('canvas', 'level');
+      level.setAttribute('aria-label', `Gauge ${g.n}: the water level and the bed over time`);
+      const sparks = el('div', 'sparks');
+      const spark = (label) => {
+        const fig = el('figure'), cap = el('figcaption'), v = el('span', 'val'), c = el('canvas');
+        cap.append(el('span', '', label), v);
+        c.setAttribute('aria-label', `Gauge ${g.n}: ${label.toLowerCase()} over time`);
+        fig.append(cap, c);
+        sparks.append(fig);
+        return { v, c };
+      };
+      const flow = spark('Flow'), sand = spark('Sand');
+      root.append(head, level, sparks);
+      els = { root, val, level, flow, sand };
+      gaugeEls.set(g.id, els);
+    }
+    box.append(els.root);   // in number order
+    const s = g.series, n = s.level.length;
+    const lv = s.level[n - 1];
+    els.val.textContent = Number.isFinite(lv) ? `${n1.format(lv - s.bed[n - 1])} m deep` : 'dry';
+    const span = formatSpan(n * g.every);
+    drawProfile(els.level, { bed: s.bed, water: s.level, start: s.bed.map(() => g.bed0) }, colors, [`−${span}`, 'now']);
+    drawSpark(els.flow.c, s.flow, { color: tokens.water, fill: tokens.soft, grid: tokens.grid, zeroLine: 0 });
+    drawSpark(els.sand.c, s.sand, { color: tokens.bed, fill: tokens.bedFill, grid: tokens.grid, zeroLine: 0 });
+    els.flow.v.textContent = `${n1.format(s.flow[n - 1] || 0)} m³/s`;
+    els.sand.v.textContent = `${n0.format(s.sand[n - 1] || 0)} m³/day`;
+  }
 }
 
 buildRateSelect();
@@ -799,11 +849,26 @@ function dropAt(wx, wy) {
   }
   else if (armed === 'block') worker.postMessage({ type: 'block', i });
   else if (armed === 'pump') worker.postMessage({ type: 'pump', x: wx });
-  else if (armed === 'house' || armed === 'field') worker.postMessage({ type: 'place', kind: armed, i });
+  else if (armed === 'house' || armed === 'field' || armed === 'gauge') {
+    worker.postMessage({ type: 'place', kind: armed, i });
+    if (armed === 'gauge') gaugeNote();
+  }
+  else if (armed === 'remove') worker.postMessage({ type: 'remove', i });
 }
 
-const SHAPERS = new Set(['raise', 'lower', 'dig', 'section', 'bridge']);
-const PLACES = new Set(['block', 'house', 'field', 'bridge']);
+// A gauge placed: say once where its chart is.
+let gaugeNoted = false;
+function gaugeNote() {
+  if (gaugeNoted) return;
+  gaugeNoted = true;
+  $('tools-hint').textContent = 'Gauge placed. Its chart is in the Profile tab.';
+}
+
+const SHAPERS = new Set(['raise', 'lower', 'dig', 'section', 'bridge', 'dam']);
+const PLACES = new Set(['block', 'house', 'field', 'bridge', 'dam', 'gauge', 'remove']);
+// Lines drawn on the map, rather than brushes.
+const LINES = new Set(['dig', 'section', 'bridge', 'dam']);
+let damSize = 'medium';
 let placeKind = 'house';
 const BRUSH_MS = 100;
 let brushSize = 'big';
@@ -818,6 +883,7 @@ function setArmed(kind) {
   $('place-row').hidden = !PLACES.has(kind);
   for (const b of document.querySelectorAll('#place-row button')) b.setAttribute('aria-pressed', b.dataset.place === kind ? 'true' : 'false');
   $('brush-row').hidden = !(kind === 'raise' || kind === 'lower');
+  $('dam-row').hidden = kind !== 'dam';
   $('strength-row').hidden = !(kind === 'raise' || kind === 'lower');
   const names = {
     raise: 'Hold a finger on the map to pile sand there.', lower: 'Hold a finger on the map to scoop sand away.',
@@ -825,6 +891,9 @@ function setArmed(kind) {
     house: 'Tap the map to put a house there. It turns amber when flooded, red when the river undercuts it.',
     field: 'Tap the map to plant a field there. It turns amber when flooded or when the river cuts into it or buries it in sand.',
     bridge: 'Draw a line across the river to build a bridge, with piers in it. It turns red when the river scours round its piers, amber when the river leaves it.',
+    dam: 'Draw a line across the valley to build a dam. A reservoir fills behind it and silts up; below it the river runs short of sand and cuts down. Draw it bank to bank, or the river goes round it.',
+    gauge: 'Tap the river to put a gauge there: its water level, flow and sand are charted in the Profile tab.',
+    remove: 'Tap a block of rock, a dam, a bridge, a house, a field or a gauge to take it away.',
     storm: 'Tap the map to park a storm over the valley.', pump: 'Tap the map to move the pump along the top edge, above where you tap.', section: 'Draw a line across the river to see its cross-section.',
   };
   $('tools-hint').textContent = kind ? `${names[kind]} Two fingers still move the map.` : '';
@@ -843,12 +912,12 @@ function startShaping(e) {
   const world = worldAt(e.clientX, e.clientY);
   shaping = { kind: armed, world, pts: world ? [world] : [], timer: null };
   // While shaping the ground, the river's bed runs in real time.
-  if (armed !== 'section' && armed !== 'bridge') worker.postMessage({ type: 'hold', on: true });
+  if (armed !== 'section' && armed !== 'bridge' && armed !== 'dam') worker.postMessage({ type: 'hold', on: true });
   if (armed === 'raise' || armed === 'lower') {
     // Remember the ground as it was, to outline what the stroke moves.
     renderer.marked = last ? { base: Float32Array.from(last.z), frame: last, box: null, until: Infinity } : null;
   }
-  if (armed === 'dig' || armed === 'section' || armed === 'bridge') {
+  if (LINES.has(armed)) {
     renderer.digPath = shaping.pts;
     renderer.digKind = armed;
     startEffects();
@@ -876,7 +945,7 @@ function moveShaping(e) {
   const world = worldAt(e.clientX, e.clientY);
   if (!world) return;
   shaping.world = world;
-  if (shaping.kind === 'dig' || shaping.kind === 'section' || shaping.kind === 'bridge') {
+  if (LINES.has(shaping.kind)) {
     const p = shaping.pts[shaping.pts.length - 1];
     if (!p || Math.hypot(world[0] - p[0], world[1] - p[1]) >= 0.4) shaping.pts.push(world);
     startEffects();
@@ -886,11 +955,11 @@ function moveShaping(e) {
 function endShaping(cancelled) {
   if (!shaping) return;
   clearInterval(shaping.timer);
-  if (shaping.kind !== 'section' && shaping.kind !== 'bridge') worker.postMessage({ type: 'hold', on: false });
+  if (shaping.kind !== 'section' && shaping.kind !== 'bridge' && shaping.kind !== 'dam') worker.postMessage({ type: 'hold', on: false });
   if (renderer.marked) renderer.marked.until = performance.now() + 1800;
   if (!cancelled && shaping.pts.length >= 2) {
     if (shaping.kind === 'dig') worker.postMessage({ type: 'dig', points: shaping.pts });
-    if (shaping.kind === 'bridge') worker.postMessage({ type: 'place', kind: 'bridge', points: [shaping.pts[0], shaping.pts[shaping.pts.length - 1]] });
+    if (shaping.kind === 'bridge' || shaping.kind === 'dam') worker.postMessage({ type: 'place', kind: shaping.kind, points: [shaping.pts[0], shaping.pts[shaping.pts.length - 1]], size: damSize });
     if (shaping.kind === 'section') {
       worker.postMessage({ type: 'section', points: shaping.pts });
       showTab('profile');
@@ -945,6 +1014,12 @@ for (const b of document.querySelectorAll('.tool-rail .tool')) {
     setArmed(armed === kind || (b.dataset.kind === 'place' && PLACES.has(armed)) ? null : kind);
   });
 }
+for (const b of document.querySelectorAll('#dam-row button')) {
+  b.addEventListener('click', () => {
+    damSize = b.dataset.dam;
+    for (const o of document.querySelectorAll('#dam-row button')) o.setAttribute('aria-pressed', o === b ? 'true' : 'false');
+  });
+}
 for (const b of document.querySelectorAll('#place-row button')) {
   b.addEventListener('click', () => { placeKind = b.dataset.place; setArmed(placeKind); });
 }
@@ -992,8 +1067,14 @@ function renderInspect(info) {
   if (info.trees > 0.01) fact('Trees', `${n0.format(info.trees * 100)}%`);
   const t = info.thing;
   if (t) {
-    const what = { house: 'A house', field: 'A field', bridge: 'A bridge' }[t.kind];
-    fact(what, t.kind === 'field' ? `${t.state}: ${n0.format(t.flooded * 100)}% flooded, ${n0.format(t.eroded * 100)}% washed away, ${n0.format(t.buried * 100)}% buried` : t.state);
+    if (t.kind === 'dam') fact(`A dam, ${n0.format(t.height)} m high`, `${t.state === 'filling' ? `${n0.format(t.fullness * 100)}% full` : t.state}; ${fmtVolume(Math.max(0, t.held))} of sand held behind it`);
+    else if (t.kind === 'gauge') {
+      const r = t.now;
+      fact(`Gauge ${t.n}`, Number.isFinite(r.level) ? `water ${n1.format(r.level - r.bed)} m deep, ${n1.format(r.flow)} m³/s, ${n0.format(r.sand)} m³/day of sand` : 'dry here');
+    } else {
+      const what = { house: 'A house', field: 'A field', bridge: 'A bridge' }[t.kind];
+      fact(what, t.kind === 'field' ? `${t.state}: ${n0.format(t.flooded * 100)}% flooded, ${n0.format(t.eroded * 100)}% washed away, ${n0.format(t.buried * 100)}% buried` : t.state);
+    }
   }
 }
 
