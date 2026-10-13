@@ -788,7 +788,7 @@ export class GpuRiver {
     const x0 = Math.max(0, Math.round(flow.inletX - flow.inletHalf)), x1 = Math.min(W - 1, Math.round(flow.inletX + flow.inletHalf));
     this.U = {
       uW: W, uH: H, uHB: H - SPONGE, uDx: flow.dx, uPW: [WATER.N_PLANT, WATER.N_TREE],
-      uSeaY: flow.seaY, uSpongeY: H - SPONGE, uSea: flow.sea, uSeaT: TUNE.seaDamp,
+      uSeaY: flow.seaY, uSpongeY: H - SPONGE, uSea: flow.sea, uSeaT: TUNE.seaDamp, uStillT: TUNE.stillDamp,
       uCin: flow.mudIn, uRain: flow.rainRate, uSoak: WATER.INFILTRATE, uFrMax: TUNE.frMax,
       uX0: x0, uX1: x1, uQin: flow.inflow / ((x1 - x0 + 1) * flow.dx), uCfl: WATER.CFL, uMaxDt: WATER.MAX_DT,
       uMorph: morph, uSupply: flow.supply, uInflow: flow.inflow, uDzMax: TUNE.dzMax, uHeld: TUNE.held,

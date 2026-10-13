@@ -5,10 +5,13 @@ import { SEC_PER_YR } from '../src/flow.js';
 const fails = [];
 const check = (ok, l, e = '') => { console.log(`${ok ? 'PASS' : 'FAIL'}  ${l}${e ? '  — ' + e : ''}`); if (!ok) fails.push(l); };
 const sum = (a) => { let s = 0; for (const v of a) s += v; return s; };
+// Most checks are of the water and the sand, on the plain without its hills
+// (the hills have their own checks below).
+const flatWorld = (seed) => { const s = new Simulation(seed); s.set('hills', 0); return s; };
 
 // Water: with the bed held still, what comes in leaves at the sea.
 {
-  const s = new Simulation('water-1');
+  const s = flatWorld('water-1');
   s.flow.sediment = false;
   s.weather.update = () => {}; s.weather.intensity = 0; s.weather.upstream = 0;
   for (let k = 0; k < 9000; k++) s.step(1);
@@ -54,7 +57,7 @@ const sum = (a) => { let s = 0; for (const v of a) s += v; return s; };
 
 // Tools.
 {
-  const s = new Simulation('tools-1');
+  const s = flatWorld('tools-1');
   const f = s.flow, W = s.W;
   for (let k = 0; k < 2000; k++) s.step(200);
   const i = 120 * W + 20;           // on the floodplain, left of the river
@@ -131,7 +134,7 @@ const sum = (a) => { let s = 0; for (const v of a) s += v; return s; };
 // Over half a year, floods leave the most mud beside the channel: levees.
 // And the channel's bed is coarser than the plain's.
 {
-  const s = new Simulation('prof-1');
+  const s = flatWorld('prof-1');
   const f = s.flow, W = s.W;
   while (s.years < 0.5) s.step(20000);
   const m = s.measure();
@@ -162,7 +165,7 @@ const sum = (a) => { let s = 0; for (const v of a) s += v; return s; };
 // Things to protect: a house on the channel's bank is undercut, one far off
 // stays fine, and they come back through a save.
 {
-  const s = new Simulation('prof-1');
+  const s = flatWorld('prof-1');
   const W = s.W;
   while (s.years < 0.3) s.step(20000);
   const m = s.measure();
@@ -243,7 +246,7 @@ const sum = (a) => { let s = 0; for (const v of a) s += v; return s; };
 // Landslides: a tall, steep pile beside the river gives way, and what falls
 // lands in the river; nothing is made or lost (the balances above cover it).
 {
-  const s = new Simulation('slide-1');
+  const s = flatWorld('slide-1');
   const f = s.flow, W = s.W;
   for (let k = 0; k < 2000; k++) s.step(2000);
   const line = s.measure().line[100];
@@ -319,13 +322,63 @@ const sum = (a) => { let s = 0; for (const v of a) s += v; return s; };
   check(s.settings.flow === 80, 'settings stay in their range');
 }
 
+// Hills: spurs and knolls stand on the plain to start with, some with
+// rock just under them; the slider raises and lowers them, and the rock in
+// the rocky ones' cores with them, but not rock put down by hand.
+{
+  const s = new Simulation('hills-1');
+  const f = s.flow, W = s.W, t = s.table;
+  let top = 0, cores = 0, earth = 0;
+  for (let i = 0; i < s.N; i++) {
+    if (t.hillShape[i] > 0.9) top++;
+    if (t.hillCore[i] === 1) cores++;
+    else if (t.hillShape[i] > 0.5) earth++;
+  }
+  check(s.settings.hills === 5 && top > 50 && cores > 50 && earth > 50, 'a new world has hills on its plain, some rocky and some of earth', `${top} cells near their tops, ${cores} over rock, ${earth} of earth`);
+  let rockyOk = true;
+  for (let i = 0; i < s.N; i++) if (t.hillCore[i] === 1 && Math.abs(f.z[i] - f.rock[i] - 1.5) > 1e-3) rockyOk = false;
+  check(rockyOk, 'the rocky ones with bedrock a metre and a half down');
+  const z0 = Float32Array.from(f.z), r0 = Float32Array.from(f.rock);
+  const j = 200 * W + 64;
+  s.block(j);
+  const blockZ = f.z[j];
+  s.set('hills', 0);
+  let flat = 0;
+  for (let i = 0; i < s.N; i++) if (i !== j && !f.placed[i]) flat = Math.max(flat, Math.abs(z0[i] - 5 * t.hillShape[i] - f.z[i]));
+  check(flat < 1e-3 && f.z[j] === blockZ, 'Hills at 0 leaves the flat plain, and rock put down by hand where it was', `${flat.toExponential(1)} m off`);
+  let sunk = Infinity;
+  for (let i = 0; i < s.N; i++) if (t.hillCore[i] === 1 && !f.placed[i]) sunk = Math.min(sunk, (f.z[i] - f.rock[i]) - (z0[i] - r0[i]));
+  check(Math.abs(sunk - 4.5) < 0.01, 'with the rocky hills’ rock sunk back to the plain’s depth', `${sunk.toFixed(2)} m deeper under the ground than with the hills up`);
+  s.set('hills', 12);
+  let ok = true;
+  for (let i = 0; i < s.N; i++) {
+    if (f.placed[i]) continue;
+    if (Math.abs(f.z[i] - (z0[i] + 7 * t.hillShape[i])) > 1e-3) ok = false;
+    if (t.hillCore[i] === 1 && Math.abs(f.z[i] - f.rock[i] - 1.5) > 1e-3) ok = false;
+    if (f.rock[i] > f.z[i] + 1e-6) ok = false;
+  }
+  check(ok, 'raised, they rise, their rocky cores with them, and no rock stands above the ground');
+  const r = Simulation.fromState(structuredClone(s.saveState()));
+  check(r.settings.hills === 12 && r.hills === 12 && r.flow.z.every((v, i) => v === f.z[i]), 'and they come back through a save');
+  const old = structuredClone(s.saveState());
+  delete old.hills; delete old.settings.hills;
+  const o = Simulation.fromState(old);
+  check(o.settings.hills === 0 && o.hills === 0, 'a world saved before the hills loads as it was, with Hills at 0');
+  // The river winds round them.
+  const a = new Simulation('hills-1'), b = new Simulation('hills-1');
+  b.set('hills', 0);
+  while (a.years < 0.15) { a.step(20000); b.step(20000); }
+  const ma = a.measure(), mb = b.measure();
+  check(ma.sinuosity > mb.sinuosity + 0.15, 'the river winds round the hills', `sinuosity ${ma.sinuosity.toFixed(2)}, ${mb.sinuosity.toFixed(2)} on the flat plain`);
+}
+
 // Dams: a reservoir backs up behind one (full to its spillway from the
 // start), the pump's sand builds a delta into it, its deep water lies still,
 // and the river below runs short of sand and cuts down. Taken away, the
 // ground under it comes back and the reservoir's sand flushes out.
 {
   const run = (s, y) => { while (s.years < y) s.step(20000); };
-  const make = (dam) => { const s = new Simulation('dam-1'); run(s, 0.15); if (dam) s.place('dam', 0, [[0.5, 110.5], [127.5, 110.5]], 'medium'); return s; };
+  const make = (dam) => { const s = flatWorld('dam-1'); run(s, 0.15); if (dam) s.place('dam', 0, [[0.5, 110.5], [127.5, 110.5]], 'medium'); return s; };
   const a = make(true), b = make(false);
   const f = a.flow, W = a.W;
   const d = a.things.find((t) => t.kind === 'dam');
@@ -382,7 +435,7 @@ const sum = (a) => { let s = 0; for (const v of a) s += v; return s; };
 // Gauges: they read the flow and the sand passing them, sample as time
 // goes, and come back through a save.
 {
-  const s = new Simulation('gauge-1');
+  const s = flatWorld('gauge-1');
   while (s.years < 0.1) s.step(20000);
   const f = s.flow, W = s.W, y = 60;
   let at = y * W;

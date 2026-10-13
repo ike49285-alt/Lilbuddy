@@ -36,7 +36,10 @@ if (years > 0) {
   window.result = out;
 } else try {
   const base = new Simulation(seed);
+  if (q.has('hills')) base.set('hills', Number(q.get('hills')));
   for (let k = 0; k < warm; k++) base.step(morph);
+  // A dam's reservoir, its still water blended face to face.
+  if (q.get('dam')) { base.place('dam', 0, [[0.5, 110.5], [127.5, 110.5]], 'medium'); for (let k = 0; k < 100; k++) base.step(morph); }
   const state = base.saveState();
   const cpu = Simulation.fromState(structuredClone(state));
   const gpu = Simulation.fromState(structuredClone(state));
@@ -56,7 +59,13 @@ if (years > 0) {
     ga += a.z[i]; gb += b.z[i];
     sa += a.fm[i] * a.z[i]; sb += b.fm[i] * b.z[i];
     za = Math.max(za, Math.abs(a.z[i] - b.z[i]));
-    if (a.h[i] > 0.02 || b.h[i] > 0.02) { wet++; const d = Math.abs(a.h[i] - b.h[i]); if (d < 0.01) close++; worst = Math.max(worst, d); }
+    if (a.h[i] > 0.02 || b.h[i] > 0.02) { wet++; const d = Math.abs(a.h[i] - b.h[i]); if (d < 0.01) close++; if (d > worst) { worst = d; out.worstAt = [i % a.W, (i / a.W) | 0, a.h[i], b.h[i], a.z[i], b.z[i], a.still[i]]; } }
+  }
+  if (a.hasStill) {
+    // The reservoir's surface, each way.
+    let n = 0, sa = 0, sb = 0, dev = 0, far = 0;
+    for (let i = 0; i < a.N; i++) if (a.still[i] && a.h[i] > 0.3) { n++; sa += a.h[i] + a.z[i]; sb += b.h[i] + b.z[i]; const d = Math.abs(a.h[i] + a.z[i] - b.h[i] - b.z[i]); dev += d; if (d > 0.1) far++; }
+    out.lake = { n, cpu: sa / n, gpu: sb / n, meanDiff: dev / n, over10cm: far };
   }
   Object.assign(out, { wet, close: close / wet, worst, water: [va * 16, vb * 16], mud: [ma * 16, mb * 16], bedDiff: za, years: [cpu.years, gpu.years], dt: [a.dt, b.dt],
     ground: [ga * 16, gb * 16], fedIn: [a.fedIn, b.fedIn], toSea: [a.toSea, b.toSea], mudLaid: [a.mudLaid, b.mudLaid], mNow: [a.mNow, b.mNow] });

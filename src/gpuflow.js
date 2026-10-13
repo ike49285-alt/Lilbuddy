@@ -45,30 +45,45 @@ float faceFlow(float q, float dt, float zi, float zj, float hi, float hj, float 
 // out at sea and in a reservoir's deep water (uP's third channel 2 or
 // more), currents fade; in the sponge rows by the open sea, more.
 uniform int uSeaY, uSpongeY;
-uniform float uSea, uSeaT;
+uniform float uSea, uSeaT, uStillT;
 float damping(int x, int y, float dtPrev) {
   float d = 1.0;
   bool still = texelFetch(uP, ivec2(x, y), 0).b > 1.5 && sAt(x, y).x > ${WATER.STILL_H.toFixed(6)};
-  if (((y > uSeaY && zAt(x, y) < uSea - 0.3) || still) && uSeaT > 0.0) d *= 1.0 - dtPrev / uSeaT;
+  if (still) { if (uStillT > 0.0) d *= 1.0 - dtPrev / uStillT; }
+  else if (y > uSeaY && zAt(x, y) < uSea - 0.3 && uSeaT > 0.0) d *= 1.0 - dtPrev / uSeaT;
   if (y >= uSpongeY) d *= 1.0 - 0.5 * float(y - uSpongeY + 1) / ${SPONGE.toFixed(1)};
   return d;
 }
 `;
 
-const FACE_X = HEAD + FACE + `
+// In still water each face's flow is blended with its neighbours' (de
+// Almeida et al. 2012): deep water with little friction would otherwise
+// wobble from cell to cell.
+const BLEND = `
+bool stillFace(int xi, int yi, int xj, int yj) {
+  float sh = ${WATER.STILL_H.toFixed(6)};
+  return (texelFetch(uP, ivec2(xi, yi), 0).b > 1.5 || texelFetch(uP, ivec2(xj, yj), 0).b > 1.5) && sAt(xi, yi).x > sh && sAt(xj, yj).x > sh;
+}
+float qxWas(int fx, int y, float dtPrev) { return fx <= 0 || fx >= uW ? 0.0 : texelFetch(uQX, ivec2(fx, y), 0).r * damping(fx, y, dtPrev); }
+float qyWas(int x, int fy, float dtPrev) { return fy < 0 || fy >= uH ? 0.0 : texelFetch(uQY, ivec2(x, fy), 0).r * damping(x, fy, dtPrev); }
+#define THETA ${WATER.THETA.toFixed(6)}
+`;
+
+const FACE_X = HEAD + FACE + BLEND + `
 out vec4 o;
 void main() {
   ivec2 p = ivec2(gl_FragCoord.xy);
   int fx = p.x, y = p.y;
   if (fx <= 0 || fx >= uW) { o = vec4(0.0); return; }
   vec4 DT = texelFetch(uDT, ivec2(0), 0);
-  float q = texelFetch(uQX, p, 0).r * damping(fx, y, DT.y);
+  float q = qxWas(fx, y, DT.y);
+  if (stillFace(fx - 1, y, fx, y)) q = THETA * q + (1.0 - THETA) * 0.5 * (qxWas(fx - 1, y, DT.y) + qxWas(fx + 1, y, DT.y));
   int xi = fx - 1, xj = fx;
   float n = N_BARE + 0.5 * (pAt(xi, y) + pAt(xj, y));
   o = vec4(faceFlow(q, DT.x, zAt(xi, y), zAt(xj, y), sAt(xi, y).x, sAt(xj, y).x, n), 0.0, 0.0, 0.0);
 }`;
 
-const FACE_Y = HEAD + FACE + `
+const FACE_Y = HEAD + FACE + BLEND + `
 uniform int uX0, uX1;
 uniform float uQin;
 out vec4 o;
@@ -79,7 +94,8 @@ void main() {
   if (fy == 0) { o = vec4(x >= uX0 && x <= uX1 ? uQin : 0.0, 0.0, 0.0, 0.0); return; }
   if (fy >= uH) { o = vec4(0.0); return; }
   vec4 DT = texelFetch(uDT, ivec2(0), 0);
-  float q = texelFetch(uQY, p, 0).r * damping(x, fy, DT.y);
+  float q = qyWas(x, fy, DT.y);
+  if (stillFace(x, fy - 1, x, fy)) q = THETA * q + (1.0 - THETA) * 0.5 * (qyWas(x, fy - 1, DT.y) + qyWas(x, fy + 1, DT.y));
   int yi = fy - 1, yj = fy;
   float n = N_BARE + 0.5 * (pAt(x, yi) + pAt(x, yj));
   o = vec4(faceFlow(q, DT.x, zAt(x, yi), zAt(x, yj), sAt(x, yi).x, sAt(x, yj).x, n), 0.0, 0.0, 0.0);

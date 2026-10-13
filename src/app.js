@@ -990,6 +990,7 @@ const SLIDERS = {
   mud: ['mud', 10, (v) => `${n1.format(v / 10)} g/L`],
   rock: ['rock', 1, (v) => `${v} m down`],
   lift: ['lift', 1, (v) => `+${v} m`],
+  hills: ['hills', 1, (v) => (v > 0 ? `${n1.format(v)} m high` : 'flat')],
 };
 for (const [id, [key, scale, label]] of Object.entries(SLIDERS)) {
   $(id).addEventListener('input', () => { $(`${id}-out`).textContent = label(Number($(id).value)); });

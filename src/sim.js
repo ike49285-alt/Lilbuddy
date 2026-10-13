@@ -2,7 +2,7 @@
 // clock, and what the page can do to it.
 
 import { makeRng, hashArrays } from './rng.js';
-import { makeTable, CELL_M, TILT, PLAIN_MUD, PLAIN_GRAVEL } from './table.js';
+import { makeTable, CELL_M, TILT, HILLS, coreRise, PLAIN_MUD, PLAIN_GRAVEL } from './table.js';
 import { Flow, WET, SHIELDS_C, SEC_PER_YR, SPONGE } from './flow.js';
 import { Weather } from './weather.js';
 
@@ -36,6 +36,7 @@ export const SETTINGS = {
   mud: [0.2, 0, 2],           // grams of mud in each litre of the pump's water
   rock: [6, 1, 60],           // metres of loose ground over the bedrock under the plain
   lift: [0, 0, 30],           // metres the land is raised above the sea (the sea floor stays)
+  hills: [HILLS, 0, 15],      // metres the hills stand (0: the flat plain)
 };
 const MUD_DENSITY = 2650;     // grams a litre of solid mud
 const LIFT_RAMP = 8;          // rows over which raised land drops to the sea floor
@@ -57,6 +58,7 @@ export class Simulation {
     this.tilt = TILT;
     this.rockDepth = SETTINGS.rock[0];   // the bedrock depth the ground was last set to
     this.lift = 0;                       // and how far the land's been raised
+    this.hills = HILLS;                  // and how high the hills stand
     this.epoch = 0;              // bumped whenever the ground is reshaped by hand
     this.events = [];
     this.nextEventId = 1;
@@ -141,22 +143,24 @@ export class Simulation {
 
   // Tilting the table tilts everything on it: the ground, the rock under it
   // and the starting surface it's measured against.
-  // Moves the whole ground of each row up or down by rowDz(y): the bed, the
-  // rock under it, the bed at the start (so cut and fill stay as they were)
+  // Moves the ground up or down, dz(y, i) at cell i of row y, and the rock
+  // under it by drock(y, i) (by as much, unless told otherwise; rock put
+  // down by hand always moves with the ground, and no rock ends up above
+  // it): the bed, the bed at the start (so cut and fill stay as they were)
   // and the ground the things to protect remember.
-  shiftGround(rowDz) {
-    const { W, H } = this;
-    const { z, rock, z0 } = this.flow;
-    const by = new Float64Array(H);
-    for (let y = 0; y < H; y++) by[y] = rowDz(y);
-    for (let y = 0; y < H; y++) {
-      const dz = by[y];
-      if (dz === 0) continue;
-      for (let x = 0; x < W; x++) { const i = y * W + x; z[i] += dz; rock[i] += dz; z0[i] += dz; }
+  shiftGround(dz, drock = dz) {
+    const { W, H, N } = this;
+    const { z, rock, z0, placed } = this.flow;
+    const by = new Float64Array(N), byRock = new Float64Array(N);
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { const i = y * W + x; by[i] = dz(y, i); byRock[i] = placed[i] ? by[i] : drock(y, i); }
+    for (let i = 0; i < N; i++) {
+      if (by[i] === 0 && byRock[i] === 0) continue;
+      z[i] += by[i]; z0[i] += by[i];
+      rock[i] = Math.min(rock[i] + byRock[i], z[i]);
     }
     for (const t of this.things) {
-      t.watch.forEach((j, k) => { t.base[k] += by[(j / W) | 0]; });
-      if (t.under) t.under.cells.forEach((j, k) => { const d = by[(j / W) | 0]; t.under.z[k] += d; t.under.rock[k] += d; });
+      t.watch.forEach((j, k) => { t.base[k] += by[j]; });
+      if (t.under) t.under.cells.forEach((j, k) => { t.under.z[k] += by[j]; t.under.rock[k] = Math.min(t.under.rock[k] + (t.under.placed[k] ? by[j] : byRock[j]), t.under.z[k]); });
     }
     this.thalwegZ0 = this.thalweg(z0, null);
     this.reshaped();
@@ -178,6 +182,15 @@ export class Simulation {
       const d = lift - this.lift;
       this.shiftGround((y) => d * Math.max(0, Math.min(1, (shoreY + LIFT_RAMP / 2 - y) / LIFT_RAMP)));
       this.lift = lift;
+    }
+    // The hills: they rise and fall where they stand, and the rock in the
+    // rocky ones' cores with them (sinking to the plain's as they flatten).
+    const hills = this.settings.hills;
+    if (Math.abs(hills - this.hills) > 1e-9) {
+      const d = hills - this.hills, dc = coreRise(hills) - coreRise(this.hills);
+      const { hillShape, hillCore } = this.table;
+      this.shiftGround((y, i) => d * hillShape[i], (y, i) => hillCore[i] * (d * hillShape[i] + dc));
+      this.hills = hills;
     }
     // The bedrock: all of it moves together, except rock put down by hand,
     // and it never stands above the ground (where the river has cut deeper
@@ -528,6 +541,7 @@ export class Simulation {
     const still = this.flow.still;
     still.fill(0);
     for (const t of this.things) if (t.kind === 'dam') for (const j of t.watch) still[j] = 1;
+    this.flow.hasStill = this.things.some((t) => t.kind === 'dam');
   }
 
   // How each thing is faring. A house is flooded under water, undercut
@@ -904,6 +918,7 @@ export class Simulation {
       tilt: this.tilt,
       rockDepth: this.rockDepth,
       lift: this.lift,
+      hills: this.hills,
       epoch: this.epoch,
       section: this.section ? this.section.slice() : null,
       history: { ...this.history, inflow: this.history.inflow.slice(), sinuosity: this.history.sinuosity.slice() },
@@ -950,6 +965,9 @@ export class Simulation {
     if (s.settings.rock == null) sim.settings.rock = sim.rockDepth;
     sim.lift = s.lift || 0;
     if (s.settings.lift == null) sim.settings.lift = sim.lift;
+    // A world from before the hills is flat, and stays so till they're raised.
+    sim.hills = s.hills != null ? s.hills : 0;
+    if (s.settings.hills == null) sim.settings.hills = sim.hills;
     sim.epoch = s.epoch;
     sim.section = s.section;
     sim.history = { ...s.history, inflow: s.history.inflow.slice(), sinuosity: s.history.sinuosity.slice() };

@@ -50,7 +50,11 @@ const N_TREE = 0.08;              // added by full tree cover
 const CFL = 0.7;
 const MAX_DT = 2;                 // seconds
 const FILM = 0.1;                 // water shallower than this doesn't set the step, m
-const STILL_H = 1;                // metres: water deeper than this in a reservoir is still water
+const STILL_H = 0.3;              // metres: water deeper than this in a reservoir is still water
+// In still water each face's flow is blended with its neighbours' (de
+// Almeida et al. 2012), keeping this much of its own: deep water with little
+// friction would otherwise wobble from cell to cell.
+const THETA = 0.8;
 const MARGIN = 3;                 // dry cells worked on beside the water
 export const SPONGE = 6;          // rows along the bottom edge where the open sea soaks up waves and sand
 const BED_EVERY = 2;              // hydraulic steps between moves of the bed
@@ -83,7 +87,8 @@ export const TUNE = {
   rockK: 2e-9,                    // m/s the bedrock wears per W/m² of stream power past its threshold
   rockP: 10,                      // W/m²: the stream power that starts wearing rock
   frMax: 2,                       // the fastest current a cell reports, as a multiple of its wave speed
-  seaDamp: 120,                   // seconds over which currents fade out at sea and in deep reservoirs (0: never)
+  seaDamp: 120,                   // seconds over which currents fade out at sea (0: never)
+  stillDamp: 30,                  // and in a reservoir's deep water (where the water sheet, deep and still, would otherwise wobble cell to cell)
   transport: 3,                   // scales the sand and gravel's transport (calibrated to the river before gravel)
   mudE: 1e-7,                     // m/s of mud lifted per unit of drag past its threshold, from a bed of pure mud
 };
@@ -137,7 +142,7 @@ function dice(step, i) {
 
 // The water's and the bed's constants, for the river on the GPU
 // (gpuflow.js, gpuriver.js).
-export const WATER = { G, FILM, N_BARE, N_PLANT, N_TREE, INFILTRATE, CFL, MAX_DT, STILL_H };
+export const WATER = { G, FILM, N_BARE, N_PLANT, N_TREE, INFILTRATE, CFL, MAX_DT, STILL_H, THETA };
 export const BEDK = {
   D50, RHO, RHO_S, SG, POROSITY, LA, ROCK_SHIELD, MUD_TE, MUD_PLANT, SLOPE_WET, SLOPE_DRY, SLUMP,
   PLANT_DROWN_YR, PLANT_UPROOT, TREE_DROWN_YR, TREE_UPROOT, PLANT_EVERY, BED_EVERY, WC_N, WC_MIN, WC_SAND, WC_GRAVEL,
@@ -287,10 +292,17 @@ export class Flow {
   // --- water ------------------------------------------------------------------
 
   water(dt) {
-    const { W, H, N, z, h, qx, qy, cover, trees, dx, lo, hi } = this;
+    const { W, H, N, z, h, qx, qy, cover, trees, dx, lo, hi, still } = this;
     const W1 = W + 1;
     const gdt = G * dt;
     const dry = WET * 0.5;
+    // With a reservoir, the faces' flows as they were, for the blend.
+    const blend = this.hasStill;
+    if (blend) {
+      if (!this.qxOld) { this.qxOld = new Float32Array(qx.length); this.qyOld = new Float32Array(qy.length); }
+      this.qxOld.set(qx); this.qyOld.set(qy);
+    }
+    const { qxOld, qyOld } = this;
     // Faces across x, between the cells of each row's stretch.
     for (let y = 0; y < H; y++) {
       const row = y * W, frow = y * W1;
@@ -303,6 +315,7 @@ export class Flow {
         if (hf <= dry) { qx[f] = 0; continue; }
         const n = N_BARE + 0.5 * (N_PLANT * (cover[i] + cover[j]) + N_TREE * (trees[i] + trees[j]));
         let q = qx[f];
+        if (blend && (still[i] || still[j]) && h[i] > STILL_H && h[j] > STILL_H) q = THETA * qxOld[f] + (1 - THETA) * 0.5 * (qxOld[f - 1] + qxOld[f + 1]);
         q = (q - gdt * hf * (ej - ei) / dx) / (1 + (gdt * n * n * (q < 0 ? -q : q)) / (hf * hf * cbrt(hf)));
         // No faster than critical flow, and never draining more than is there.
         if (q * q > G * hf * hf * hf) q = (q > 0 ? 1 : -1) * hf * Math.sqrt(G * hf);
@@ -322,6 +335,7 @@ export class Flow {
         if (hf <= dry) { qy[j] = 0; continue; }
         const n = N_BARE + 0.5 * (N_PLANT * (cover[i] + cover[j]) + N_TREE * (trees[i] + trees[j]));
         let q = qy[j];
+        if (blend && (still[i] || still[j]) && h[i] > STILL_H && h[j] > STILL_H) q = THETA * qyOld[j] + (1 - THETA) * 0.5 * (qyOld[j - W] + qyOld[j + W]);
         q = (q - gdt * hf * (ej - ei) / dx) / (1 + (gdt * n * n * (q < 0 ? -q : q)) / (hf * hf * cbrt(hf)));
         if (q * q > G * hf * hf * hf) q = (q > 0 ? 1 : -1) * hf * Math.sqrt(G * hf);
         if (q > 0) { const m = (h[i] * dx * 0.25) / dt; if (q > m) q = m; } else { const m = (h[j] * dx * 0.25) / dt; if (-q > m) q = -m; }
@@ -349,7 +363,8 @@ export class Flow {
     let fed = 0, out = 0;
     // Out at sea, past the river's mouth, and in a reservoir's deep water,
     // currents fade over a couple of minutes, so they don't slosh.
-    const seaY = this.seaY, seaDamp = TUNE.seaDamp > 0 ? 1 - dt / TUNE.seaDamp : 1, deepSea = sea - 0.3, still = this.still;
+    const seaY = this.seaY, seaDamp = TUNE.seaDamp > 0 ? 1 - dt / TUNE.seaDamp : 1, deepSea = sea - 0.3;
+    const stillDamp = TUNE.stillDamp > 0 ? 1 - dt / TUNE.stillDamp : 1;
     const frMax = TUNE.frMax;
     for (let y = 0; y < H; y++) {
       const row = y * W, frow = y * W1;
@@ -379,8 +394,9 @@ export class Flow {
         if (qB !== 0) m -= k * qB * (qB > 0 ? ci : C[i + W]);
         if (m < 0) m = 0;
         if ((y > seaY && z[i] < deepSea) || (still[i] && h[i] > STILL_H)) {
-          if (x > a) qx[frow + x] *= seaDamp;
-          qy[i] *= seaDamp;
+          const damp = still[i] && h[i] > STILL_H ? stillDamp : seaDamp;
+          if (x > a) qx[frow + x] *= damp;
+          qy[i] *= damp;
         }
         if (y >= spongeY) {
           // The open sea: the level relaxes to the sea's, the currents die
