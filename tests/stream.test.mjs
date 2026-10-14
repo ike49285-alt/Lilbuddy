@@ -7,7 +7,7 @@ const check = (ok, l, e = '') => { console.log(`${ok ? 'PASS' : 'FAIL'}  ${l}${e
 const sum = (a) => { let s = 0; for (const v of a) s += v; return s; };
 // Most checks are of the water and the sand, on the plain without its hills
 // (the hills have their own checks below).
-const flatWorld = (seed) => { const s = new Simulation(seed); s.set('hills', 0); return s; };
+const flatWorld = (seed) => new Simulation(seed, { hills: 0 });
 
 // Water: with the bed held still, what comes in leaves at the sea.
 {
@@ -263,7 +263,7 @@ const flatWorld = (seed) => { const s = new Simulation(seed); s.set('hills', 0);
 // Trees: they come up over years on dry, grassed ground, not on wet; and
 // wooded banks wear back more slowly than grassed ones.
 {
-  const s = new Simulation('trees-1');
+  const s = flatWorld('trees-1');
   const f = s.flow, W = s.W;
   const dry = 60 * W + 30, wet = s.H * W - W * 20 + 64;
   f.cover[dry] = 1; f.trees[dry] = 0; f.cover[wet] = 1; f.trees[wet] = 0;
@@ -271,7 +271,7 @@ const flatWorld = (seed) => { const s = new Simulation(seed); s.set('hills', 0);
   for (let k = 1; k <= 60; k++) { f.steps = 16 * k; f.plants(0.1, 0); }   // six years
   check(f.trees[dry] > 0.5 && f.trees[wet] === 0, 'trees grow up over years on dry grassed ground, not in the water', `${(f.trees[dry] * 100).toFixed(0)}% after six years`);
   // The same river, its dry ground all grass or all woods.
-  const base = new Simulation('banks-1');
+  const base = flatWorld('banks-1');
   while (base.years < 0.3) base.step(20000);
   const worn = (wooded) => {
     const t = Simulation.fromState(structuredClone(base.saveState()));
@@ -322,54 +322,61 @@ const flatWorld = (seed) => { const s = new Simulation(seed); s.set('hills', 0);
   check(s.settings.flow === 80, 'settings stay in their range');
 }
 
-// Hills: spurs and knolls stand on the plain to start with, some with
-// rock just under them; the slider raises and lowers them, and the rock in
-// the rocky ones' cores with them, but not rock put down by hand.
+// Hills: rolling ground from noise, hills and hollows, the hollows full of
+// lakes, some hills with rock just under them; the sliders raise, flatten,
+// broaden or shrink it as it runs, and the rock with it, but not rock put
+// down by hand.
 {
   const s = new Simulation('hills-1');
-  const f = s.flow, W = s.W, t = s.table;
-  let top = 0, cores = 0, earth = 0;
+  const f = s.flow, W = s.W, fld = s.table.hills.field(s.hillSize);
+  let up = 0, down = 0, cores = 0, lakes = 0;
   for (let i = 0; i < s.N; i++) {
-    if (t.hillShape[i] > 0.9) top++;
-    if (t.hillCore[i] === 1) cores++;
-    else if (t.hillShape[i] > 0.5) earth++;
+    const g = s.hills * fld.F[i];
+    if (g > 1) up++;
+    if (g < -1) down++;
+    if (fld.core[i] === 1) cores++;
+    if (f.lake[i] && f.h[i] > 0.5) lakes++;
   }
-  check(s.settings.hills === 5 && top > 50 && cores > 50 && earth > 50, 'a new world has hills on its plain, some rocky and some of earth', `${top} cells near their tops, ${cores} over rock, ${earth} of earth`);
+  check(s.settings.hills === 2.5 && s.settings.hillSize === 120 && up > 300 && down > 300 && cores > 50, 'a new world has rolling ground, hills and hollows, some hills rocky', `${up} cells a metre up, ${down} a metre down, ${cores} over rock`);
+  check(lakes > 300, 'its hollows hold lakes, full to where they spill', `${lakes} cells over half a metre deep`);
   let rockyOk = true;
-  for (let i = 0; i < s.N; i++) if (t.hillCore[i] === 1 && Math.abs(f.z[i] - f.rock[i] - 1.5) > 1e-3) rockyOk = false;
+  for (let i = 0; i < s.N; i++) if (fld.core[i] === 1 && Math.abs(f.z[i] - f.rock[i] - 1.5) > 1e-3) rockyOk = false;
   check(rockyOk, 'the rocky ones with bedrock a metre and a half down');
-  const z0 = Float32Array.from(f.z), r0 = Float32Array.from(f.rock);
+  const z0 = Float32Array.from(f.z);
   const j = 200 * W + 64;
   s.block(j);
   const blockZ = f.z[j];
   s.set('hills', 0);
-  let flat = 0;
-  for (let i = 0; i < s.N; i++) if (i !== j && !f.placed[i]) flat = Math.max(flat, Math.abs(z0[i] - 5 * t.hillShape[i] - f.z[i]));
-  check(flat < 1e-3 && f.z[j] === blockZ, 'Hills at 0 leaves the flat plain, and rock put down by hand where it was', `${flat.toExponential(1)} m off`);
-  let sunk = Infinity;
-  for (let i = 0; i < s.N; i++) if (t.hillCore[i] === 1 && !f.placed[i]) sunk = Math.min(sunk, (f.z[i] - f.rock[i]) - (z0[i] - r0[i]));
-  check(Math.abs(sunk - 4.5) < 0.01, 'with the rocky hills’ rock sunk back to the plain’s depth', `${sunk.toFixed(2)} m deeper under the ground than with the hills up`);
-  s.set('hills', 12);
-  let ok = true;
+  let flat = 0, above = 0;
   for (let i = 0; i < s.N; i++) {
-    if (f.placed[i]) continue;
-    if (Math.abs(f.z[i] - (z0[i] + 7 * t.hillShape[i])) > 1e-3) ok = false;
-    if (t.hillCore[i] === 1 && Math.abs(f.z[i] - f.rock[i] - 1.5) > 1e-3) ok = false;
-    if (f.rock[i] > f.z[i] + 1e-6) ok = false;
+    if (f.rock[i] > f.z[i] + 1e-6) above++;
+    if (i !== j && !f.placed[i]) flat = Math.max(flat, Math.abs(z0[i] - 2.5 * fld.F[i] - f.z[i]));
   }
-  check(ok, 'raised, they rise, their rocky cores with them, and no rock stands above the ground');
+  check(flat < 1e-3 && f.z[j] === blockZ && above === 0, 'Hills at 0 leaves the flat plain, rock put down by hand where it was, and no rock above the ground', `${flat.toExponential(1)} m off`);
+  s.set('hills', 4);
+  const z1 = Float32Array.from(f.z);
+  s.set('hillSize', 200);
+  const big = s.table.hills.field(200);
+  let moved = 0;
+  for (let i = 0; i < s.N; i++) if (!f.placed[i]) moved = Math.max(moved, Math.abs(f.z[i] - z1[i] - 4 * (big.F[i] - fld.F[i])));
+  check(moved < 1e-3 && s.hillSize === 200, 'Hill size reshapes them as it runs, broader or finer', `${moved.toExponential(1)} m off`);
   const r = Simulation.fromState(structuredClone(s.saveState()));
-  check(r.settings.hills === 12 && r.hills === 12 && r.flow.z.every((v, i) => v === f.z[i]), 'and they come back through a save');
+  check(r.settings.hills === 4 && r.hills === 4 && r.hillSize === 200 && r.flow.z.every((v, i) => v === f.z[i]) && r.flow.lake.every((v, i) => v === f.lake[i]), 'and they come back through a save');
   const old = structuredClone(s.saveState());
-  delete old.hills; delete old.settings.hills;
+  delete old.hillKind;
   const o = Simulation.fromState(old);
-  check(o.settings.hills === 0 && o.hills === 0, 'a world saved before the hills loads as it was, with Hills at 0');
-  // The river winds round them.
-  const a = new Simulation('hills-1'), b = new Simulation('hills-1');
-  b.set('hills', 0);
+  check(o.settings.hills === 0 && o.hills === 0 && o.flow.z.every((v, i) => v === f.z[i]), 'a world saved before them keeps its ground, with Hills at 0');
+  // The river winds round them and through the lakes, to the sea.
+  const a = new Simulation('hills-1'), b = flatWorld('hills-1');
   while (a.years < 0.15) { a.step(20000); b.step(20000); }
   const ma = a.measure(), mb = b.measure();
   check(ma.sinuosity > mb.sinuosity + 0.15, 'the river winds round the hills', `sinuosity ${ma.sinuosity.toFixed(2)}, ${mb.sinuosity.toFixed(2)} on the flat plain`);
+  // (At this speed-up the water's own clock runs 20,000 times slower than
+  // the bed's: it takes a while to thread its way down.)
+  while (a.years < 0.45) a.step(20000);
+  let shore = 0;
+  for (let x = 0; x < W; x++) if (a.flow.h[(a.shoreY - 2) * W + x] > 0.05) shore++;
+  check(shore > 0, 'and gets to the sea', `${shore} cells wet at the shore`);
 }
 
 // Dams: a reservoir backs up behind one (full to its spillway from the

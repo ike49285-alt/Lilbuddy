@@ -48,7 +48,7 @@ uniform int uSeaY, uSpongeY;
 uniform float uSea, uSeaT, uStillT;
 float damping(int x, int y, float dtPrev) {
   float d = 1.0;
-  bool still = texelFetch(uP, ivec2(x, y), 0).b > 1.5 && sAt(x, y).x > ${WATER.STILL_H.toFixed(6)};
+  bool still = mod(floor(texelFetch(uP, ivec2(x, y), 0).b / 2.0), 2.0) > 0.5 && sAt(x, y).x > ${WATER.STILL_H.toFixed(6)};
   if (still) { if (uStillT > 0.0) d *= 1.0 - dtPrev / uStillT; }
   else if (y > uSeaY && zAt(x, y) < uSea - 0.3 && uSeaT > 0.0) d *= 1.0 - dtPrev / uSeaT;
   if (y >= uSpongeY) d *= 1.0 - 0.5 * float(y - uSpongeY + 1) / ${SPONGE.toFixed(1)};
@@ -56,14 +56,21 @@ float damping(int x, int y, float dtPrev) {
 }
 `;
 
-// In still water each face's flow is blended with its neighbours' (de
-// Almeida et al. 2012): deep water with little friction would otherwise
-// wobble from cell to cell.
+// In a reservoir's water, and a lake's where it's slow, each face's flow is
+// blended with its neighbours' (de Almeida et al. 2012): deep water with
+// little friction would otherwise wobble from cell to cell.
 const BLEND = `
-bool stillFace(int xi, int yi, int xj, int yj) {
-  float sh = ${WATER.STILL_H.toFixed(6)};
-  return (texelFetch(uP, ivec2(xi, yi), 0).b > 1.5 || texelFetch(uP, ivec2(xj, yj), 0).b > 1.5) && sAt(xi, yi).x > sh && sAt(xj, yj).x > sh;
+uniform float uLakeFr;
+// Still water: a reservoir's (uP's third channel +2); a lake's (+4) where
+// it's slow, by the current the cell had.
+bool calmAt(int x, int y) {
+  vec4 s = sAt(x, y);
+  float m = texelFetch(uP, ivec2(x, y), 0).b;
+  if (s.x <= ${WATER.STILL_H.toFixed(6)}) return false;
+  if (mod(floor(m / 2.0), 2.0) > 0.5) return true;
+  return m > 3.5 && s.z * s.z + s.w * s.w < uLakeFr * uLakeFr * G * s.x;
 }
+bool stillFace(int xi, int yi, int xj, int yj) { return calmAt(xi, yi) && calmAt(xj, yj); }
 float qxWas(int fx, int y, float dtPrev) { return fx <= 0 || fx >= uW ? 0.0 : texelFetch(uQX, ivec2(fx, y), 0).r * damping(fx, y, dtPrev); }
 float qyWas(int x, int fy, float dtPrev) { return fy < 0 || fy >= uH ? 0.0 : texelFetch(uQY, ivec2(x, fy), 0).r * damping(x, fy, dtPrev); }
 #define THETA ${WATER.THETA.toFixed(6)}

@@ -25,7 +25,7 @@ then open http://localhost:8000/.
 
 ## Layout
 
-- `src/table.js` — the starting landscape: a bare sand floodplain, terraces, hills for the river to wind round (spurs and knolls), and a wide shallow sea for the delta
+- `src/table.js` — the starting landscape: a bare sand floodplain, terraces, rolling ground from noise (hills to wind round, hollows holding lakes), and a wide shallow sea for the delta
 - `src/flow.js` — the water, the sand, the banks and the plants
 - `src/gpu.js`, `src/gpuflow.js`, `src/gpuriver.js` — the whole river (water, sand, gravel, mud, banks, plants) worked out on the GPU (WebGL2), when it's switched on
 - `src/weather.js` — rain, and the floods that come down from upstream
@@ -172,13 +172,18 @@ zoom it.
   floor stays, and the land drops to it down a steep slope at the coast.
   The river then meets the sea down that step and cuts back into it, a
   gorge working its way up the valley as deep as the bedrock lets it.
-- **Hills:** how high the hills on the plain stand, from flat to 15 m
-  (5 m to start). Spurs reach in from either side in turn, each
-  overlapping the next, with a few knolls between, so the river has to
-  wind round them. Some are rocky, with bedrock a metre and a half under
+- **Hills:** how far the rolling ground on the plain rises and falls, from
+  flat to ±12 m (±2.5 m to start). It comes from noise: hills for the river
+  to wind round, and hollows that start full of lakes, to where they'd spill
+  over (the water here runs far slower than the bed's clock, and filling
+  them would take it months), which the river flows through and fills
+  with sand. Some hills are rocky, with bedrock a metre and a half under
   them, and the river has to go round those for good; the rest are firm,
-  grassy earth it slowly cuts into. Raise or flatten them as it runs (the
-  rocky ones' rock sinks back to the plain's as they flatten).
+  grassy earth it slowly cuts into. In the lakes, and in a dam's reservoir,
+  the water's flows are blended face to face (de Almeida et al. 2012) so
+  their deep, still water doesn't wobble from cell to cell.
+- **Hill size:** how far across its hills are, from 30 to 400 m (120 m to
+  start): many small bumps or a few broad hills. Both work as it runs.
 - **Bedrock:** how deep the rock lies under the plain, from 1 to 60 m
   (6 m to start). The river can't cut below it; set it deep and the river
   can cut down into its valley and the terraces as far as it likes.

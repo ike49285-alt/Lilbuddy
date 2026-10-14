@@ -60,7 +60,7 @@ precision highp sampler2D;
 // The world: S = (depth, mud, current x, current y); A = (bed, rock,
 // recent change, put by hand); B = (mud share of the top layer, of the
 // ground below, gravel share of the top layer, of the ground below);
-// C = (grass, trees, kept clear of trees + 2 in a reservoir, the bed at the start); T = (sand
+// C = (grass, trees, kept clear of trees + 2 in a reservoir + 4 in a lake, the bed at the start); T = (sand
 // carried x, y, Shields stress, gravel's share of it).
 uniform sampler2D uS, uA, uB, uC, uT, uDT, uBED;
 uniform int uW, uH, uHB;
@@ -88,7 +88,7 @@ void inletNow(out float local, out float localG, out bool lake) {
     vec4 t = T(x, 0);
     float v = uSupply * max(0.0, t.y);
     local += v; localG += v * t.w;
-    if (C(x, 0).z > 1.5) n++;
+    if (mod(floor(C(x, 0).z / 2.0), 2.0) > 0.5) n++;
   }
   lake = 2 * n > uX1 - uX0 + 1;
 }
@@ -775,10 +775,10 @@ export class GpuRiver {
     this.reset = 0; this.accReset = 0; this.accSince = 0; this.estSince = 0; this.bedSince = 0;
   }
 
-  // C's third channel: kept clear of trees (1), and in a reservoir (+2).
+  // C's third channel: kept clear of trees (1), in a reservoir (+2), in a lake (+4).
   clear(flow) {
     const out = this.clearBuf || (this.clearBuf = new Float32Array(this.N));
-    for (let i = 0; i < this.N; i++) out[i] = flow.noTrees[i] + 2 * flow.still[i];
+    for (let i = 0; i < this.N; i++) out[i] = flow.noTrees[i] + 2 * flow.still[i] + 4 * flow.lake[i];
     return out;
   }
 
@@ -788,7 +788,7 @@ export class GpuRiver {
     const x0 = Math.max(0, Math.round(flow.inletX - flow.inletHalf)), x1 = Math.min(W - 1, Math.round(flow.inletX + flow.inletHalf));
     this.U = {
       uW: W, uH: H, uHB: H - SPONGE, uDx: flow.dx, uPW: [WATER.N_PLANT, WATER.N_TREE],
-      uSeaY: flow.seaY, uSpongeY: H - SPONGE, uSea: flow.sea, uSeaT: TUNE.seaDamp, uStillT: TUNE.stillDamp,
+      uSeaY: flow.seaY, uSpongeY: H - SPONGE, uSea: flow.sea, uSeaT: TUNE.seaDamp, uStillT: TUNE.stillDamp, uLakeFr: TUNE.lakeFroude,
       uCin: flow.mudIn, uRain: flow.rainRate, uSoak: WATER.INFILTRATE, uFrMax: TUNE.frMax,
       uX0: x0, uX1: x1, uQin: flow.inflow / ((x1 - x0 + 1) * flow.dx), uCfl: WATER.CFL, uMaxDt: WATER.MAX_DT,
       uMorph: morph, uSupply: flow.supply, uInflow: flow.inflow, uDzMax: TUNE.dzMax, uHeld: TUNE.held,

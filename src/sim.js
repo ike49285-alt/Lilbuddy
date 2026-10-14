@@ -2,7 +2,7 @@
 // clock, and what the page can do to it.
 
 import { makeRng, hashArrays } from './rng.js';
-import { makeTable, CELL_M, TILT, HILLS, coreRise, PLAIN_MUD, PLAIN_GRAVEL } from './table.js';
+import { makeTable, CELL_M, TILT, HILLS, HILL_SIZE, hillGround, hillRock, PLAIN_MUD, PLAIN_GRAVEL } from './table.js';
 import { Flow, WET, SHIELDS_C, SEC_PER_YR, SPONGE } from './flow.js';
 import { Weather } from './weather.js';
 
@@ -36,7 +36,8 @@ export const SETTINGS = {
   mud: [0.2, 0, 2],           // grams of mud in each litre of the pump's water
   rock: [6, 1, 60],           // metres of loose ground over the bedrock under the plain
   lift: [0, 0, 30],           // metres the land is raised above the sea (the sea floor stays)
-  hills: [HILLS, 0, 15],      // metres the hills stand (0: the flat plain)
+  hills: [HILLS, 0, 12],      // metres the rolling ground rises and falls (0: the flat plain)
+  hillSize: [HILL_SIZE, 30, 400], // metres across its hills
 };
 const MUD_DENSITY = 2650;     // grams a litre of solid mud
 const LIFT_RAMP = 8;          // rows over which raised land drops to the sea floor
@@ -44,10 +45,12 @@ const LIFT_RAMP = 8;          // rows over which raised land drops to the sea fl
 const LN_MUD = Math.log(0.01), LN_SAND = Math.log(0.7), LN_GRAVEL = Math.log(8);
 
 export class Simulation {
-  constructor(seed) {
+  // A new world from a seed; `hills` sets how high its rolling ground
+  // starts (HILLS unless asked).
+  constructor(seed, { hills = HILLS } = {}) {
     this.seed = String(seed);
     this.rng = makeRng(this.seed);
-    const table = makeTable(this.rng);
+    const table = makeTable(this.rng, TILT, hills);
     this.table = table;
     this.W = table.W; this.H = table.H; this.N = table.N;
     this.shoreY = table.shoreY;
@@ -55,10 +58,12 @@ export class Simulation {
     this.weather = new Weather(this.rng);
     this.years = 0;
     this.settings = Object.fromEntries(Object.entries(SETTINGS).map(([k, r]) => [k, r[0]]));
+    this.settings.hills = hills;
     this.tilt = TILT;
     this.rockDepth = SETTINGS.rock[0];   // the bedrock depth the ground was last set to
     this.lift = 0;                       // and how far the land's been raised
-    this.hills = HILLS;                  // and how high the hills stand
+    this.hills = hills;                  // and how high the hills stand,
+    this.hillSize = HILL_SIZE;           // and how far across
     this.epoch = 0;              // bumped whenever the ground is reshaped by hand
     this.events = [];
     this.nextEventId = 1;
@@ -76,6 +81,7 @@ export class Simulation {
     this.rateYears = 0;          // years since the rates were last worked out
     this.thalwegZ0 = this.thalweg(this.flow.z0, null);
     this.applySettings();
+    this.fillHollows();
     this.climate();
   }
 
@@ -183,14 +189,16 @@ export class Simulation {
       this.shiftGround((y) => d * Math.max(0, Math.min(1, (shoreY + LIFT_RAMP / 2 - y) / LIFT_RAMP)));
       this.lift = lift;
     }
-    // The hills: they rise and fall where they stand, and the rock in the
-    // rocky ones' cores with them (sinking to the plain's as they flatten).
-    const hills = this.settings.hills;
-    if (Math.abs(hills - this.hills) > 1e-9) {
-      const d = hills - this.hills, dc = coreRise(hills) - coreRise(this.hills);
-      const { hillShape, hillCore } = this.table;
-      this.shiftGround((y, i) => d * hillShape[i], (y, i) => hillCore[i] * (d * hillShape[i] + dc));
+    // The rolling ground: from the hills as they were to the hills as they
+    // are now, higher or lower, broader or finer; the rock with them in the
+    // hollows and the rocky hills.
+    const hills = this.settings.hills, size = this.settings.hillSize;
+    if (Math.abs(hills - this.hills) > 1e-9 || Math.abs(size - this.hillSize) > 1e-9) {
+      const was = this.table.hills.field(this.hillSize), now = this.table.hills.field(size), a0 = this.hills;
+      this.shiftGround((y, i) => hillGround(now, hills, i) - hillGround(was, a0, i), (y, i) => hillRock(now, hills, i) - hillRock(was, a0, i));
       this.hills = hills;
+      this.hillSize = size;
+      this.fillHollows();
     }
     // The bedrock: all of it moves together, except rock put down by hand,
     // and it never stands above the ground (where the river has cut deeper
@@ -213,6 +221,60 @@ export class Simulation {
       this.reshaped();
     }
     this.climate();
+  }
+
+  // Ponds and lakes in the hollows, full to where they'd spill over: the
+  // water here runs far slower than the bed's clock, and filling them would
+  // take it months of it (a real valley's are full anyway). Water only ever
+  // added, and only in hollows deeper than a few centimetres. (Priority
+  // flood from the sea: each cell's level is the lowest the water would
+  // have to rise to, to get out.)
+  fillHollows() {
+    const { W, H, N, shoreY } = this;
+    // (The flat plain's own little bumps hold only puddles.)
+    if (!(this.hills > 0)) { this.flow.lake.fill(0); this.flow.hasLake = false; return; }
+    const { z, h } = this.flow;
+    const level = new Float32Array(N).fill(Infinity);
+    // A binary heap of cells by level.
+    const heap = [];
+    const push = (i) => {
+      heap.push(i);
+      for (let k = heap.length - 1; k > 0;) { const p = (k - 1) >> 1; if (level[heap[p]] <= level[heap[k]]) break; [heap[p], heap[k]] = [heap[k], heap[p]]; k = p; }
+    };
+    const pop = () => {
+      const top = heap[0], last = heap.pop();
+      if (heap.length) {
+        heap[0] = last;
+        for (let k = 0; ;) {
+          const l = 2 * k + 1, r = l + 1;
+          let m = k;
+          if (l < heap.length && level[heap[l]] < level[heap[m]]) m = l;
+          if (r < heap.length && level[heap[r]] < level[heap[m]]) m = r;
+          if (m === k) break;
+          [heap[m], heap[k]] = [heap[k], heap[m]];
+          k = m;
+        }
+      }
+      return top;
+    };
+    for (let i = shoreY * W; i < N; i++) { level[i] = Math.max(z[i], this.settings.sea); push(i); }
+    while (heap.length) {
+      const i = pop(), x = i % W, y = (i / W) | 0;
+      for (const n of [x > 0 ? i - 1 : -1, x < W - 1 ? i + 1 : -1, y > 0 ? i - W : -1, y < H - 1 ? i + W : -1]) {
+        if (n < 0 || level[n] !== Infinity) continue;
+        level[n] = Math.max(z[n], level[i]);
+        push(n);
+      }
+    }
+    // The lakes: where water stands in a hollow, for the water's working out.
+    const lake = this.flow.lake;
+    lake.fill(0);
+    for (let i = 0; i < shoreY * W; i++) {
+      const d = level[i] - z[i];
+      if (d > 0.05) { lake[i] = 1; if (d > h[i]) h[i] = d; }
+    }
+    this.flow.hasLake = lake.some((v) => v);
+    this.flow.ranges();
   }
 
   reshaped() {
@@ -919,6 +981,8 @@ export class Simulation {
       rockDepth: this.rockDepth,
       lift: this.lift,
       hills: this.hills,
+      hillSize: this.hillSize,
+      hillKind: 'noise',
       epoch: this.epoch,
       section: this.section ? this.section.slice() : null,
       history: { ...this.history, inflow: this.history.inflow.slice(), sinuosity: this.history.sinuosity.slice() },
@@ -931,7 +995,7 @@ export class Simulation {
       flow: {
         z: f.z.slice(), h: f.h.slice(), qx: f.qx.slice(), qy: f.qy.slice(), cover: f.cover.slice(), rock: f.rock.slice(),
         z0: f.z0.slice(), dzRate: f.dzRate.slice(), ux: f.ux.slice(), uy: f.uy.slice(),
-        placed: f.placed.slice(), trees: f.trees.slice(), noTrees: f.noTrees.slice(),
+        placed: f.placed.slice(), trees: f.trees.slice(), noTrees: f.noTrees.slice(), lake: f.lake.slice(),
         fm: f.fm.slice(), sm: f.sm.slice(), M: f.M.slice(), fg: f.fg.slice(), sg: f.sg.slice(),
         gravel: { in: f.gravelIn, out: f.gravelOut, worn: f.rockWorn },
         slides: f.slides, slideYears: f.slideYears,
@@ -951,6 +1015,8 @@ export class Simulation {
     // Rock put down by hand; an older save's is wherever rock stands at the ground.
     if (F.placed) f.placed.set(F.placed); else for (let i = 0; i < f.N; i++) f.placed[i] = f.rock[i] >= f.z[i] - 0.01 ? 1 : 0;
     if (F.trees) { f.trees.set(F.trees); f.noTrees.set(F.noTrees); } else f.trees.fill(0);
+    if (F.lake) f.lake.set(F.lake); else f.lake.fill(0);
+    f.hasLake = f.lake.some((v) => v);
     if (F.fm) { f.fm.set(F.fm); f.sm.set(F.sm); f.M.set(F.M); }
     if (F.fg) { f.fg.set(F.fg); f.sg.set(F.sg); f.gravelIn = F.gravel.in; f.gravelOut = F.gravel.out; f.rockWorn = F.gravel.worn || 0; }
     if (F.mud) { f.mudFed = F.mud.fed; f.mudOut = F.mud.out; f.mudDown = F.mud.down; f.mudLaid = F.mud.laid; f.mudSea = F.mud.sea; f.mudMark = F.mud.mark; }
@@ -965,9 +1031,12 @@ export class Simulation {
     if (s.settings.rock == null) sim.settings.rock = sim.rockDepth;
     sim.lift = s.lift || 0;
     if (s.settings.lift == null) sim.settings.lift = sim.lift;
-    // A world from before the hills is flat, and stays so till they're raised.
-    sim.hills = s.hills != null ? s.hills : 0;
-    if (s.settings.hills == null) sim.settings.hills = sim.hills;
+    // A world from before these hills keeps the ground it had, with Hills at
+    // 0 till they're raised.
+    const noise = s.hillKind === 'noise';
+    sim.hills = noise ? s.hills : 0;
+    sim.hillSize = noise ? s.hillSize : HILL_SIZE;
+    if (!noise) { sim.settings.hills = 0; sim.settings.hillSize = HILL_SIZE; }
     sim.epoch = s.epoch;
     sim.section = s.section;
     sim.history = { ...s.history, inflow: s.history.inflow.slice(), sinuosity: s.history.sinuosity.slice() };

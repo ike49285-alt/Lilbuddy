@@ -35,8 +35,7 @@ if (years > 0) {
   } catch (e) { out.error = String(e && e.stack || e); }
   window.result = out;
 } else try {
-  const base = new Simulation(seed);
-  if (q.has('hills')) base.set('hills', Number(q.get('hills')));
+  const base = q.has('hills') ? new Simulation(seed, { hills: Number(q.get('hills')) }) : new Simulation(seed);
   for (let k = 0; k < warm; k++) base.step(morph);
   // A dam's reservoir, its still water blended face to face.
   if (q.get('dam')) { base.place('dam', 0, [[0.5, 110.5], [127.5, 110.5]], 'medium'); for (let k = 0; k < 100; k++) base.step(morph); }

@@ -51,9 +51,11 @@ const CFL = 0.7;
 const MAX_DT = 2;                 // seconds
 const FILM = 0.1;                 // water shallower than this doesn't set the step, m
 const STILL_H = 0.3;              // metres: water deeper than this in a reservoir is still water
-// In still water each face's flow is blended with its neighbours' (de
-// Almeida et al. 2012), keeping this much of its own: deep water with little
-// friction would otherwise wobble from cell to cell.
+// In a reservoir's water, and a lake's where it's slow (TUNE.lakeFroude),
+// each face's flow is blended with its neighbours' (de Almeida et al.
+// 2012), keeping this much of its own: deep water with little friction
+// would otherwise wobble from cell to cell. (Not where the river runs:
+// blending its fast water would smooth out its jets.)
 const THETA = 0.8;
 const MARGIN = 3;                 // dry cells worked on beside the water
 export const SPONGE = 6;          // rows along the bottom edge where the open sea soaks up waves and sand
@@ -89,6 +91,7 @@ export const TUNE = {
   frMax: 2,                       // the fastest current a cell reports, as a multiple of its wave speed
   seaDamp: 120,                   // seconds over which currents fade out at sea (0: never)
   stillDamp: 30,                  // and in a reservoir's deep water (where the water sheet, deep and still, would otherwise wobble cell to cell)
+  lakeFroude: 0.15,               // in a lake, the faces' flows are blended where the current is under this share of the water's wave speed
   transport: 3,                   // scales the sand and gravel's transport (calibrated to the river before gravel)
   mudE: 1e-7,                     // m/s of mud lifted per unit of drag past its threshold, from a bed of pure mud
 };
@@ -171,6 +174,7 @@ export class Flow {
     this.trees = table.trees || new Float32Array(N);   // trees, 0..1
     this.noTrees = new Uint8Array(N);         // kept clear of trees (fields)
     this.still = new Uint8Array(N);           // a dam's reservoir (its deep water's currents fade, as at sea)
+    this.lake = new Uint8Array(N);            // a lake in a hollow of the rolling ground
     this.placed = new Uint8Array(N);          // rock put down by hand (blocks, piers): stays when the bedrock moves
     this.z0 = Float32Array.from(table.z);   // the bed at the start, for cut and fill
     this.h = new Float32Array(N);
@@ -296,8 +300,11 @@ export class Flow {
     const W1 = W + 1;
     const gdt = G * dt;
     const dry = WET * 0.5;
-    // With a reservoir, the faces' flows as they were, for the blend.
-    const blend = this.hasStill;
+    // The faces' flows as they were, for the blend.
+    const blend = this.hasStill || this.hasLake, fr2 = TUNE.lakeFroude * TUNE.lakeFroude * G;
+    // Still water: a reservoir's; a lake's where it's slow (by the current the cell had).
+    const { ux, uy, lake: lakes } = this;
+    const calm = (i) => h[i] > STILL_H && (still[i] || (lakes[i] && ux[i] * ux[i] + uy[i] * uy[i] < fr2 * h[i]));
     if (blend) {
       if (!this.qxOld) { this.qxOld = new Float32Array(qx.length); this.qyOld = new Float32Array(qy.length); }
       this.qxOld.set(qx); this.qyOld.set(qy);
@@ -315,7 +322,7 @@ export class Flow {
         if (hf <= dry) { qx[f] = 0; continue; }
         const n = N_BARE + 0.5 * (N_PLANT * (cover[i] + cover[j]) + N_TREE * (trees[i] + trees[j]));
         let q = qx[f];
-        if (blend && (still[i] || still[j]) && h[i] > STILL_H && h[j] > STILL_H) q = THETA * qxOld[f] + (1 - THETA) * 0.5 * (qxOld[f - 1] + qxOld[f + 1]);
+        if (blend && calm(i) && calm(j)) q = THETA * qxOld[f] + (1 - THETA) * 0.5 * (qxOld[f - 1] + qxOld[f + 1]);
         q = (q - gdt * hf * (ej - ei) / dx) / (1 + (gdt * n * n * (q < 0 ? -q : q)) / (hf * hf * cbrt(hf)));
         // No faster than critical flow, and never draining more than is there.
         if (q * q > G * hf * hf * hf) q = (q > 0 ? 1 : -1) * hf * Math.sqrt(G * hf);
@@ -335,7 +342,7 @@ export class Flow {
         if (hf <= dry) { qy[j] = 0; continue; }
         const n = N_BARE + 0.5 * (N_PLANT * (cover[i] + cover[j]) + N_TREE * (trees[i] + trees[j]));
         let q = qy[j];
-        if (blend && (still[i] || still[j]) && h[i] > STILL_H && h[j] > STILL_H) q = THETA * qyOld[j] + (1 - THETA) * 0.5 * (qyOld[j - W] + qyOld[j + W]);
+        if (blend && calm(i) && calm(j)) q = THETA * qyOld[j] + (1 - THETA) * 0.5 * (qyOld[j - W] + qyOld[j + W]);
         q = (q - gdt * hf * (ej - ei) / dx) / (1 + (gdt * n * n * (q < 0 ? -q : q)) / (hf * hf * cbrt(hf)));
         if (q * q > G * hf * hf * hf) q = (q > 0 ? 1 : -1) * hf * Math.sqrt(G * hf);
         if (q > 0) { const m = (h[i] * dx * 0.25) / dt; if (q > m) q = m; } else { const m = (h[j] * dx * 0.25) / dt; if (-q > m) q = -m; }
@@ -351,7 +358,7 @@ export class Flow {
     const rr = this.rainRate * dt;
     const soak = INFILTRATE * dt;
     let deepest = 0, fastest = 0;
-    const { ux, uy, wetLo, wetHi, M, C } = this;
+    const { wetLo, wetHi, M, C } = this;
     const sea = this.sea, spongeY = H - SPONGE;
     // The mud's concentration before the water moves; the pump's water
     // brings its own.
