@@ -5,6 +5,7 @@ import { makeRng, hashArrays } from './rng.js';
 import { makeTable, CELL_M, TILT, HILLS, HILL_SIZE, hillGround, hillRock, PLAIN_MUD, PLAIN_GRAVEL } from './table.js';
 import { Flow, WET, SHIELDS_C, SEC_PER_YR, SPONGE } from './flow.js';
 import { Weather } from './weather.js';
+import { newVolcano, volcanoTick, applyDeposit, markHeat, BOX } from './volcano.js';
 
 export { SEC_PER_YR };
 
@@ -24,6 +25,7 @@ const HOUSE = 3, FIELD = 8, PIER_EVERY = 4, MAX_THINGS = 40;
 export const DAM_H = { low: 2, medium: 4, high: 8 };
 const SPILL_DROP = 0.5, SPILL_W = 3;
 const MAX_GAUGES = 4;
+const VOLCANO_EVERY = 2 * HOUR;  // years: the most often the volcanoes are worked on
 const CROP = 0.5;                          // a field's crop, as plant cover
 const LASTING = { undercut: 1, scoured: 1, lost: 2 };   // harms that don't heal, worse ones higher
 
@@ -71,6 +73,7 @@ export class Simulation {
     this.section = null;         // a cross-section line: [x0, y0, x1, y1] in cells
     this.things = [];            // houses, fields and bridges the river might threaten
     this.nextThingId = 1;
+    this.volcanoAt = 0;          // the years the volcanoes were last worked on
     this.layer = null;
     this.history = { inflow: [], sinuosity: [], every: HOUR, next: 0 };
     this.mudSeaRate = 0;         // m³ a day of mud reaching the open sea, smoothed
@@ -114,6 +117,7 @@ export class Simulation {
         this.mudSeaRate += ((mudSea / (ry * 365.25)) - this.mudSeaRate) * k;
       }
       if (this.years >= this.history.next) this.sample();
+      this.volcanoes();
       for (const t of this.things) if (t.kind === 'gauge' && this.years >= t.next) this.readGauge(t);
     }
     return yrs;
@@ -590,6 +594,8 @@ export class Simulation {
       this.reshaped();
     }
     if (best.kind === 'dam') this.markReservoirs();
+    // A volcano goes extinct: its cone stays, and what's molten sets.
+    if (best.kind === 'volcano') for (const j of best.molten.cells) f.lavaHeat[j] = 0;
     if (best.kind === 'field') {
       const kept = new Set(this.things.filter((t) => t.kind === 'field').flatMap((t) => t.cells));
       for (const j of best.cells) if (!kept.has(j)) f.noTrees[j] = 0;
@@ -624,7 +630,7 @@ export class Simulation {
         t.state = t.fullness >= 0.9 ? 'silted up' : 'filling';
         continue;
       }
-      if (t.kind === 'gauge' || t.kind === 'block') continue;
+      if (t.kind === 'gauge' || t.kind === 'block' || t.kind === 'volcano') continue;
       let wet = 0, down = 0, up = 0, drop = 0;
       t.watch.forEach((j, k) => {
         const d = z[j] - t.base[k];
@@ -667,12 +673,34 @@ export class Simulation {
     this.event('pump', f.inletX);
   }
 
-  // Parks a storm: rain over the valley for a day and a half, and the flood
-  // it sends down the river from upstream.
-  storm(i) {
-    const x = i % this.W, y = (i / this.W) | 0;
-    this.weather.park(x, y, this.years);
-    this.event('storm', i);
+  // A volcano with its vent at cell i: quiet for a few days, then erupting
+  // every few months (volcano.js). Its first eruption slows the page's
+  // clock, to watch.
+  volcano(i) {
+    if (!(i >= 0 && i < this.N)) return null;
+    if (!this.things.some((t) => t.kind === 'volcano')) this.volcanoAt = this.years;
+    const t = this.addThing({ kind: 'volcano', cells: [i], state: 'quiet' });
+    Object.assign(t, newVolcano(t.id, this.years));
+    this.event('place', i);
+    return t;
+  }
+
+  // The volcanoes over the time since they were last worked on (every two
+  // hours of the bed's time at most): their eruptions start and stop, their
+  // lava runs and their ash falls, on the CPU's ground and (as a change to
+  // it) on the GPU's.
+  volcanoes() {
+    const vs = this.things.filter((t) => t.kind === 'volcano');
+    if (!vs.length || this.years - this.volcanoAt < VOLCANO_EVERY) return;
+    const t0 = this.volcanoAt, f = this.flow;
+    this.volcanoAt = this.years;
+    for (const v of vs) {
+      const { change, began } = volcanoTick(v, f, t0, this.years);
+      if (began) this.event('erupt', v.cells[0], { first: began.first });
+      if (!change) continue;
+      if (f.gpu) f.gpu.deposit(f, change); else applyDeposit(f, change);
+      markHeat(f, change);
+    }
   }
 
   // Sets the line a cross-section is drawn along.
@@ -685,9 +713,9 @@ export class Simulation {
 
   // --- events ----------------------------------------------------------------------
 
-  // What the page flashes on the map: a tool used, a storm parked.
-  event(kind, i) {
-    const ev = { id: this.nextEventId++, kind, years: this.years, x: (i % this.W) + 0.5, y: ((i / this.W) | 0) + 0.5, r: 8 };
+  // What the page flashes on the map: a tool used, a volcano erupting.
+  event(kind, i, more) {
+    const ev = { id: this.nextEventId++, kind, years: this.years, x: (i % this.W) + 0.5, y: ((i / this.W) | 0) + 0.5, r: 8, ...more };
     this.events.push(ev);
     if (this.events.length > 40) this.events.shift();
   }
@@ -875,6 +903,7 @@ export class Simulation {
       z: new Float32Array(f.z),
       h: new Float32Array(f.h),
       rock: this.rockBytes(),
+      lava: this.flow.lavaHeat.slice(),
       cover: bytes(f.cover, 255),
       trees: bytes(f.trees, 255),
       mud: this.mudBytes(),
@@ -905,6 +934,7 @@ export class Simulation {
   thingView(t) {
     const v = { id: t.id, kind: t.kind, x: t.x, y: t.y, state: t.state, line: t.line, piers: t.piers.map((j) => [(j % this.W) + 0.5, ((j / this.W) | 0) + 0.5]), flooded: t.flooded, eroded: t.eroded, buried: t.buried };
     if (t.kind === 'dam') Object.assign(v, { height: t.height, fullness: t.fullness, held: t.held });
+    if (t.kind === 'volcano') Object.assign(v, { n: t.n, days: this.volcanoDays(t) });
     if (t.kind === 'gauge') {
       const s = t.series;
       Object.assign(v, { n: t.n, every: t.every, bed0: t.bed0, series: { level: s.level.slice(), bed: s.bed.slice(), flow: s.flow.slice(), sand: s.sand.slice() } });
@@ -912,11 +942,17 @@ export class Simulation {
     return v;
   }
 
-  // Where blocks of rock stand, one byte per cell.
+  // Days till a volcano's next eruption (0 while it erupts).
+  volcanoDays(t) {
+    return t.state === 'erupting' ? 0 : Math.max(0, (t.nextAt - this.years) * 365.25);
+  }
+
+  // Where rock stands at the ground, one byte per cell: 1 for blocks and
+  // bedrock, 2 for lava set into rock.
   rockBytes() {
-    const { z, rock } = this.flow;
+    const { z, rock, basalt } = this.flow;
     const out = new Uint8Array(this.N);
-    for (let i = 0; i < out.length; i++) if (rock[i] >= z[i] - 0.01) out[i] = 1;
+    for (let i = 0; i < out.length; i++) if (rock[i] >= z[i] - 0.01) out[i] = basalt[i] ? 2 : 1;
     return out;
   }
 
@@ -956,12 +992,15 @@ export class Simulation {
       gravelGround: f.fg[i],
       rockBelow: f.z[i] - f.rock[i],
       block: f.rock[i] >= f.z[i] - 0.01,
+      basalt: f.basalt[i] === 1 && f.rock[i] >= f.z[i] - 0.01,
+      molten: f.lavaHeat[i] > 0,
       thing: (() => {
         const t = this.things.find((o) => o.kind !== 'block' && o.cells.includes(i));
         if (!t) return null;
         const v = { kind: t.kind, state: t.state, flooded: t.flooded, eroded: t.eroded, buried: t.buried };
         if (t.kind === 'dam') Object.assign(v, { height: t.height, fullness: t.fullness, held: t.held });
         if (t.kind === 'gauge') Object.assign(v, { n: t.n, now: this.gaugeAt(i) });
+        if (t.kind === 'volcano') Object.assign(v, { n: t.n, days: this.volcanoDays(t) });
         return v;
       })(),
     };
@@ -991,11 +1030,13 @@ export class Simulation {
       nextEventId: this.nextEventId,
       things: this.things.map((t) => structuredClone(t)),
       nextThingId: this.nextThingId,
+      volcanoAt: this.volcanoAt,
       weather: this.weather.saveState(),
       flow: {
         z: f.z.slice(), h: f.h.slice(), qx: f.qx.slice(), qy: f.qy.slice(), cover: f.cover.slice(), rock: f.rock.slice(),
         z0: f.z0.slice(), dzRate: f.dzRate.slice(), ux: f.ux.slice(), uy: f.uy.slice(),
         placed: f.placed.slice(), trees: f.trees.slice(), noTrees: f.noTrees.slice(), lake: f.lake.slice(),
+        basalt: f.basalt.slice(), lavaHeat: f.lavaHeat.slice(),
         fm: f.fm.slice(), sm: f.sm.slice(), M: f.M.slice(), fg: f.fg.slice(), sg: f.sg.slice(),
         gravel: { in: f.gravelIn, out: f.gravelOut, worn: f.rockWorn },
         slides: f.slides, slideYears: f.slideYears,
@@ -1017,6 +1058,7 @@ export class Simulation {
     if (F.trees) { f.trees.set(F.trees); f.noTrees.set(F.noTrees); } else f.trees.fill(0);
     if (F.lake) f.lake.set(F.lake); else f.lake.fill(0);
     f.hasLake = f.lake.some((v) => v);
+    if (F.basalt) { f.basalt.set(F.basalt); f.lavaHeat.set(F.lavaHeat); }
     if (F.fm) { f.fm.set(F.fm); f.sm.set(F.sm); f.M.set(F.M); }
     if (F.fg) { f.fg.set(F.fg); f.sg.set(F.sg); f.gravelIn = F.gravel.in; f.gravelOut = F.gravel.out; f.rockWorn = F.gravel.worn || 0; }
     if (F.mud) { f.mudFed = F.mud.fed; f.mudOut = F.mud.out; f.mudDown = F.mud.down; f.mudLaid = F.mud.laid; f.mudSea = F.mud.sea; f.mudMark = F.mud.mark; }
@@ -1043,7 +1085,8 @@ export class Simulation {
     if (s.mudSeaRate != null) { sim.mudSeaRate = s.mudSeaRate; sim.lastMudSea = s.lastMudSea; }
     sim.toSeaRate = s.toSeaRate; sim.sandRate = s.sandRate; sim.lastToSea = s.lastToSea;
     sim.nextEventId = s.nextEventId;
-    if (s.things) { sim.things = s.things.map((t) => structuredClone(t)); sim.nextThingId = s.nextThingId; sim.markReservoirs(); }
+    if (s.things) { sim.things = s.things.filter((t) => t.kind !== 'storm').map((t) => structuredClone(t)); sim.nextThingId = s.nextThingId; sim.markReservoirs(); }
+    sim.volcanoAt = s.volcanoAt != null ? s.volcanoAt : s.years;
     sim.sentEvent = s.nextEventId - 1;
     sim.weather.restoreState(s.weather);
     sim.thalwegZ0 = sim.thalweg(f.z0, null);
@@ -1098,7 +1141,7 @@ export function lineCells(W, H, pts) {
 }
 
 export function transferList(f) {
-  const list = [f.z.buffer, f.h.buffer, f.rock.buffer, f.cover.buffer, f.mud.buffer, f.soil.buffer, f.gravel.buffer, f.trees.buffer,
+  const list = [f.z.buffer, f.h.buffer, f.rock.buffer, f.lava.buffer, f.cover.buffer, f.mud.buffer, f.soil.buffer, f.gravel.buffer, f.trees.buffer,
     f.profile.bed.buffer, f.profile.water.buffer, f.profile.start.buffer];
   if (f.layer) list.push(f.layer.buffer);
   if (f.section) list.push(f.section.bed.buffer, f.section.water.buffer, f.section.start.buffer);

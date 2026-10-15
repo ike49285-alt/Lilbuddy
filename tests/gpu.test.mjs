@@ -25,6 +25,22 @@ for (const [label, query] of [['a quiet bed', 'seed=gpu-2&warm=3000&morph=2000']
   check(Math.abs(r.feed[0] - r.feed[1]) <= 1e-3 * r.feed[0] + 1e-15, `${label}: the same memory of the pump's sand`, r.feed.map((v) => v.toExponential(3)).join(' / '));
   check(Math.abs(r.volume[0] - r.volume[1]) < 0.1 * Math.abs(r.volume[0]) + 1e-3, `${label}: about the same ground laid down`, r.volume.map((v) => v.toFixed(3)).join(' / ') + ' m³');
 }
+// A volcano's change to the ground: the same on the GPU as on the CPU, and
+// not undone by a read of the world that was on its way back.
+{
+  await page.goto(`${BASE}/tests/gpu-deposit.html`, { waitUntil: 'commit' });
+  await page.waitForFunction(() => window.result, null, { timeout: 900000, polling: 1000 });
+  const r = await page.evaluate(() => window.result);
+  if (r.error) { check(false, 'a volcano\'s change: runs', r.error.split('\n')[0]); console.log(r.error); }
+  else {
+    check(r.rise > 0.5, 'a volcano\'s change raises the ground', `${r.rise.toFixed(2)} m at most`);
+    for (const when of ['one change', 'a change while a read was out']) {
+      const keys = Object.keys(r).filter((k) => k.startsWith(when));
+      const bad = keys.filter((k) => r[k].worst > 1e-4 * Math.max(1, r[k].scale));
+      check(!bad.length, `a volcano's change, ${when}: the GPU and the CPU agree`, bad.length ? bad.map((k) => `${k} ${r[k].worst.toExponential(2)}`).join(', ') : keys.map((k) => k.split(': ')[1]).join(', '));
+    }
+  }
+}
 // On the plain without its hills they agree to the centimetre. Among the
 // hills, their flanks slump where the water reaches them, worked out all at
 // once on the GPU and cell by cell on the CPU: close, not the same. With

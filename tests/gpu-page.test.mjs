@@ -79,6 +79,18 @@ const f1 = await look();
 check(f1.zs > f.zs + 50000, 'raising the land raises it', `${((f1.zs - f.zs) / W).toFixed(0)} m summed per column`);
 check(f1.bad === 0 && f1.years > f.years && f1.gpu, 'and the river carries on', `${f1.wet} wet cells`);
 
+// A volcano on the GPU: it erupts, its cone rises and glows.
+const vent = at(110, 200);
+const zv = () => H((i) => window.Headwaters.frame().z[i], vent);
+const zv0 = await zv();
+await send({ type: 'volcano', i: vent });
+let erupted = false;
+for (let k = 0; k < 120 && !erupted; k++) { await page.waitForTimeout(500); erupted = (await H(() => window.Headwaters.events())).some((e) => e.kind === 'erupt'); }
+await page.waitForTimeout(6000);
+const lava = await H(() => { const f = window.Headwaters.frame(); let glow = 0, rock = 0; for (let i = 0; i < f.lava.length; i++) { if (f.lava[i]) glow++; if (f.rock[i] === 2) rock++; } return { glow, rock }; });
+check(erupted && (await zv()) > zv0 + 0.3 && lava.glow + lava.rock > 0, 'a volcano erupts on the GPU, and its cone rises', `vent ${zv0.toFixed(2)} → ${(await zv()).toFixed(2)} m, ${lava.glow} cells glowing, ${lava.rock} of lava rock`);
+check((await look()).bad === 0, 'and the river carries on with no NaNs');
+
 // Off, on, and through a save.
 await page.click('#tab-table');
 await page.click('#gpu');

@@ -1,0 +1,43 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>GPU deposit check</title>
+<script type="module">
+// A volcano's change to the ground, on the CPU (applyDeposit) and on the
+// GPU (the deposit pass): how far apart. Then a second change made while a
+// read of the world is on its way back: the read mustn't undo it. Read by
+// tests/gpu.test.mjs.
+import { Simulation } from '../src/sim.js';
+import { GpuRiver } from '../src/gpuriver.js';
+import { newVolcano, volcanoTick } from '../src/volcano.js';
+const out = {};
+try {
+  const sim = new Simulation('gpu-deposit', { hills: 0 });
+  for (let k = 0; k < 2000; k++) sim.step(2000);
+  const f = sim.flow, W = f.W;
+  const v = Object.assign(newVolcano(1, 0), { id: 1, cells: [100 * W + 40], state: 'erupting', n: 1, startAt: 0, endAt: 1 });
+  const g = new GpuRiver(f);
+  const cmp = (label, gpu, k, cpu) => {
+    let worst = 0, scale = 0;
+    for (let i = 0; i < cpu.length; i++) { worst = Math.max(worst, Math.abs(cpu[i] - gpu[i * 4 + k])); scale = Math.max(scale, Math.abs(cpu[i])); }
+    out[label] = { worst, scale };
+  };
+  const z0 = Float32Array.from(f.z);
+  const compare = (when) => {
+    const A = g.peek('A'), B = g.peek('B'), C = g.peek('C');
+    cmp(`${when}: z`, A, 0, f.z); cmp(`${when}: rock`, A, 1, f.rock);
+    cmp(`${when}: fm`, B, 0, f.fm); cmp(`${when}: sm`, B, 1, f.sm); cmp(`${when}: fg`, B, 2, f.fg); cmp(`${when}: sg`, B, 3, f.sg);
+    cmp(`${when}: cover`, C, 0, f.cover); cmp(`${when}: trees`, C, 1, f.trees);
+  };
+  g.deposit(f, volcanoTick(v, f, 0, 0.25 / 365.25).change);
+  let rise = 0; for (let i = 0; i < f.N; i++) rise = Math.max(rise, f.z[i] - z0[i]);
+  out.rise = rise;
+  compare('one change');
+  // A read begun, then a change, then the read back.
+  g.startRead();
+  g.deposit(f, volcanoTick(v, f, 0.25 / 365.25, 0.5 / 365.25).change);
+  g.finishRead(f);
+  compare('a change while a read was out');
+  g.dispose();
+} catch (e) { out.error = String(e && e.stack || e); }
+window.result = out;
+</script>

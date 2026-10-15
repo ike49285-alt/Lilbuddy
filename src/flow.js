@@ -175,6 +175,8 @@ export class Flow {
     this.noTrees = new Uint8Array(N);         // kept clear of trees (fields)
     this.still = new Uint8Array(N);           // a dam's reservoir (its deep water's currents fade, as at sea)
     this.lake = new Uint8Array(N);            // a lake in a hollow of the rolling ground
+    this.basalt = new Uint8Array(N);          // where lava has set into rock (for drawing)
+    this.lavaHeat = new Uint8Array(N);        // and where it's still molten, how hot it glows (0..255)
     this.placed = new Uint8Array(N);          // rock put down by hand (blocks, piers): stays when the bedrock moves
     this.z0 = Float32Array.from(table.z);   // the bed at the start, for cut and fill
     this.h = new Float32Array(N);

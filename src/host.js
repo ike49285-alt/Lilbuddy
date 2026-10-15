@@ -227,7 +227,7 @@ export function createHost(post) {
       case 'block': shape(() => sim.block(msg.i)); break;
       case 'place': shape(() => sim.place(msg.kind, msg.i, msg.points, msg.size)); break;
       case 'remove': shape(() => sim.remove(msg.i)); break;
-      case 'storm': sim.storm(msg.i); changed(); break;
+      case 'volcano': sim.volcano(msg.i); changed(); break;
       case 'pump': sim.movePump(msg.x); changed(); break;
       case 'section': sim.setSection(msg.points); changed(); break;
       case 'setting': shape(() => sim.set(msg.key, msg.value)); break;

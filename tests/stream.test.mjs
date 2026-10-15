@@ -2,6 +2,7 @@
 // on exactly, the tools and sliders do what they say, frames are sound.
 import { Simulation, transferList } from '../src/sim.js';
 import { SEC_PER_YR } from '../src/flow.js';
+import { LAVA_PER_DAY, ASH_SHARE } from '../src/volcano.js';
 const fails = [];
 const check = (ok, l, e = '') => { console.log(`${ok ? 'PASS' : 'FAIL'}  ${l}${e ? '  — ' + e : ''}`); if (!ok) fails.push(l); };
 const sum = (a) => { let s = 0; for (const v of a) s += v; return s; };
@@ -45,7 +46,7 @@ const flatWorld = (seed) => new Simulation(seed, { hills: 0 });
 {
   const a = new Simulation('restore-1');
   for (let k = 0; k < 3000; k++) a.step(800);
-  a.storm(128 * 80 + 64);
+  a.volcano(128 * 80 + 30);
   a.setSection([[10, 90], [118, 90]]);
   for (let k = 0; k < 500; k++) a.step(800);
   const b = Simulation.fromState(structuredClone(a.saveState()));
@@ -83,15 +84,10 @@ const flatWorld = (seed) => new Simulation(seed, { hills: 0 });
   s.block(j);
   for (let k = 0; k < 3000; k++) s.step(2000);
   check(f.rock[j] >= f.z[j] - 1e-4 && s.inspect(j).block, 'Block drops rock the river can’t wear away');
-  const q0 = f.inflow;
-  s.storm(100 * W + 64);
-  const t0 = s.years;
-  while (s.years < t0 + 12 / 24 / 365.25) s.step(60);
-  check(f.inflow > q0 * 1.5 && s.weather.intensity > 5, 'Storm rains and the river rises', `inflow ${q0.toFixed(1)} → ${f.inflow.toFixed(1)} m³/s, rain ×${s.weather.intensity.toFixed(1)}`);
   s.setSection([[5, 100], [120, 100]]);
   const fr = s.frame(0.001);
   check(fr.section && fr.section.bed.length === 96 && Math.abs(fr.section.length - 115 * 4) < 1, 'Section gives a cross-section along the line', `${fr.section.length.toFixed(0)} m`);
-  check(['dig', 'block', 'storm'].every((k) => fr.events.some((e) => e.kind === k)) && fr.events.every((e) => !('label' in e)), 'each tool sends an event for the map, and nothing sends a note');
+  check(['dig', 'block'].every((k) => fr.events.some((e) => e.kind === k)) && fr.events.every((e) => !('label' in e)), 'each tool sends an event for the map, and nothing sends a note');
 }
 
 // Mud: it rides in the water and settles where the water slows; none is
@@ -466,6 +462,71 @@ const flatWorld = (seed) => new Simulation(seed, { hills: 0 });
   check(bg.length === 4 && bg.every((t) => t.series && Array.isArray(t.series.level)), 'and they come back through a save');
   const fr = s.frame(0.001);
   check(fr.things.filter((t) => t.kind === 'gauge').every((t) => t.series.flow.length === t.series.level.length), 'frames carry their readings');
+}
+
+// Volcano: it erupts within days; its lava sets into rock to the top, a
+// cone round the vent, as much as came out (and its ash, which thins away
+// from the vent); it goes quiet for months; lava run into the river dams it
+// or shoves it aside; taken away it goes extinct; it comes back through a
+// save.
+{
+  const s = flatWorld('volcano-1');
+  const f = s.flow, W = s.W;
+  for (let k = 0; k < 3000; k++) s.step(2000);
+  const vent = 120 * W + 25, z0 = Float32Array.from(f.z);
+  const v = s.volcano(vent);
+  check(v && v.state === 'quiet' && s.events.some((e) => e.kind === 'place'), 'Volcano goes down, quiet at first');
+  const t0 = s.years;
+  let began = null, glow = 0, rock2 = 0;
+  while (v.state === 'quiet' && s.years - t0 < 5 / 365.25) s.step(2000);
+  began = s.events.find((e) => e.kind === 'erupt');
+  check(began && began.first && v.n === 1, 'it erupts within days, its first eruption marked', `after ${((s.years - t0) * 365.25).toFixed(1)} days`);
+  for (let k = 0; k < 400; k++) s.step(2000);
+  const fr = s.frame(0.001);
+  for (let i = 0; i < s.N; i++) { if (fr.lava[i]) glow++; if (fr.rock[i] === 2) rock2++; }
+  check(glow > 0 && rock2 > 0, 'frames show the molten lava glowing and the lava rock', `${glow} glowing, ${rock2} of lava rock`);
+  while (v.state === 'erupting') s.step(2000);
+  for (let k = 0; k < 800; k++) s.step(2000);
+  const days = (v.endAt - v.startAt) * 365.25;
+  let lavaCells = 0, topped = 0, grew = 0;
+  for (let i = 0; i < s.N; i++) {
+    if (!f.basalt[i]) continue;
+    lavaCells++;
+    if (f.rock[i] >= f.z[i] - 0.02) topped++;
+    grew += f.z[i] - z0[i];
+  }
+  const rise = f.z[vent] - z0[vent];
+  check(rise > 3 && lavaCells > 50 && topped === lavaCells && v.molten.cells.length === 0, 'its lava sets into a cone of rock, rock to the top', `vent up ${rise.toFixed(1)} m, ${lavaCells} cells of lava rock`);
+  let all = 0;
+  for (let y = 120 - 45; y <= 120 + 45; y++) for (let x = 0; x <= 25 + 45; x++) all += f.z[y * W + x] - z0[y * W + x];
+  const want = LAVA_PER_DAY * days * (1 + ASH_SHARE);
+  check(Math.abs(all * 16 - want) < 0.05 * want, 'what came out of it is what lies round it, lava and ash', `${(all * 16).toFixed(0)} m³ round it; ${want.toFixed(0)} m³ out over ${days.toFixed(1)} days`);
+  const ashAt = (d) => f.z[(120 - d) * W + 25] - z0[(120 - d) * W + 25];
+  check(!f.basalt[(120 - 15) * W + 25] && ashAt(15) > ashAt(30) && ashAt(30) > 0, 'its ash thins away from the vent', `${(ashAt(15) * 100).toFixed(1)} cm 60 m off, ${(ashAt(30) * 100).toFixed(1)} cm 120 m off`);
+  check(v.state === 'quiet' && s.volcanoDays(v) > 30, 'then it goes quiet for months', `next in ${s.volcanoDays(v).toFixed(0)} days`);
+  // Through a save, then taken away.
+  const b = Simulation.fromState(structuredClone(s.saveState()));
+  const bv = b.things.find((t) => t.kind === 'volcano');
+  check(bv && bv.n === 1 && b.flow.basalt.some((x) => x) && b.volcanoAt === s.volcanoAt, 'it comes back through a save, its lava rock too');
+  const top = f.z[vent];
+  s.remove(vent);
+  for (let k = 0; k < 6000; k++) s.step(20000);
+  check(!s.things.some((t) => t.kind === 'volcano') && !s.events.some((e) => e.kind === 'erupt' && e.years > t0 + 30 / 365.25) && f.z[vent] > top - 0.5, 'taken away it goes extinct, and its cone stays', `${(s.years - t0).toFixed(2)} years on, the vent ${(f.z[vent] - z0[vent]).toFixed(1)} m up`);
+}
+// Lava run into the river: it sets in the water, and the river goes round.
+{
+  const s = flatWorld('volcano-2');
+  const f = s.flow, W = s.W;
+  for (let k = 0; k < 3000; k++) s.step(2000);
+  let x = 0;
+  for (let k = 1; k < W; k++) if (f.h[100 * W + k] > f.h[100 * W + x]) x = k;
+  const vent = 100 * W + x, h0 = f.h[vent];
+  const v = s.volcano(vent);
+  while (v.n === 0 || v.state === 'erupting') s.step(2000);
+  for (let k = 0; k < 1500; k++) s.step(2000);
+  let x2 = 0;
+  for (let k = 1; k < W; k++) if (f.h[100 * W + k] > f.h[100 * W + x2]) x2 = k;
+  check(h0 > 0.1 && f.h[vent] < 0.05 && f.basalt[vent] && Math.abs(x2 - x) > 3, 'lava run into the river dams it, and the river goes round', `${h0.toFixed(2)} m deep at the vent, then ${f.h[vent].toFixed(2)} m; the channel moves from ${x} to ${x2}`);
 }
 
 // Frames.

@@ -150,12 +150,20 @@ it down; what it does, and a brush's size and strength, show under the map.
   - **Remove:** tap anything put down to take it away. Rock, a dam or a
     bridge's piers go and the ground under them comes back as it was:
     take a dam away and its reservoir drains and its sand flushes out.
+    A volcano taken away goes extinct; its cone stays.
 
   The River tab says how they're all faring, and tapping one tells you.
 - **Pump:** moves the pump along the top edge, above where you tap, like
   moving the hose on a stream table.
-- **Storm:** parks a storm over the valley for a day and a half, and slows
-  the clock so you can watch the flood come down.
+- **Volcano:** tap the map to put a volcano there. A few days later it
+  erupts, and slows the clock so you can watch; after that it erupts every
+  two to four months, for three to six days at a time. Its lava runs down
+  whatever slope it finds and piles up where the ground is too gentle, so
+  its cone grows eruption by eruption. The lava sets in a day (in an hour
+  where it runs into water) into dark rock the river wears only slowly, so
+  a flow across the river dams it or shoves it aside. Ash falls around it
+  as loose grit, thickest near the vent, burying plants, for the rain and
+  the river to wash away. Remove makes it extinct: the cone stays.
 - **Section:** draws a line for a cross-section.
 
 With a tool picked, one finger works the map and two fingers still move and

@@ -4,7 +4,7 @@
 // and cross-sections as charts.
 
 const MAX_ZOOM = 8;
-const EFFECT_MS = { storm: 5000, block: 1800, dig: 1600, pump: 1800, place: 1800, slide: 2500, remove: 1600 };
+const EFFECT_MS = { erupt: 5000, block: 1800, dig: 1600, pump: 1800, place: 1800, slide: 2500, remove: 1600 };
 
 // Ground: sand and gravel by how high above the water table it stands
 // (darker and damper low down), grass and shrubs over it, grey rock.
@@ -12,6 +12,9 @@ const SAND_WET = [150, 132, 100], SAND_DRY = [204, 186, 148];
 const GRASS = [104, 142, 62], SHRUB = [62, 104, 50];
 const WINTER = [150, 140, 100], AUTUMN = [184, 150, 70], SPRING = [126, 178, 72];
 const ROCK = [126, 122, 116];
+const BASALT = [58, 54, 54];          // lava set into rock
+// Molten lava, cooling to hot to brightest: lit by itself, not the sun.
+const LAVA_DIM = [120, 24, 10], LAVA_HOT = [255, 150, 40];
 // Water: shallow and clear shows the bed through it, deep is blue; a heavy
 // load of sand turns it the colour of the sand.
 const SHALLOW = [96, 162, 176], DEEP = [26, 78, 124], SILTY = [150, 122, 82];
@@ -163,7 +166,7 @@ export class MapRenderer {
   // Paints the cell image for a frame: one pixel per cell. With flat set
   // (for the 3D view, which lights the ground itself) there's no hillshade.
   paint(f) {
-    const { W, H, z, h, cover, trees, rock, mud, soil, gravel, seaLevel } = f;
+    const { W, H, z, h, cover, trees, rock, mud, soil, gravel, seaLevel, lava } = f;
     if (!this.image || this.image.width !== W || this.image.height !== H) {
       this.terrain.width = W;
       this.terrain.height = H;
@@ -187,7 +190,9 @@ export class MapRenderer {
         px[o] = r; px[o + 1] = g; px[o + 2] = b; px[o + 3] = 255;
         continue;
       }
-      if (rock[i]) {
+      if (rock[i] === 2) {
+        r = BASALT[0]; g = BASALT[1]; b = BASALT[2];
+      } else if (rock[i]) {
         r = ROCK[0]; g = ROCK[1]; b = ROCK[2];
       } else {
         // Sand: damp and dark near the water's level, pale and dry above it.
@@ -237,6 +242,16 @@ export class MapRenderer {
         wr += (SILTY[0] - wr) * m; wg += (SILTY[1] - wg) * m; wb += (SILTY[2] - wb) * m;
         const ws = 0.85 + 0.15 * shade;
         r += (wr * ws - r) * a; g += (wg * ws - g) * a; b += (wb * ws - b) * a;
+      }
+      // Molten lava glows through everything.
+      if (lava && lava[i]) {
+        // Hotter where it's deep, a dark crust breaking over it cell by cell.
+        let hs = Math.imul(i ^ 0x5bd1e995, 0x27d4eb2d); hs = Math.imul(hs ^ (hs >>> 15), 0x85ebca77);
+        const crust = ((hs ^ (hs >>> 13)) >>> 24) / 255;
+        const t = Math.sqrt(lava[i] / 255) * (0.55 + 0.45 * crust), a = Math.min(1, 0.6 + t);
+        r += (LAVA_DIM[0] + (LAVA_HOT[0] - LAVA_DIM[0]) * t - r) * a;
+        g += (LAVA_DIM[1] + (LAVA_HOT[1] - LAVA_DIM[1]) * t - g) * a;
+        b += (LAVA_DIM[2] + (LAVA_HOT[2] - LAVA_DIM[2]) * t - b) * a;
       }
       px[o] = r; px[o + 1] = g; px[o + 2] = b; px[o + 3] = 255;
     }
@@ -325,10 +340,10 @@ export class MapRenderer {
       const c = at(e.ev.x, e.ev.y);
       if (!c) continue;
       const r = Math.max(e.ev.r * c.s, 10 * dpr);
-      if (e.ev.kind === 'storm') {
+      if (e.ev.kind === 'erupt') {
         for (let k = 0; k < 3; k++) {
           const p = ((t * 0.6 + k / 3) % 1);
-          ctx.strokeStyle = `rgba(120,170,230,${0.7 * fade * (1 - p)})`;
+          ctx.strokeStyle = `rgba(255,${Math.round(110 - 70 * p)},40,${0.8 * fade * (1 - p)})`;
           ctx.lineWidth = 2.5 * dpr;
           ctx.beginPath(); ctx.arc(c.x, c.y, r * (0.4 + 1.6 * p), 0, Math.PI * 2); ctx.stroke();
         }
@@ -512,6 +527,19 @@ export function drawThings(ctx, things, at, dpr) {
     }
     const c = at(t.x, t.y);
     if (!c) continue;
+    if (t.kind === 'volcano') {
+      // A dark cone, red at the top while it erupts.
+      const r = Math.max(7 * dpr, 1.6 * c.s);
+      ctx.lineWidth = 1.5 * dpr;
+      ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+      ctx.fillStyle = 'rgba(40,34,32,0.92)';
+      ctx.beginPath(); ctx.moveTo(c.x - r, c.y + r * 0.6); ctx.lineTo(c.x - r * 0.3, c.y - r * 0.6); ctx.lineTo(c.x + r * 0.3, c.y - r * 0.6); ctx.lineTo(c.x + r, c.y + r * 0.6); ctx.closePath(); ctx.fill(); ctx.stroke();
+      if (t.state === 'erupting') {
+        ctx.fillStyle = '#ff6a1f';
+        ctx.beginPath(); ctx.arc(c.x, c.y - r * 0.85, r * 0.4, 0, Math.PI * 2); ctx.fill();
+      }
+      continue;
+    }
     if (t.kind === 'field') {
       const half = Math.max(8 * dpr, 4 * c.s);
       ctx.lineWidth = 1.5 * dpr;

@@ -19,6 +19,7 @@
 import { context, texture, target, program, run, upload, read } from './gpu.js';
 import { WET, SPONGE, TUNE, WATER, BEDK, SHIELDS_C, SEC_PER_YR } from './flow.js';
 import { WATER_SHADERS } from './gpuflow.js';
+import { applyDeposit, ASH_MUD, ASH_GRAVEL, ASH_BURY } from './volcano.js';
 
 const glf = (v) => Number(v).toExponential(9);
 const FIELD_CROP = 0.5;              // a field's crop, as plant cover (sim.js)
@@ -660,6 +661,27 @@ void main() {
   oK2 = k2 + vec4(rc.x, t, DT.w, 1.0);
 }`;
 
+// A volcano's change to the ground (volcano.js applyDeposit): D = (the
+// lava's change, the ash, 1 where lava lies). Lava leaves rock to its top,
+// bare; ash falls on it as loose ground and smothers the plants.
+const DEPOSIT = BHEAD + `
+uniform sampler2D uD;
+layout(location = 0) out vec4 oA;
+layout(location = 1) out vec4 oB;
+layout(location = 2) out vec4 oC;
+void main() {
+  ivec2 p = ivec2(gl_FragCoord.xy);
+  vec4 a = A(p.x, p.y), b = B(p.x, p.y), c = C(p.x, p.y), d = texelFetch(uD, p, 0);
+  if (d.z > 0.5) { a.x += d.x; a.y = a.x; b = vec4(0.0); c.xy = vec2(0.0); }
+  float ash = d.y;
+  if (ash > 0.0) {
+    mixLayer(b, a.x, a.y, ash, ash * ${glf(ASH_MUD)}, ash * ${glf(ASH_GRAVEL)});
+    a.x += ash;
+    c.xy *= exp(-ash / ${glf(ASH_BURY)});
+  }
+  oA = a; oB = b; oC = c;
+}`;
+
 const INTS = new Set(['uW', 'uH', 'uHB', 'uX0', 'uX1', 'uSeaY', 'uSpongeY', 'uGrow', 'uAccReset', 'uReset', 'uSize', 'uAcross']);
 
 export class GpuRiver {
@@ -675,7 +697,7 @@ export class GpuRiver {
       fx: P(ws.FACE_X), fy: P(ws.FACE_Y), state: P(ws.STATE), reduce: P(ws.REDUCE), step: P(ws.STEP),
       transport: P(TRANSPORT), sedFx: P(SED_FX), sedFy: P(SED_FY), clip: P(CLIP), scaleFx: P(SCALE_FX), scaleFy: P(SCALE_FY),
       exner: P(EXNER), bankGive: P(BANK_GIVE), bankTake: P(BANK_TAKE), apply: P(APPLY), slumpFace: P(SLUMP_FACE), slumpApply: P(SLUMP_APPLY),
-      plants: P(PLANTS), sum3: P(SUM3), bedup: P(BEDUP),
+      plants: P(PLANTS), sum3: P(SUM3), bedup: P(BEDUP), deposit: P(DEPOSIT),
     };
     const two = (w, h, c) => [tex(w, h, c), tex(w, h, c)];
     // The world (ping-ponged where written).
@@ -689,6 +711,9 @@ export class GpuRiver {
     this.CL = tex(W, H, 4); this.DZ = tex(W, H, 4); this.DZ2 = tex(W, H, 4); this.BG = tex(W, H, 4);
     this.Ca = tex(W, H, 4); this.Cb = tex(W, H, 4); this.Cc = tex(W, H, 4);
     this.SX = tex(W + 1, H, 1); this.SY = tex(W, H + 1, 1);
+    this.D = tex(W, H, 4, new Float32Array(W * H * 4));   // a volcano's change (zero but while it's used)
+    this.deposits = [];   // changes made since the reads still to come back were started
+    this.serial = 0;
     const wc = new Float32Array((BEDK.WC_N + 1) * 2);
     for (let k = 0; k <= BEDK.WC_N; k++) { wc[k * 2] = BEDK.WC_SAND[k]; wc[k * 2 + 1] = BEDK.WC_GRAVEL[k]; }
     this.WC = tex(BEDK.WC_N + 1, 1, 2, wc);
@@ -773,6 +798,7 @@ export class GpuRiver {
     upload(gl, this.BED[this.b], new Float32Array([flow.mNow, flow.plantYears, flow.feedEma, flow.feedGs]));
     for (const k of this.K[this.b]) upload(gl, k, new Float32Array(4));
     this.reset = 0; this.accReset = 0; this.accSince = 0; this.estSince = 0; this.bedSince = 0;
+    this.deposits.length = 0;
   }
 
   // C's third channel: kept clear of trees (1), in a reservoir (+2), in a lake (+4).
@@ -935,7 +961,7 @@ export class GpuRiver {
     gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
     const fresh = this.accSince > 0;
     if (fresh) { this.accReset = 1; this.accSince = 0; }
-    this.pending = { sync: gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0), fresh, est: this.estSince };
+    this.pending = { sync: gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0), fresh, est: this.estSince, serial: this.serial };
     this.estSince = 0;
     gl.flush();
     this.readIssued = this.issued;
@@ -977,6 +1003,9 @@ export class GpuRiver {
       this.owed += mdt - r.est;
       flow.folded = true;
     } else this.estSince += r.est;
+    // A volcano's changes the read began before: again on what came back.
+    this.deposits = this.deposits.filter((d) => d.serial > r.serial);
+    for (const d of this.deposits) applyDeposit(flow, d.change);
     this.landslides(flow);
   }
 
@@ -1041,6 +1070,27 @@ export class GpuRiver {
     this.pull(flow);
     flow.mNow = v;
     flow.gpuDirty = true;
+  }
+
+  // A volcano's change to the ground (volcano.js): on the CPU's copy, and on
+  // the GPU's by the deposit pass; kept till every read begun before it is
+  // back, to be made again on what that read brings.
+  deposit(flow, change) {
+    applyDeposit(flow, change);
+    if (flow.gpuDirty) return;   // the CPU's copy goes up whole anyway
+    const { gl } = this;
+    if (!this.U) this.uniforms(flow, 1);
+    const { x0, y0, w, h } = change, n = w * h;
+    const b = new Float32Array(n * 4);
+    for (let k = 0; k < n; k++) { b[k * 4] = change.lava[k] ? change.dz[k] : 0; b[k * 4 + 1] = change.ash[k]; b[k * 4 + 2] = change.lava[k]; }
+    gl.bindTexture(gl.TEXTURE_2D, this.D);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, x0, y0, w, h, gl.RGBA, gl.FLOAT, b);
+    const gn = 1 - this.g, cn = 1 - this.c;
+    this.pass('deposit', [this.A[gn], this.B[gn], this.C[cn]], { uA: this.A[this.g], uB: this.B[this.g], uC: this.C[this.c], uD: this.D });
+    this.g = gn; this.c = cn;
+    gl.bindTexture(gl.TEXTURE_2D, this.D);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, x0, y0, w, h, gl.RGBA, gl.FLOAT, new Float32Array(n * 4));
+    if (this.pending) this.deposits.push({ serial: ++this.serial, change });
   }
 
   // A texture's contents, by name, for tests.

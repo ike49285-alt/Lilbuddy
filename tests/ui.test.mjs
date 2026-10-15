@@ -75,7 +75,7 @@ const inked = await page.evaluate(() => {
 });
 check(inked > 0.1, 'the long profile is drawn', `${(inked * 100).toFixed(0)}% of the chart`);
 await page.screenshot({ path: 'ui-profile.png', fullPage: false });
-// Block and Storm by tap.
+// Block by tap.
 await page.tap('.tool-rail [data-kind="place"]');
 await page.tap('#place-row [data-place="block"]');
 const c = at(64.5 / 128, 60.5 / 256);
@@ -127,13 +127,22 @@ await page.tap('#place-row [data-place="remove"]');
 await page.touchscreen.tap(c.x, c.y);
 await page.waitForTimeout(800);
 check(await page.evaluate(() => { const f = window.Headwaters.frame(); return f.rock[60 * f.W + 64] === 0; }), 'Remove takes the block of rock away');
-await page.tap('.tool-rail [data-kind="storm"]');
-await page.touchscreen.tap(c.x, c.y);
+// A volcano by tap: it erupts within days, and its first eruption slows
+// the clock to watch.
+await page.tap('.tool-rail [data-kind="volcano"]');
+const vc = at(24.5 / 128, 200.5 / 256);
+await page.touchscreen.tap(vc.x, vc.y);
+await page.waitForTimeout(600);
+check((await page.evaluate(() => window.Headwaters.frame().things)).some((t) => t.kind === 'volcano'), 'Volcano puts a volcano where tapped');
+await page.evaluate(() => window.Headwaters.setRate('max'));
+let erupted = false;
+for (let k = 0; k < 120 && !erupted; k++) { await page.waitForTimeout(500); erupted = (await page.evaluate(() => window.Headwaters.events())).some((e) => e.kind === 'erupt'); }
 await page.waitForTimeout(800);
 const rate = await page.evaluate(() => window.Headwaters.state().targetRate * 365.25 * 24);
-check(Math.abs(rate - 6) < 0.01, 'Storm slows the clock to watch the flood', `${rate.toFixed(1)} hr/s`);
-check((await page.evaluate(() => window.Headwaters.events())).some((e) => e.kind === 'storm'), 'and it flashes on the map');
-await page.tap('.tool-rail [data-kind="storm"]');  // tapping the picked tool again puts it down
+check(erupted, 'it erupts, and it flashes on the map');
+check(Math.abs(rate - 6) < 0.01, 'its first eruption slows the clock to watch', `${rate.toFixed(1)} hr/s`);
+await page.screenshot({ path: 'ui-volcano.png', fullPage: false });
+await page.tap('.tool-rail [data-kind="volcano"]');  // tapping the picked tool again puts it down
 check(await page.evaluate(() => !document.querySelector('.tool-rail [aria-pressed="true"]') && document.getElementById('tool-options').hidden), 'tapping a picked tool again puts it down');
 // Layers.
 let keyGap = 0;

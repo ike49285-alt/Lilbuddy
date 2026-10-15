@@ -337,10 +337,10 @@ function fmtVolume(v) {
 }
 
 // "Houses: 2 fine, 1 flooded. Fields: 1 fine."
-const THING_NAMES = { house: 'Houses', field: 'Fields', bridge: 'Bridges', dam: 'Dams' };
+const THING_NAMES = { house: 'Houses', field: 'Fields', bridge: 'Bridges', dam: 'Dams', volcano: 'Volcanoes' };
 function thingsSummary(things) {
   const parts = [];
-  for (const kind of ['house', 'field', 'bridge', 'dam']) {
+  for (const kind of ['house', 'field', 'bridge', 'dam', 'volcano']) {
     const of = things.filter((t) => t.kind === kind);
     if (!of.length) continue;
     const by = {};
@@ -811,8 +811,10 @@ const eventLog = [];
 
 renderer.setEffectsCanvas($('fx-canvas'));
 
-// A tool used or a storm parked: a ring flashes where it happened.
+// A tool used or a volcano erupting: a ring flashes where it happened.
 function onEvent(ev) {
+  // A volcano's first eruption: slow enough to watch.
+  if (ev.kind === 'erupt' && ev.first && (rate === MAX_RATE || rate > 6 * HOUR)) setRate(6 * HOUR);
   eventLog.push({ ...ev });
   if (eventLog.length > 50) eventLog.shift();
   renderer.addEffect(ev);
@@ -842,11 +844,7 @@ function dropAt(wx, wy) {
   if (!last || !armed) return;
   const i = cellAt(wx, wy);
   if (i < 0) return;
-  if (armed === 'storm') {
-    // Slow enough to watch the flood come down.
-    if (rate === MAX_RATE || rate > 6 * HOUR) setRate(6 * HOUR);
-    worker.postMessage({ type: 'storm', i });
-  }
+  if (armed === 'volcano') worker.postMessage({ type: 'volcano', i });
   else if (armed === 'block') worker.postMessage({ type: 'block', i });
   else if (armed === 'pump') worker.postMessage({ type: 'pump', x: wx });
   else if (armed === 'house' || armed === 'field' || armed === 'gauge') {
@@ -893,8 +891,8 @@ function setArmed(kind) {
     bridge: 'Draw a line across the river to build a bridge, with piers in it. It turns red when the river scours round its piers, amber when the river leaves it.',
     dam: 'Draw a line across the valley to build a dam. A reservoir fills behind it and silts up; below it the river runs short of sand and cuts down. Draw it bank to bank, or the river goes round it.',
     gauge: 'Tap the river to put a gauge there: its water level, flow and sand are charted in the Profile tab.',
-    remove: 'Tap a block of rock, a dam, a bridge, a house, a field or a gauge to take it away.',
-    storm: 'Tap the map to park a storm over the valley.', pump: 'Tap the map to move the pump along the top edge, above where you tap.', section: 'Draw a line across the river to see its cross-section.',
+    remove: 'Tap a block of rock, a dam, a bridge, a house, a field, a gauge or a volcano to take it away. A volcano taken away goes extinct; its cone stays.',
+    volcano: 'Tap the map to put a volcano there. It erupts every few months: lava hardens into rock that can dam the river, and ash washes down it.', pump: 'Tap the map to move the pump along the top edge, above where you tap.', section: 'Draw a line across the river to see its cross-section.',
   };
   $('tools-hint').textContent = kind ? `${names[kind]} Two fingers still move the map.` : '';
   canvas.classList.toggle('armed', !!kind);
@@ -1049,11 +1047,11 @@ function renderInspect(info) {
   const title = info.water === 'sea' ? `Sea, ${n1.format(info.depth)} m deep`
     : info.water === 'river' ? `River, ${n1.format(info.depth)} m deep`
       : info.water === 'shallows' ? `Shallows, ${n0.format(info.depth * 100)} cm deep`
-        : info.block ? 'Block of rock' : `Land, ${n1.format(info.elevation)} m above the sea`;
+        : info.molten ? 'Molten lava' : info.basalt ? 'Lava rock' : info.block ? 'Block of rock' : `Land, ${n1.format(info.elevation)} m above the sea`;
   $('inspect-title').textContent = title;
   const g = info.gravelGround, m = info.mudGround, s = 1 - g - m;
   const ground = m > 0.6 ? 'Mud' : g > 0.6 ? 'Gravel' : m > 0.25 ? 'Muddy sand' : g > 0.35 ? 'Gravelly sand' : 'Sand';
-  $('inspect-ground').textContent = info.block ? 'Rock the river can’t wear away.'
+  $('inspect-ground').textContent = info.basalt ? 'Lava set into rock: the river wears it away only slowly.' : info.block ? 'Rock the river can’t wear away.'
     : `${ground}: ${n0.format(g * 100)}% gravel, ${n0.format(s * 100)}% sand, ${n0.format(m * 100)}% mud on top; ${n1.format(info.rockBelow)} m deep over bedrock.`;
   const facts = $('inspect-facts');
   facts.innerHTML = '';
@@ -1070,6 +1068,7 @@ function renderInspect(info) {
   const t = info.thing;
   if (t) {
     if (t.kind === 'dam') fact(`A dam, ${n0.format(t.height)} m high`, `${t.state === 'filling' ? `${n0.format(t.fullness * 100)}% full` : t.state}; ${fmtVolume(Math.max(0, t.held))} of sand held behind it`);
+    else if (t.kind === 'volcano') fact('A volcano', t.state === 'erupting' ? 'erupting' : `quiet; erupts again in about ${n0.format(Math.max(1, t.days))} day${Math.round(t.days) > 1 ? 's' : ''}`);
     else if (t.kind === 'gauge') {
       const r = t.now;
       fact(`Gauge ${t.n}`, Number.isFinite(r.level) ? `water ${n1.format(r.level - r.bed)} m deep, ${n1.format(r.flow)} m³/s, ${n0.format(r.sand)} m³/day of sand` : 'dry here');
